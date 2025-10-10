@@ -1,0 +1,55 @@
+# Core Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# Databases
+motor==3.3.2                # MongoDB async driver
+pymongo==4.6.1
+sqlalchemy[asyncio]==2.0.25
+aiomysql==0.2.0             # MariaDB async driver
+alembic==1.13.1             # Database migrations
+
+# Caching
+redis==5.0.1
+aioredis==2.0.1
+
+# Message Queue
+celery==5.3.4
+kombu==5.3.4
+amqp==5.2.0
+
+# AI/ML & RAG
+langchain==0.1.0
+langchain-openai==0.0.5
+langchain-community==0.0.10
+openai==1.6.1
+anthropic==0.8.1
+tiktoken==0.5.2
+qdrant-client==1.7.1        # Vector database
+
+# Web Scraping
+httpx==0.25.2
+beautifulsoup4==4.12.2
+lxml==5.0.0
+playwright==1.40.0
+firecrawl-py==0.0.16        # Firecrawl SDK
+
+# Utilities
+pyyaml==6.0.1
+python-dotenv==1.0.0
+pendulum==3.0.0
+tenacity==8.2.3
+structlog==24.1.0
+
+# Monitoring
+prometheus-client==0.19.0
+opentelemetry-api==1.22.0
+opentelemetry-sdk==1.22.0
+opentelemetry-instrumentation-fastapi==0.43b0

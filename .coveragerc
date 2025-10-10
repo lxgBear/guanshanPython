@@ -1,0 +1,47 @@
+[run]
+# 覆盖率运行配置
+source = src
+omit = 
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */migrations/*
+    */conftest.py
+    src/main.py
+
+[report]
+# 覆盖率报告配置
+exclude_lines =
+    # 默认排除
+    pragma: no cover
+    
+    # 调试相关
+    def __repr__
+    def __str__
+    
+    # 抽象方法
+    @abstractmethod
+    @abc.abstractmethod
+    
+    # 防御性编程
+    raise AssertionError
+    raise NotImplementedError
+    
+    # 条件导入
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    
+    # 日志
+    logger.debug
+    
+precision = 2
+show_missing = True
+skip_covered = False
+
+[html]
+# HTML报告配置
+directory = htmlcov
+
+[xml]
+# XML报告配置（用于CI/CD）
+output = coverage.xml
