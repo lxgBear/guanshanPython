@@ -1,8 +1,41 @@
-# 关山智能情报处理平台 - 系统架构设计文档
+# 关山智能情报处理平台 - 未来规划与架构愿景
 
-> 版本: 1.0.0  
-> 更新日期: 2025-01-10  
-> 代号: Guanshan Intelligence System (GIS)
+> **文档性质**: 未来规划文档 (Future Roadmap)
+> **状态**: 设计阶段，尚未实施
+> **版本**: 1.0.0
+> **更新日期**: 2025-01-10
+> **代号**: Guanshan Intelligence System (GIS)
+
+---
+
+## ⚠️ 重要说明
+
+**本文档描述的是关山智能系统的未来愿景和长期规划**，包含大量尚未实现的功能和架构设计。
+
+### 当前实现状态
+✅ **已实现**: 定时搜索任务系统 (参见 `SYSTEM_ARCHITECTURE.md`)
+- MongoDB持久化存储
+- APScheduler任务调度
+- Firecrawl API集成
+- RESTful API接口
+
+❌ **未实现** (本文档描述的功能):
+- RAG Pipeline + Reranking
+- 智能翻译服务
+- 报告生成模块
+- 向量数据库集成
+- Celery分布式任务队列
+- LLM深度集成
+
+### 文档用途
+- 📋 技术规划参考
+- 🎯 长期发展路线图
+- 💡 架构设计思路
+- 🔮 功能演进方向
+
+**如需了解当前系统实际架构，请参阅**: [`SYSTEM_ARCHITECTURE.md`](./SYSTEM_ARCHITECTURE.md)
+
+---
 
 ## 📋 产品定位
 
