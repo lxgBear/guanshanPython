@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  # MongoDB - 专门供Navicat Premium连接调试
+  mongodb:
+    image: mongo:7.0
+    container_name: guanshan_mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: intelligent_system
+    volumes:
+      - mongodb_data:/data/db
+      - ./docker/mongodb/init:/docker-entrypoint-initdb.d
+    # 允许外部连接并启用认证
+    command: mongod --auth --bind_ip_all
+    networks:
+      - guanshan_network
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  guanshan_network:
+    driver: bridge
