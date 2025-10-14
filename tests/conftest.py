@@ -29,8 +29,10 @@ def event_loop() -> Generator:
 async def async_client() -> AsyncGenerator[AsyncClient, None]:
     """创建异步HTTP客户端"""
     from src.main import app
+    from httpx import ASGITransport
     
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
 

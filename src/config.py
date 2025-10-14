@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     WORKERS: int = Field(default=4, env="WORKERS")
     LOG_LEVEL: str = Field(default="INFO", env="LOG_LEVEL")
     
+    # 测试模式配置
+    TEST_MODE: bool = Field(default=False, env="TEST_MODE")
+    TEST_MAX_RESULTS: int = Field(default=10, env="TEST_MAX_RESULTS")
+    TEST_DEFAULT_LIMIT: int = Field(default=10, env="TEST_DEFAULT_LIMIT")
+    
     # 安全配置
     SECRET_KEY: str = Field(..., env="SECRET_KEY")
     JWT_ALGORITHM: str = Field(default="HS256", env="JWT_ALGORITHM")
