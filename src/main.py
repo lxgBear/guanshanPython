@@ -13,6 +13,8 @@ from fastapi.responses import JSONResponse
 from src.config import settings
 from src.utils.logger import get_logger
 from src.api.v1.router import api_router
+from src.infrastructure.database.connection import init_database, close_database_connections
+from src.services.task_scheduler import start_scheduler, stop_scheduler
 
 logger = get_logger(__name__)
 
@@ -27,21 +29,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("🚀 启动关山智能系统...")
     
     try:
-        # TODO: 初始化数据库连接
-        # await init_mongodb()
-        # await init_mariadb()
-        
+        # 初始化数据库连接（允许失败）
+        await init_database()
+        logger.info("✅ 数据库连接初始化成功")
+
+        # 启动定时任务调度器
+        try:
+            await start_scheduler()
+            logger.info("✅ 定时任务调度器启动成功")
+        except Exception as e:
+            logger.warning(f"⚠️ 定时任务调度器启动失败: {e}")
+
         # TODO: 初始化缓存
         # await init_redis()
-        
+
         # TODO: 初始化消息队列
         # await init_rabbitmq()
-        
+
         logger.info("✅ 系统启动成功")
-        
+
     except Exception as e:
-        logger.error(f"❌ 系统启动失败: {str(e)}")
-        raise
+        logger.warning(f"⚠️ 部分组件初始化失败: {str(e)}")
+        logger.info("✅ 系统启动成功（降级模式）")
     
     yield
     
@@ -49,18 +58,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("🛑 正在关闭系统...")
     
     try:
-        # TODO: 关闭数据库连接
-        # await close_mongodb()
-        # await close_mariadb()
-        
+        # 停止定时任务调度器
+        try:
+            await stop_scheduler()
+            logger.info("✅ 定时任务调度器已停止")
+        except Exception as e:
+            logger.warning(f"⚠️ 停止调度器时出错: {e}")
+
+        # 关闭数据库连接
+        await close_database_connections()
+        logger.info("✅ 数据库连接已关闭")
+
         # TODO: 关闭缓存连接
         # await close_redis()
-        
+
         # TODO: 关闭消息队列
         # await close_rabbitmq()
-        
+
         logger.info("✅ 系统已安全关闭")
-        
+
     except Exception as e:
         logger.error(f"⚠️ 关闭时出现错误: {str(e)}")
 
