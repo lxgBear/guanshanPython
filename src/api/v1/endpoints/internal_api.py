@@ -13,8 +13,10 @@ from pydantic import BaseModel, Field
 
 from src.core.domain.entities.search_task import SearchTask
 from src.core.domain.entities.search_config import UserSearchConfig, SearchConfigManager
+from src.core.domain.entities.search_result import SearchResult, SearchResultBatch, ResultStatus
 from src.infrastructure.search.firecrawl_search_adapter import FirecrawlSearchAdapter
-from src.infrastructure.database.repositories import SearchTaskRepository
+from src.infrastructure.crawlers.firecrawl_adapter import FirecrawlAdapter
+from src.infrastructure.database.repositories import SearchTaskRepository, SearchResultRepository
 from src.infrastructure.database.memory_repositories import InMemorySearchTaskRepository
 from src.infrastructure.database.connection import get_mongodb_database
 from src.utils.logger import get_logger
@@ -23,13 +25,14 @@ logger = get_logger(__name__)
 
 # 创建内部API路由，设置include_in_schema=False隐藏在文档中
 router = APIRouter(
-    prefix="/internal", 
+    prefix="/internal",
     tags=["🔧 系统内部接口"],
     include_in_schema=False  # 隐藏在API文档中
 )
 
-# 任务仓储实例
+# 仓储实例
 task_repository = None
+result_repository = None
 
 
 async def get_task_repository():
@@ -39,11 +42,25 @@ async def get_task_repository():
         try:
             await get_mongodb_database()
             task_repository = SearchTaskRepository()
-            logger.info("使用MongoDB仓储")
+            logger.info("使用MongoDB任务仓储")
         except Exception as e:
             logger.warning(f"MongoDB不可用，使用内存仓储: {e}")
             task_repository = InMemorySearchTaskRepository()
     return task_repository
+
+
+async def get_result_repository():
+    """获取结果仓储实例"""
+    global result_repository
+    if result_repository is None:
+        try:
+            await get_mongodb_database()
+            result_repository = SearchResultRepository()
+            logger.info("使用MongoDB结果仓储")
+        except Exception as e:
+            logger.warning(f"MongoDB不可用，结果保存将失败: {e}")
+            raise HTTPException(503, "结果仓储不可用")
+    return result_repository
 
 
 # ==========================================
@@ -97,39 +114,56 @@ class SystemHealthStatus(BaseModel):
     description="手动触发搜索任务执行，通常用于测试或系统管理。仅供内部使用，不对前端暴露。"
 )
 async def execute_task_manually(task_id: str):
-    """手动执行搜索任务"""
+    """
+    手动执行搜索任务
+
+    优先级逻辑：
+    1. 如果 crawl_url 存在 → 使用 Firecrawl Scrape API (网址爬取)
+    2. 如果 crawl_url 不存在 → 使用 Firecrawl Search API (关键词搜索)
+    """
     repo = await get_task_repository()
     task = await repo.get_by_id(task_id)
     if not task:
         raise HTTPException(404, f"任务不存在: {task_id}")
-    
+
     if not task.is_active:
         raise HTTPException(400, "任务未启用，无法执行")
-    
-    # 创建搜索适配器
-    adapter = FirecrawlSearchAdapter()
-    
+
     try:
-        # 执行搜索
-        user_config = UserSearchConfig.from_json(task.search_config)
-        result_batch = await adapter.search(
-            query=task.query,
-            user_config=user_config,
-            task_id=str(task.id)
-        )
-        
+        # ========================================
+        # 优先级逻辑：crawl_url 优先于 query
+        # ========================================
+        if task.crawl_url:
+            # 方案1：使用 Firecrawl Scrape API 爬取指定网址
+            logger.info(f"🌐 使用网址爬取模式: {task.crawl_url}")
+            result_batch = await _execute_crawl_task(task)
+        else:
+            # 方案2：使用 Firecrawl Search API 关键词搜索
+            logger.info(f"🔍 使用关键词搜索模式: {task.query}")
+            result_batch = await _execute_search_task(task)
+
+        # 保存搜索结果到数据库（如果有结果）
+        if result_batch.results:
+            try:
+                result_repo = await get_result_repository()
+                await result_repo.save_results(result_batch.results)
+                logger.info(f"保存结果成功: {len(result_batch.results)}条 (任务ID: {task_id})")
+            except Exception as e:
+                logger.error(f"保存结果失败: {e}")
+                # 不抛出异常,继续处理任务统计
+
         # 更新任务统计
         task.record_execution(
             success=result_batch.success,
             results_count=result_batch.returned_count,
             credits_used=result_batch.credits_used
         )
-        
+
         # 更新到仓储
         await repo.update(task)
-        
+
         logger.info(f"手动执行任务成功: {task.name} (ID: {task_id})")
-        
+
         # 返回执行结果
         return TaskExecutionResponse(
             success=result_batch.success,
@@ -142,14 +176,14 @@ async def execute_task_manually(task_id: str):
             error_message=None,
             results_preview=[r.to_summary() for r in result_batch.results[:5]]
         )
-        
+
     except Exception as e:
         logger.error(f"手动执行任务失败: {e}")
-        
+
         # 记录失败统计
         task.record_execution(success=False)
         await repo.update(task)
-        
+
         # 返回错误信息
         return TaskExecutionResponse(
             success=False,
@@ -162,6 +196,72 @@ async def execute_task_manually(task_id: str):
             error_message=str(e),
             results_preview=[]
         )
+
+
+async def _execute_search_task(task: SearchTask) -> SearchResultBatch:
+    """执行关键词搜索任务（使用 Firecrawl Search API）"""
+    adapter = FirecrawlSearchAdapter()
+    user_config = UserSearchConfig.from_json(task.search_config)
+    result_batch = await adapter.search(
+        query=task.query,
+        user_config=user_config,
+        task_id=str(task.id)
+    )
+    return result_batch
+
+
+async def _execute_crawl_task(task: SearchTask) -> SearchResultBatch:
+    """执行网址爬取任务（使用 Firecrawl Scrape API）"""
+    from datetime import datetime
+
+    start_time = datetime.utcnow()
+
+    # 创建爬虫适配器
+    crawler = FirecrawlAdapter()
+
+    # 构建爬取选项（从 search_config 提取）
+    scrape_options = {
+        "wait_for": task.search_config.get("wait_for", 1000),
+        "include_tags": task.search_config.get("include_tags"),
+        "exclude_tags": task.search_config.get("exclude_tags", ["nav", "footer", "header"])
+    }
+
+    # 执行爬取
+    crawl_result = await crawler.scrape(task.crawl_url, **scrape_options)
+
+    # 将 CrawlResult 转换为 SearchResult
+    search_result = SearchResult(
+        task_id=str(task.id),
+        title=crawl_result.metadata.get("title", task.crawl_url),
+        url=crawl_result.url,
+        content=crawl_result.content[:5000] if crawl_result.content else "",
+        snippet=crawl_result.content[:200] if crawl_result.content else "",
+        source="crawl",
+        markdown_content=crawl_result.markdown[:5000] if crawl_result.markdown else None,
+        html_content=crawl_result.html,
+        metadata=crawl_result.metadata or {},
+        relevance_score=1.0,  # 直接爬取的页面相关性为100%
+        status=ResultStatus.PROCESSED
+    )
+
+    # 创建结果批次
+    batch = SearchResultBatch(
+        task_id=str(task.id),
+        query=f"URL爬取: {task.crawl_url}",
+        search_config=task.search_config,
+        is_test_mode=False
+    )
+    batch.add_result(search_result)
+    batch.total_count = 1
+    batch.credits_used = 1  # Scrape API 通常消耗1个积分
+
+    # 计算执行时间
+    end_time = datetime.utcnow()
+    batch.execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
+
+    logger.info(f"✅ 网址爬取完成: {task.crawl_url}, 耗时: {batch.execution_time_ms}ms")
+
+    return batch
 
 
 @router.get(

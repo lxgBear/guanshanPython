@@ -47,6 +47,8 @@ class SearchTaskCreate(BaseModel):
     name: str = Field(..., description="任务名称", min_length=1, max_length=100)
     description: Optional[str] = Field(None, description="任务描述", max_length=500)
     query: str = Field(..., description="搜索关键词", min_length=1, max_length=200)
+    target_website: Optional[str] = Field(None, description="主要目标网站（例如：www.gnlm.com.mm）", max_length=200)
+    crawl_url: Optional[str] = Field(None, description="定时爬取的URL（优先于query关键词搜索）", max_length=500)
     search_config: Dict[str, Any] = Field(default_factory=dict, description="搜索配置")
     schedule_interval: str = Field("DAILY", description="调度间隔")
     is_active: bool = Field(True, description="是否启用")
@@ -57,6 +59,7 @@ class SearchTaskCreate(BaseModel):
                 "name": "AI新闻监控",
                 "description": "监控人工智能领域最新进展",
                 "query": "人工智能 深度学习 最新进展",
+                "target_website": "www.36kr.com",
                 "search_config": {
                     "limit": 20,
                     "sources": ["web", "news"],
@@ -80,6 +83,8 @@ class SearchTaskUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     query: Optional[str] = Field(None, min_length=1, max_length=200)
+    target_website: Optional[str] = Field(None, max_length=200)
+    crawl_url: Optional[str] = Field(None, max_length=500)
     search_config: Optional[Dict[str, Any]] = None
     schedule_interval: Optional[str] = None
     is_active: Optional[bool] = None
@@ -96,6 +101,8 @@ class SearchTaskResponse(BaseModel):
     name: str = Field(..., description="任务名称")
     description: Optional[str] = Field(None, description="任务描述")
     query: str = Field(..., description="搜索关键词")
+    target_website: Optional[str] = Field(None, description="主要目标网站")
+    crawl_url: Optional[str] = Field(None, description="定时爬取的URL")
     search_config: Dict[str, Any] = Field(..., description="搜索配置")
     schedule_interval: str = Field(..., description="调度间隔值")
     schedule_display: str = Field(..., description="调度间隔显示名称")
@@ -145,6 +152,8 @@ def task_to_response(task: SearchTask) -> SearchTaskResponse:
         name=task.name,
         description=task.description,
         query=task.query,
+        target_website=task.target_website,
+        crawl_url=task.crawl_url,
         search_config=task.search_config,
         schedule_interval=task.schedule_interval,
         schedule_display=interval.display_name,
@@ -196,27 +205,32 @@ async def create_search_task(task_data: SearchTaskCreate):
             ScheduleInterval.from_value(task_data.schedule_interval)
         except ValueError as e:
             raise HTTPException(400, f"无效的调度间隔: {str(e)}")
-        
+
         # 使用安全ID创建任务
         task = SearchTask.create_with_secure_id(
             name=task_data.name,
             description=task_data.description,
             query=task_data.query,
+            target_website=task_data.target_website,
+            crawl_url=task_data.crawl_url,
             search_config=task_data.search_config,
             schedule_interval=task_data.schedule_interval,
             is_active=task_data.is_active,
             created_by="current_user",  # TODO: 从JWT token获取用户信息
             status=TaskStatus.ACTIVE if task_data.is_active else TaskStatus.DISABLED
         )
-        
+
+        # 如果 target_website 为空，自动从 search_config 提取
+        task.sync_target_website()
+
         # 保存到仓储
         repo = await get_task_repository()
         await repo.create(task)
-        
-        logger.info(f"创建搜索任务: {task.name} (ID: {task.get_id_string()})")
-        
+
+        logger.info(f"创建搜索任务: {task.name} (ID: {task.get_id_string()}, 目标网站: {task.target_website})")
+
         return task_to_response(task)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -303,38 +317,52 @@ async def update_search_task(task_id: str, task_data: SearchTaskUpdate):
     task = await repo.get_by_id(task_id)
     if not task:
         raise HTTPException(404, f"任务不存在: {task_id}")
-    
+
     # 更新字段
     if task_data.name is not None:
         task.name = task_data.name
-    
+
     if task_data.description is not None:
         task.description = task_data.description
-    
+
     if task_data.query is not None:
         task.query = task_data.query
-    
+
+    if task_data.crawl_url is not None:
+        task.crawl_url = task_data.crawl_url
+
+    # 标记是否显式更新了 target_website
+    target_website_explicitly_updated = False
+
+    if task_data.target_website is not None:
+        task.target_website = task_data.target_website
+        target_website_explicitly_updated = True
+
     if task_data.search_config is not None:
         task.search_config = task_data.search_config
-    
+        # 如果更新了 search_config 但没有显式更新 target_website，则自动同步
+        if not target_website_explicitly_updated:
+            # 强制更新 target_website 为新的第一个域名
+            task.target_website = task.extract_target_website()
+
     if task_data.schedule_interval is not None:
         try:
             ScheduleInterval.from_value(task_data.schedule_interval)
             task.schedule_interval = task_data.schedule_interval
         except ValueError as e:
             raise HTTPException(400, f"无效的调度间隔: {str(e)}")
-    
+
     if task_data.is_active is not None:
         task.is_active = task_data.is_active
         task.status = TaskStatus.ACTIVE if task_data.is_active else TaskStatus.DISABLED
-    
+
     task.updated_at = datetime.utcnow()
-    
+
     # 更新到仓储
     await repo.update(task)
-    
-    logger.info(f"更新搜索任务: {task.name} (ID: {task_id})")
-    
+
+    logger.info(f"更新搜索任务: {task.name} (ID: {task_id}, 目标网站: {task.target_website})")
+
     return task_to_response(task)
 
 

@@ -33,13 +33,22 @@ class SearchResult:
     author: Optional[str] = None  # 作者
     language: Optional[str] = None  # 语言
     
-    # Firecrawl 特定字段
-    raw_data: Dict[str, Any] = field(default_factory=dict)  # 原始响应数据
-    markdown_content: Optional[str] = None  # Markdown 格式内容
-    html_content: Optional[str] = None  # HTML 格式内容
+    # Firecrawl 特定字段 - 优化版
+    markdown_content: Optional[str] = None  # Markdown 格式内容(最大5000字符)
+    html_content: Optional[str] = None  # HTML格式内容(用于富文本显示和分析)
     article_tag: Optional[str] = None  # 文章标签 (article:tag)
     article_published_time: Optional[str] = None  # 文章发布时间 (article:published_time)
-    metadata: Dict[str, Any] = field(default_factory=dict)  # 额外元数据
+
+    # 精简的元数据(只保留有用字段)
+    source_url: Optional[str] = None  # 原始URL(重定向场景)
+    http_status_code: Optional[int] = None  # HTTP状态码
+    search_position: Optional[int] = None  # 搜索结果排名
+
+    # 保留原metadata字段以支持扩展元数据(但应过滤冗余字段)
+    metadata: Dict[str, Any] = field(default_factory=dict)  # 精简的扩展元数据
+
+    # 注: 已移除以下字段以优化存储:
+    # - raw_data: 原始响应数据(~850KB) → 已删除,通过独立字段替代
     
     # 质量指标
     relevance_score: float = 0.0  # 相关性分数

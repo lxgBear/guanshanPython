@@ -84,11 +84,12 @@ Firecrawl 搜索API适配器
         )
         
         try:
-            # 配置httpx客户端 - 不使用系统代理以避免SOCKS问题
+            # 配置httpx客户端 - 显式禁用代理但保留DNS解析
             # Firecrawl API不需要代理，直接连接
+            # 注意: trust_env=False会导致DNS解析问题,因此只显式设置proxies={}来禁用代理
             client_config = {
-                "proxies": None,  # 禁用代理
-                "trust_env": False  # 不信任环境变量中的代理设置
+                "proxies": {},  # 空字典禁用代理,但不影响DNS
+                "timeout": config.get('timeout', 30)
             }
 
             logger.info(f"🔍 正在调用 Firecrawl API: {self.base_url}/v2/search")
@@ -153,9 +154,20 @@ Firecrawl 搜索API适配器
         return batch
     
     def _build_request_body(self, query: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """构建请求体"""
+        """构建请求体 - Firecrawl API v2格式"""
+        # Firecrawl API v2: 使用site:操作符来限制域名,而不是includeDomains参数
+        final_query = query
+
+        # 如果配置了include_domains,添加site:操作符到查询中
+        if config.get('include_domains'):
+            domains = config['include_domains']
+            if domains:
+                # 为每个域名添加site:操作符
+                site_operators = ' OR '.join([f'site:{domain}' for domain in domains])
+                final_query = f"({site_operators}) {query}"
+
         body = {
-            "query": query,
+            "query": final_query,
             "limit": config.get('limit', 20),
             "lang": config.get('language', 'zh')
         }
@@ -173,11 +185,8 @@ Firecrawl 搜索API适配器
                 body['scrapeOptions']['onlyMainContent'] = True
 
         # 添加可选参数
-        if config.get('include_domains'):
-            body['includeDomains'] = config['include_domains']
-
-        if config.get('exclude_domains'):
-            body['excludeDomains'] = config['exclude_domains']
+        # 注意: v2 API不支持includeDomains和excludeDomains参数
+        # 域名过滤通过查询中的site:操作符实现(见上方final_query处理)
 
         if config.get('time_range'):
             body['tbs'] = self._convert_time_range(config['time_range'])
@@ -213,17 +222,37 @@ Firecrawl 搜索API适配器
             items = []
 
         for item in items:
-            # v2 API with scrapeOptions: markdown和html字段包含完整内容
-            markdown = item.get('markdown', '')
-            html = item.get('html', '')
+            # 1. 提取核心字段
+            title = item.get('title', '')
+            url = item.get('url', '')
+            description = item.get('description', item.get('snippet', ''))
 
-            # content字段使用markdown内容，如果没有则使用html，最后fallback到空
-            content = markdown if markdown else (html if html else item.get('content', ''))
+            # 2. 内容字段优化: 截断markdown(最大5000字符),存储html
+            markdown_full = item.get('markdown', '')
+            if len(markdown_full) > 5000:
+                markdown_content = markdown_full[:5000]
+                logger.debug(f"📏 截断markdown: {len(markdown_full)}字符 → 5000字符 (URL: {url[:50]}...)")
+            else:
+                markdown_content = markdown_full
 
-            # 从原始数据的metadata中提取article字段
+            # 提取HTML内容
+            html_content = item.get('html', '')
+
+            # 使用截断后的markdown作为content,或使用description
+            content = markdown_content if markdown_content else description
+
+            # 3. 提取metadata字段
             item_metadata = item.get('metadata', {})
 
-            # 处理article_tag：可能是字符串或列表
+            # 4. 构建精简的metadata(只保留有用字段,过滤冗余字段)
+            filtered_metadata = {
+                'language': item_metadata.get('language'),
+                'og_type': item_metadata.get('og:type'),
+            }
+            # 移除None值
+            filtered_metadata = {k: v for k, v in filtered_metadata.items() if v is not None}
+
+            # 5. 提取文章特定字段
             article_tag_raw = item_metadata.get('article:tag')
             if isinstance(article_tag_raw, list):
                 # 如果是列表，用逗号连接成字符串
@@ -233,30 +262,40 @@ Firecrawl 搜索API适配器
 
             article_published_time = item_metadata.get('article:published_time')
 
-            # 构建metadata，包含links
-            metadata = item_metadata.copy() if item_metadata else {}
-            if 'links' in item:
-                metadata['extracted_links'] = item.get('links', [])
+            # 6. 提取技术字段
+            source_url = item_metadata.get('sourceURL')  # 原始URL(重定向场景)
+            http_status_code = item_metadata.get('statusCode')
+            search_position = item.get('position')
 
+            # 7. 解析发布日期
+            published_date = self._parse_date(item.get('publishedDate'))
+
+            # 8. 创建搜索结果实体(已移除raw_data,保留html_content)
             result = SearchResult(
                 task_id=task_id if task_id else "",
-                title=item.get('title', ''),
-                url=item.get('url', ''),
-                content=content,  # 优先使用markdown/html内容
-                snippet=item.get('description', item.get('snippet', '')),  # v2使用description
+                title=title,
+                url=url,
+                content=content,
+                snippet=description,
                 source=item.get('source', 'web'),
-                published_date=self._parse_date(item.get('publishedDate')),
+                published_date=published_date,
                 author=item.get('author'),
-                language=item.get('language'),
-                raw_data=item,
-                markdown_content=markdown,  # 保存markdown格式
-                html_content=html,  # 保存html格式为顶层字段
-                article_tag=article_tag,  # 文章标签
-                article_published_time=article_published_time,  # 文章发布时间
-                metadata=metadata,  # 包含links的metadata
+                language=item_metadata.get('language'),
+                # 优化后的字段
+                markdown_content=markdown_content,  # 截断版本(最大5000字符)
+                html_content=html_content,  # HTML格式内容(用于富文本显示和分析)
+                article_tag=article_tag,
+                article_published_time=article_published_time,
+                source_url=source_url,
+                http_status_code=http_status_code,
+                search_position=search_position,
+                metadata=filtered_metadata,  # 精简版元数据(~200字节 vs 原来的2-5KB)
+                # 不再存储: raw_data (~850KB)
                 relevance_score=item.get('score', 0.0),
                 status=ResultStatus.PENDING
             )
+
+            logger.debug(f"✅ 解析结果: {title[:50]}... (content: {len(content)}字符, metadata: {len(str(filtered_metadata))}字节)")
             results.append(result)
 
         return results
