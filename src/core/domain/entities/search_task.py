@@ -72,6 +72,8 @@ class SearchTask:
     name: str = ""
     description: Optional[str] = None
     query: str = ""  # 搜索关键词
+    target_website: Optional[str] = None  # 主要目标网站（用于前端展示，例如：www.gnlm.com.mm）
+    crawl_url: Optional[str] = None  # 定时爬取的URL（优先于query关键词搜索，使用Firecrawl Scrape API）
     search_config: Dict[str, Any] = field(default_factory=dict)  # 搜索配置（JSON）
     schedule_interval: str = "DAILY"  # 调度间隔枚举值
     is_active: bool = True  # 是否启用
@@ -125,6 +127,28 @@ class SearchTask:
         if self.execution_count == 0:
             return 0.0
         return self.total_results / self.execution_count
+
+    def extract_target_website(self) -> Optional[str]:
+        """
+        从 search_config 中提取主要目标网站
+
+        Returns:
+            主要目标网站域名，如果没有配置则返回 None
+        """
+        include_domains = self.search_config.get('include_domains', [])
+        if include_domains and len(include_domains) > 0:
+            # 返回第一个域名作为主要目标
+            return include_domains[0]
+        return None
+
+    def sync_target_website(self) -> None:
+        """
+        同步 target_website 字段：
+        - 如果 target_website 为空，从 search_config 提取
+        - 如果 target_website 不为空，保持不变（允许用户自定义）
+        """
+        if not self.target_website:
+            self.target_website = self.extract_target_website()
     
     def get_id_string(self) -> str:
         """获取字符串格式的ID（统一接口）"""
@@ -153,14 +177,14 @@ class SearchTask:
         kwargs.pop('id', None)  # 移除可能存在的id参数
         return cls(id=_generate_secure_id(), **kwargs)
     
-    @classmethod  
+    @classmethod
     def migrate_from_unsafe_id(cls, task: 'SearchTask') -> 'SearchTask':
         """
         从不安全ID迁移到安全ID
-        
+
         Args:
             task: 原始任务实例
-            
+
         Returns:
             使用安全ID的新任务实例
         """
@@ -170,6 +194,8 @@ class SearchTask:
             name=task.name,
             description=task.description,
             query=task.query,
+            target_website=task.target_website,
+            crawl_url=task.crawl_url,
             search_config=task.search_config.copy(),
             schedule_interval=task.schedule_interval,
             is_active=task.is_active,
