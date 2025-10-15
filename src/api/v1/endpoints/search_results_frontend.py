@@ -57,7 +57,7 @@ async def get_result_repository():
 # ==========================================
 
 class SearchResultResponse(BaseModel):
-    """搜索结果响应"""
+    """搜索结果响应 - 精简版(仅保留前端必需字段)"""
     id: str = Field(..., description="结果ID")
     task_id: str = Field(..., description="任务ID")
     title: str = Field(..., description="标题")
@@ -65,21 +65,17 @@ class SearchResultResponse(BaseModel):
     content: str = Field(..., description="内容")
     snippet: Optional[str] = Field(None, description="内容摘要")
     source: str = Field(..., description="来源")
-    published_date: Optional[datetime] = Field(None, description="发布日期")
-    author: Optional[str] = Field(None, description="作者")
-    language: Optional[str] = Field(None, description="语言")
-    markdown_content: Optional[str] = Field(None, description="Markdown格式内容")
-    html_content: Optional[str] = Field(None, description="HTML格式内容")
+    markdown_content: Optional[str] = Field(None, description="Markdown格式内容(最大5000字符)")
+    html_content: Optional[str] = Field(None, description="HTML格式内容(用于富文本显示和分析)")
     article_tag: Optional[str] = Field(None, description="文章标签")
     article_published_time: Optional[str] = Field(None, description="文章发布时间")
-    raw_data: Dict[str, Any] = Field(default_factory=dict, description="原始API响应数据")
-    relevance_score: float = Field(..., ge=0, le=1, description="相关性评分(0-1)")
-    quality_score: float = Field(..., ge=0, le=1, description="质量评分(0-1)")
-    status: str = Field(..., description="处理状态")
-    created_at: datetime = Field(..., description="创建时间")
-    processed_at: Optional[datetime] = Field(None, description="处理时间")
-    is_test_data: bool = Field(..., description="是否为测试数据")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="扩展元数据")
+    # 已移除字段:
+    # - published_date, author, language (业务字段)
+    # - raw_data (冗余大字段)
+    # - relevance_score, quality_score (评分字段)
+    # - status, created_at, processed_at (状态字段)
+    # - is_test_data (测试标记)
+    # - metadata (只在内部使用)
 
 
 class SearchResultListResponse(BaseModel):
@@ -130,21 +126,13 @@ def result_to_response(result: SearchResult) -> SearchResultResponse:
         content=result.content,
         snippet=result.snippet,
         source=result.source,
-        published_date=result.published_date,
-        author=result.author,
-        language=result.language,
         markdown_content=result.markdown_content,
         html_content=result.html_content,
         article_tag=result.article_tag,
         article_published_time=result.article_published_time,
-        raw_data=result.raw_data,
-        relevance_score=result.relevance_score,
-        quality_score=result.quality_score,
-        status=result.status.value,
-        created_at=result.created_at,
-        processed_at=result.processed_at,
-        is_test_data=result.is_test_data,
-        metadata=result.metadata
+        # 已移除映射: published_date, author, language, raw_data,
+        # relevance_score, quality_score, status, created_at, processed_at,
+        # is_test_data, metadata
     )
 
 

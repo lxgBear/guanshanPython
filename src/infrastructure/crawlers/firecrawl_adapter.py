@@ -7,13 +7,7 @@ import hashlib
 from typing import Optional, Dict, Any, List
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-try:
-    from firecrawl import AsyncFirecrawl
-except ImportError:
-    # 如果Firecrawl未安装，使用模拟实现以便测试
-    class AsyncFirecrawl:
-        def __init__(self, api_key: str):
-            self.api_key = api_key
+from firecrawl import FirecrawlApp
 
 from src.core.domain.interfaces.crawler_interface import (
     CrawlerInterface,
@@ -42,8 +36,8 @@ class FirecrawlAdapter(CrawlerInterface):
         self.api_key = api_key or settings.FIRECRAWL_API_KEY
         if not self.api_key:
             raise ValueError("Firecrawl API密钥未配置")
-        
-        self.client = AsyncFirecrawl(api_key=self.api_key)
+
+        self.client = FirecrawlApp(api_key=self.api_key)
         self.timeout = settings.FIRECRAWL_TIMEOUT
         self.max_retries = settings.FIRECRAWL_MAX_RETRIES
         
@@ -57,32 +51,34 @@ class FirecrawlAdapter(CrawlerInterface):
     async def scrape(self, url: str, **options) -> CrawlResult:
         """
         爬取单个页面
-        
+
         Args:
             url: 目标URL
             **options: 爬取选项
-        
+
         Returns:
             CrawlResult: 爬取结果
         """
         try:
             logger.info(f"开始爬取URL: {url}")
-            
-            # 构建Firecrawl选项
-            scrape_options = self._build_scrape_options(options)
-            
-            # 执行爬取
+
+            # 构建Firecrawl参数（FirecrawlApp.scrape_url使用params字典）
+            params = {
+                'formats': ['markdown', 'html']
+            }
+
+            # 执行爬取（FirecrawlApp.scrape_url是同步方法，使用to_thread包装）
             result = await asyncio.wait_for(
-                self.client.scrape(url, **scrape_options),
+                asyncio.to_thread(self.client.scrape_url, url, params),
                 timeout=self.timeout
             )
-            
+
             # 处理结果
             crawl_result = self._process_scrape_result(url, result)
-            
+
             logger.info(f"成功爬取URL: {url}")
             return crawl_result
-            
+
         except asyncio.TimeoutError:
             logger.error(f"爬取超时: {url}")
             raise CrawlException(f"爬取超时 ({self.timeout}秒)", url=url)

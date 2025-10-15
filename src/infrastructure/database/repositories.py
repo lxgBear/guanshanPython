@@ -32,6 +32,8 @@ class SearchTaskRepository:
             "name": task.name,
             "description": task.description,
             "query": task.query,
+            "target_website": task.target_website,
+            "crawl_url": task.crawl_url,
             "search_config": task.search_config,
             "schedule_interval": task.schedule_interval,
             "is_active": task.is_active,
@@ -50,11 +52,13 @@ class SearchTaskRepository:
     
     def _dict_to_task(self, data: Dict[str, Any]) -> SearchTask:
         """将字典转换为任务实体"""
-        return SearchTask(
+        task = SearchTask(
             id=data["_id"],
             name=data["name"],
             description=data.get("description"),
             query=data["query"],
+            target_website=data.get("target_website"),  # 向后兼容：旧数据可能没有此字段
+            crawl_url=data.get("crawl_url"),  # 向后兼容：旧数据可能没有此字段
             search_config=data.get("search_config", {}),
             schedule_interval=data["schedule_interval"],
             is_active=data["is_active"],
@@ -70,6 +74,11 @@ class SearchTaskRepository:
             total_results=data.get("total_results", 0),
             total_credits_used=data.get("total_credits_used", 0)
         )
+
+        # 如果 target_website 为空，自动从 search_config 提取
+        task.sync_target_website()
+
+        return task
     
     async def create(self, task: SearchTask) -> SearchTask:
         """创建任务"""
@@ -243,7 +252,7 @@ class SearchResultRepository:
         return db[self.collection_name]
     
     def _result_to_dict(self, result: SearchResult) -> Dict[str, Any]:
-        """将结果实体转换为字典"""
+        """将结果实体转换为字典 - 优化后的模型"""
         return {
             "_id": str(result.id),
             "task_id": str(result.task_id),
@@ -255,12 +264,16 @@ class SearchResultRepository:
             "published_date": result.published_date,
             "author": result.author,
             "language": result.language,
-            "raw_data": result.raw_data,
-            "markdown_content": result.markdown_content,
-            "html_content": result.html_content,
+            # 优化后的字段
+            "markdown_content": result.markdown_content,  # 最大5000字符
+            "html_content": result.html_content,  # HTML格式内容
             "article_tag": result.article_tag,
             "article_published_time": result.article_published_time,
-            "metadata": result.metadata,
+            "source_url": result.source_url,
+            "http_status_code": result.http_status_code,
+            "search_position": result.search_position,
+            "metadata": result.metadata,  # 精简版metadata
+            # 已移除字段: raw_data
             "relevance_score": result.relevance_score,
             "quality_score": result.quality_score,
             "status": result.status.value,
@@ -306,12 +319,16 @@ class SearchResultRepository:
             published_date=data.get("published_date"),
             author=data.get("author"),
             language=data.get("language"),
-            raw_data=data.get("raw_data", {}),
+            # 优化后的字段
             markdown_content=data.get("markdown_content"),
             html_content=data.get("html_content"),
             article_tag=article_tag,
             article_published_time=data.get("article_published_time"),
+            source_url=data.get("source_url"),
+            http_status_code=data.get("http_status_code"),
+            search_position=data.get("search_position"),
             metadata=data.get("metadata", {}),
+            # 已移除字段: raw_data (不再从数据库读取)
             relevance_score=data.get("relevance_score", 0.0),
             quality_score=data.get("quality_score", 0.0),
             status=ResultStatus(data.get("status", "pending")),
