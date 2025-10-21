@@ -7,6 +7,8 @@ API v1 路由配置
 from fastapi import APIRouter
 from src.api.v1.endpoints import crawl
 from src.api.v1.endpoints import search_tasks_frontend, search_results_frontend, internal_api, scheduler_management
+from src.api.v1.endpoints import instant_search
+from src.api.v1.endpoints import summary_report_management
 
 # 创建主路由器
 api_router = APIRouter()
@@ -38,6 +40,18 @@ api_router.include_router(
 api_router.include_router(
     scheduler_management.router,
     tags=["📊 调度器管理"]
+)
+
+# 即时搜索（v1.3.0新增）
+api_router.include_router(
+    instant_search.router,
+    tags=["⚡ 即时搜索"]
+)
+
+# 智能总结报告系统
+api_router.include_router(
+    summary_report_management.router,
+    tags=["📝 智能总结报告"]
 )
 
 # ==========================================
