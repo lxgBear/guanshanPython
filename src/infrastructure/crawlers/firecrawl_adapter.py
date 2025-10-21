@@ -186,40 +186,70 @@ class FirecrawlAdapter(CrawlerInterface):
             logger.error(f"数据提取失败: {url}, 错误: {str(e)}")
             raise CrawlException(f"数据提取失败: {str(e)}", url=url)
     
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=4, max=20),
+        retry=retry_if_exception_type((ConnectionError, TimeoutError))
+    )
     async def search(self, query: str, limit: int = 10) -> List[CrawlResult]:
         """
         搜索并爬取结果
-        
+
         Args:
             query: 搜索查询
-            limit: 结果数量限制
-        
+            limit: 结果数量限制（注意：Firecrawl v2可能不支持此参数）
+
         Returns:
             List[CrawlResult]: 搜索结果
         """
         try:
-            logger.info(f"搜索查询: {query}, 限制: {limit}")
-            
-            # Firecrawl的搜索功能
-            result = await self.client.search(query, limit=limit)
-            
+            logger.info(f"搜索查询: {query}, 期望限制: {limit}")
+
+            # 搜索API通常需要更长的超时时间（60秒）
+            search_timeout = min(self.timeout * 2, 60)
+
+            # 构建搜索参数（Firecrawl API v2要求）
+            search_params = {
+                'limit': limit,
+                'scrapeOptions': {
+                    'formats': ['markdown', 'html']
+                }
+            }
+
+            logger.info(f"Firecrawl搜索参数: {search_params}")
+
+            # Firecrawl的搜索功能（同步方法，需要包装为异步）
+            result = await asyncio.wait_for(
+                asyncio.to_thread(self.client.search, query, search_params),
+                timeout=search_timeout
+            )
+
             # 处理搜索结果
             results = []
-            for item in result.get('results', []):
+            items = result.get('data', []) if isinstance(result, dict) else result
+
+            # 限制结果数量
+            for item in items[:limit]:
                 crawl_result = CrawlResult(
                     url=item.get('url', ''),
-                    content=item.get('content', ''),
+                    content=item.get('content', item.get('markdown', '')),
                     markdown=item.get('markdown'),
+                    html=item.get('html'),
                     metadata=item.get('metadata', {})
                 )
                 results.append(crawl_result)
-            
+
             logger.info(f"搜索完成: {query}, 获得 {len(results)} 个结果")
             return results
-            
+
+        except asyncio.TimeoutError:
+            error_msg = f"搜索超时 (超过{search_timeout}秒): {query}"
+            logger.error(error_msg)
+            raise CrawlException(error_msg)
         except Exception as e:
-            logger.error(f"搜索失败: {query}, 错误: {str(e)}")
-            raise CrawlException(f"搜索失败: {str(e)}")
+            error_msg = f"搜索失败: {query}, 错误类型: {type(e).__name__}, 详情: {str(e) or '无详细信息'}"
+            logger.error(error_msg)
+            raise CrawlException(error_msg)
     
     def _build_scrape_options(self, options: Dict) -> Dict:
         """
