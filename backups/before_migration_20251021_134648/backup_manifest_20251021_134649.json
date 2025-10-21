@@ -1,0 +1,45 @@
+{
+  "timestamp": "20251021_134649",
+  "database": "intelligent_system",
+  "collections": 6,
+  "total_documents": 0,
+  "total_size": 0,
+  "files": [
+    {
+      "collection": "summary_report_tasks",
+      "documents": 0,
+      "file": null,
+      "size": 0
+    },
+    {
+      "collection": "vpn_connections",
+      "documents": 0,
+      "file": null,
+      "size": 0
+    },
+    {
+      "collection": "summary_report_data_items",
+      "documents": 0,
+      "file": null,
+      "size": 0
+    },
+    {
+      "collection": "summary_reports",
+      "documents": 0,
+      "file": null,
+      "size": 0
+    },
+    {
+      "collection": "summary_report_versions",
+      "documents": 0,
+      "file": null,
+      "size": 0
+    },
+    {
+      "collection": "vpn_connection_logs",
+      "documents": 0,
+      "file": null,
+      "size": 0
+    }
+  ]
+}
