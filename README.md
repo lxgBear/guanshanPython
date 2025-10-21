@@ -25,12 +25,14 @@
 
 | 文档类型 | 文档 | 描述 |
 |---------|------|------|
+| **快速开始** | [完整启动指南](STARTUP_GUIDE.md) | 统一的项目启动和配置指南 |
 | **系统概述** | [系统架构文档](docs/SYSTEM_ARCHITECTURE.md) | 完整的系统架构设计与技术规范 |
-| **开发文档** | [API字段参考](docs/API_FIELD_REFERENCE.md) | 详细的API字段定义与数据结构 |
-| | [API使用指南](docs/API_USAGE_GUIDE.md) | 完整的API使用示例与工作流程 |
-| **需求文档** | [定时搜索设计](demand/TimedSearch.md) | 定时搜索功能的设计需求与规格 |
+| **开发文档** | [API使用指南](docs/API_GUIDE.md) | 完整的API使用示例与工作流程 |
+| | [文档中心](docs/README.md) | 所有技术文档的导航索引 |
 
 ## 🚀 快速开始
+
+> 详细的启动指南请参考: [STARTUP_GUIDE.md](STARTUP_GUIDE.md)
 
 ### 环境要求
 
