@@ -39,6 +39,16 @@ class TaskNextRunResponse(BaseModel):
     next_run_time: Optional[str] = Field(None, description="下次执行时间")
 
 
+class TaskExecutionResponse(BaseModel):
+    """任务执行响应"""
+    task_id: str = Field(..., description="任务ID")
+    task_name: str = Field(..., description="任务名称")
+    executed_at: str = Field(..., description="执行时间")
+    status: str = Field(..., description="执行状态")
+    last_execution_success: bool = Field(..., description="最后一次执行是否成功")
+    execution_count: int = Field(..., description="总执行次数")
+
+
 # ==========================================
 # API端点
 # ==========================================
@@ -103,6 +113,42 @@ async def get_task_next_run(task_id: str = Path(..., description="任务ID")):
         raise HTTPException(500, f"获取任务下次执行时间失败: {str(e)}")
 
 
+@router.post(
+    "/tasks/{task_id}/execute",
+    response_model=TaskExecutionResponse,
+    summary="立即执行任务",
+    description="手动触发指定任务立即执行，不等待计划的执行时间。适用于调试和紧急执行场景。"
+)
+async def execute_task_now(task_id: str = Path(..., description="任务ID")):
+    """立即执行指定任务"""
+    try:
+        logger.info(f"🚀 收到手动执行任务请求: {task_id}")
+
+        scheduler = await get_scheduler()
+
+        if not scheduler.is_running():
+            raise HTTPException(503, "调度器未运行，无法执行任务")
+
+        result = await scheduler.execute_task_now(task_id)
+
+        logger.info(f"✅ 任务手动执行完成: {task_id}")
+
+        return TaskExecutionResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"手动执行任务失败 {task_id}: {e}")
+
+        # 根据错误类型返回合适的HTTP状态码
+        if "not found" in str(e).lower() or "不存在" in str(e):
+            raise HTTPException(404, f"任务不存在: {task_id}")
+        elif "失败" in str(e) or "error" in str(e).lower():
+            raise HTTPException(500, f"任务执行失败: {str(e)}")
+        else:
+            raise HTTPException(500, f"未知错误: {str(e)}")
+
+
 @router.get(
     "/health",
     summary="调度器健康检查",
@@ -113,7 +159,7 @@ async def scheduler_health_check():
     try:
         scheduler = await get_scheduler()
         is_running = scheduler.is_running()
-        
+
         if is_running:
             status = scheduler.get_status()
             return {
@@ -129,7 +175,7 @@ async def scheduler_health_check():
                 "active_jobs": 0,
                 "timestamp": datetime.utcnow().isoformat()
             }
-        
+
     except Exception as e:
         logger.error(f"调度器健康检查失败: {e}")
         return {

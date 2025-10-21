@@ -16,6 +16,10 @@ from src.infrastructure.database.memory_repositories import InMemorySearchTaskRe
 from src.infrastructure.database.connection import get_mongodb_database
 from src.services.task_scheduler import get_scheduler
 from src.utils.logger import get_logger
+from src.api.v1.endpoints.search_tasks_validation import (
+    validate_task_creation,
+    get_task_mode_description
+)
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/search-tasks", tags=["🔍 搜索任务管理"])
@@ -205,6 +209,13 @@ async def create_search_task(task_data: SearchTaskCreate):
             ScheduleInterval.from_value(task_data.schedule_interval)
         except ValueError as e:
             raise HTTPException(400, f"无效的调度间隔: {str(e)}")
+
+        # 验证 crawl_url 和 include_domains 的互斥关系
+        validate_task_creation(
+            crawl_url=task_data.crawl_url,
+            query=task_data.query,
+            search_config=task_data.search_config
+        )
 
         # 使用安全ID创建任务
         task = SearchTask.create_with_secure_id(

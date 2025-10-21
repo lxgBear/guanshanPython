@@ -8,7 +8,7 @@ import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 
 from src.core.domain.entities.search_result import SearchResult, SearchResultBatch, ResultStatus
 from src.core.domain.entities.search_config import SearchConfigManager, UserSearchConfig
@@ -22,7 +22,7 @@ class FirecrawlSearchAdapter:
     """
 Firecrawl 搜索API适配器
     """
-    
+
     def __init__(self):
         self.api_key = settings.FIRECRAWL_API_KEY
         self.base_url = settings.FIRECRAWL_BASE_URL.rstrip('/')
@@ -39,10 +39,23 @@ Firecrawl 搜索API适配器
             logger.info("🧪 Firecrawl适配器运行在测试模式 - 将生成模拟数据")
         else:
             logger.info(f"🌐 Firecrawl适配器运行在生产模式 - API Base URL: {self.base_url}")
-    
+
+    def _log_retry_attempt(self, retry_state):
+        """记录重试尝试"""
+        attempt_number = retry_state.attempt_number
+        if attempt_number > 1:
+            exception = retry_state.outcome.exception()
+            logger.warning(
+                f"🔄 搜索请求失败，第 {attempt_number - 1} 次重试 (共3次) | "
+                f"错误: {type(exception).__name__}: {str(exception)[:100]} | "
+                f"将在 8 分钟后重试..."
+            )
+
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10)
+        wait=wait_fixed(480),  # 8分钟 = 480秒
+        retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError)),
+        before_sleep=lambda retry_state: FirecrawlSearchAdapter._log_retry_attempt(None, retry_state)
     )
     async def search(self, 
                     query: str, 
@@ -71,7 +84,11 @@ Firecrawl 搜索API适配器
             user_config = UserSearchConfig()
         
         config = self.config_manager.get_effective_config(user_config)
-        
+
+        # 提取语言配置用于后置过滤
+        language = config.get('language', 'zh')
+        strict_filter = config.get('strict_language_filter', True)
+
         # 构建请求体
         request_body = self._build_request_body(query, config)
         
@@ -116,6 +133,11 @@ Firecrawl 搜索API适配器
                 results = self._parse_search_results(data, task_id)
                 logger.info(f"✅ 解析得到 {len(results)} 条搜索结果")
 
+                # 语言后置过滤（如果启用严格语言过滤且设置language=en）
+                if language == 'en' and strict_filter:
+                    results = self._post_filter_by_language(results, 'en')
+                    logger.info(f"🌐 语言后置过滤: 保留 {len(results)} 条英文结果")
+
                 # 添加到批次
                 for result in results:
                     batch.add_result(result)
@@ -158,18 +180,42 @@ Firecrawl 搜索API适配器
         # Firecrawl API v2: 使用site:操作符来限制域名,而不是includeDomains参数
         final_query = query
 
+        # 智能语言过滤：如果设置language为en且启用strict_language_filter，自动排除中文域名
+        language = config.get('language', 'zh')
+        strict_filter = config.get('strict_language_filter', True)  # 默认启用严格语言过滤
+
+        if language == 'en' and strict_filter:
+            # 检测查询中是否包含中文字符
+            has_chinese = any('\u4e00' <= char <= '\u9fff' for char in query)
+
+            if has_chinese:
+                # 如果查询包含中文但要求英文结果，自动添加域名过滤
+                # 排除常见的中文域名后缀
+                chinese_domains_exclusion = (
+                    '-site:*.cn '
+                    '-site:*.com.cn '
+                    '-site:*.hk '
+                    '-site:*.tw '
+                    '-inurl:zh '
+                    '-inurl:zh-cn '
+                    '-inurl:zh-hans '
+                    '-inurl:zh-hant'
+                )
+                final_query = f"{query} {chinese_domains_exclusion}"
+                logger.info(f"🌍 语言过滤: 检测到中文查询+英文要求，已添加域名过滤")
+
         # 如果配置了include_domains,添加site:操作符到查询中
         if config.get('include_domains'):
             domains = config['include_domains']
             if domains:
                 # 为每个域名添加site:操作符
                 site_operators = ' OR '.join([f'site:{domain}' for domain in domains])
-                final_query = f"({site_operators}) {query}"
+                final_query = f"({site_operators}) {final_query}"
 
         body = {
             "query": final_query,
             "limit": config.get('limit', 20),
-            "lang": config.get('language', 'zh')
+            "lang": language
         }
 
         # 添加scrapeOptions以获取完整网页内容
@@ -304,11 +350,54 @@ Firecrawl 搜索API适配器
         """解析日期字符串"""
         if not date_str:
             return None
-        
+
         try:
             return datetime.fromisoformat(date_str)
         except:
             return None
+
+    def _post_filter_by_language(self, results: List[SearchResult], target_language: str) -> List[SearchResult]:
+        """后置语言过滤 - 根据URL、语言元数据和标题字符进行过滤
+
+        Args:
+            results: 原始搜索结果列表
+            target_language: 目标语言（如 'en'）
+
+        Returns:
+            过滤后的结果列表
+        """
+        filtered_results = []
+
+        for result in results:
+            # 1. 检查URL中是否包含中文域名或路径标识
+            url_lower = result.url.lower()
+            chinese_url_indicators = [
+                '.cn', '.com.cn', '.hk', '.tw',
+                '/zh/', '/zh-cn/', '/zh-hans/', '/zh-hant/',
+                'zhongwen', 'hans', 'hant'
+            ]
+
+            has_chinese_url = any(indicator in url_lower for indicator in chinese_url_indicators)
+
+            # 2. 检查语言元数据
+            language_metadata = result.language
+            is_chinese_language = False
+            if language_metadata:
+                lang_lower = str(language_metadata).lower()
+                is_chinese_language = any(zh in lang_lower for zh in ['zh', 'hans', 'hant', 'chinese'])
+
+            # 3. 检查标题是否包含中文字符
+            has_chinese_chars = any('\u4e00' <= char <= '\u9fff' for char in result.title)
+
+            # 4. 过滤逻辑：如果是中文内容则跳过
+            if has_chinese_url or is_chinese_language or has_chinese_chars:
+                logger.debug(f"🚫 过滤中文结果: {result.title[:50]}... (URL: {result.url[:50]}...)")
+                continue
+
+            # 5. 保留英文结果
+            filtered_results.append(result)
+
+        return filtered_results
     
     def _generate_test_results(self, query: str, task_id: Optional[str]) -> SearchResultBatch:
         """生成测试模式的模拟结果"""
