@@ -35,7 +35,7 @@ class SummaryReportService:
 
     async def _init_repos(self):
         """初始化仓储"""
-        if not self.db:
+        if self.db is None:
             self.db = await get_mongodb_database()
             self.report_repo = SummaryReportRepository(self.db)
             self.version_repo = SummaryReportVersionRepository(self.db)

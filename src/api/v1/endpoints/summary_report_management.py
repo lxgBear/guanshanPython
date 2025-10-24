@@ -116,6 +116,9 @@ async def list_reports(
     }
     """
     try:
+        # 确保服务已初始化
+        await summary_report_service._init_repos()
+
         # 构建基础过滤条件
         base_filter = {}
         if created_by:
@@ -288,6 +291,9 @@ async def get_report_versions(
     }
     """
     try:
+        # 确保服务已初始化
+        await summary_report_service._init_repos()
+
         # 使用游标分页
         result = await cursor_paginator.paginate(
             collection=summary_report_service.db.summary_report_versions,

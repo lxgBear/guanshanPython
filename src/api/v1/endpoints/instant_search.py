@@ -16,7 +16,11 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/instant-search-tasks", tags=["即时搜索"])
+# 即时搜索API - 隐藏在文档中（内部使用）
+router = APIRouter(
+    prefix="/instant-search-tasks",
+    include_in_schema=False  # 隐藏在API文档中
+)
 
 
 # ==================== Request Models ====================
