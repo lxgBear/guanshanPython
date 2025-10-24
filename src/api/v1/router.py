@@ -8,7 +8,9 @@ from fastapi import APIRouter
 from src.api.v1.endpoints import crawl
 from src.api.v1.endpoints import search_tasks_frontend, search_results_frontend, internal_api, scheduler_management
 from src.api.v1.endpoints import instant_search
+from src.api.v1.endpoints import smart_search
 from src.api.v1.endpoints import summary_report_management
+from src.api.v1.endpoints import data_source_management
 
 # 创建主路由器
 api_router = APIRouter()
@@ -48,10 +50,22 @@ api_router.include_router(
     tags=["⚡ 即时搜索"]
 )
 
+# 智能搜索（v2.0.0新增 - LLM查询分解）
+api_router.include_router(
+    smart_search.router,
+    tags=["🧠 智能搜索（LLM分解）"]
+)
+
 # 智能总结报告系统
 api_router.include_router(
     summary_report_management.router,
     tags=["📝 智能总结报告"]
+)
+
+# 数据源管理系统（v1.4.0新增）
+api_router.include_router(
+    data_source_management.router,
+    tags=["📦 数据源管理"]
 )
 
 # ==========================================
