@@ -176,7 +176,7 @@ Firecrawl 搜索API适配器
         return batch
     
     def _build_request_body(self, query: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """构建请求体 - Firecrawl API v2格式"""
+        """构建请求体 - Firecrawl API v2格式 (增强版)"""
         # Firecrawl API v2: 使用site:操作符来限制域名,而不是includeDomains参数
         final_query = query
 
@@ -218,6 +218,11 @@ Firecrawl 搜索API适配器
             "lang": language
         }
 
+        # 添加 sources 参数 (web, images, news)
+        if config.get('sources'):
+            body['sources'] = config['sources']
+            logger.info(f"🔍 搜索来源: {config['sources']}")
+
         # 添加scrapeOptions以获取完整网页内容
         # Firecrawl API v2: 默认search只返回元数据(title, url, description)
         # 需要scrapeOptions才能获取完整的markdown/html内容
@@ -226,9 +231,36 @@ Firecrawl 搜索API适配器
             body['scrapeOptions'] = {
                 "formats": scrape_formats
             }
-            # 可以添加更多scrape选项
+
+            # HTML清理选项 - 完整支持
             if config.get('only_main_content', True):
                 body['scrapeOptions']['onlyMainContent'] = True
+
+            # 注意：remove_base64_images默认为False（保留正文图片）
+            # 配合onlyMainContent和blockAds，可以保留正文图片同时移除广告/非主内容区域的图片
+            if config.get('remove_base64_images', False):
+                body['scrapeOptions']['removeBase64Images'] = True
+                logger.info("🖼️  HTML清理: 已启用base64图片移除（性能优化模式）")
+            else:
+                logger.info("📷 图片保留: 保留正文图片（配合主内容提取和广告屏蔽）")
+
+            if config.get('block_ads', True):
+                body['scrapeOptions']['blockAds'] = True
+                logger.info("🚫 HTML清理: 已启用广告屏蔽")
+
+            # 标签过滤 - 精细化HTML控制
+            if config.get('include_tags'):
+                body['scrapeOptions']['includeTags'] = config['include_tags']
+                logger.info(f"✅ HTML标签: 仅保留 {config['include_tags']}")
+
+            if config.get('exclude_tags'):
+                body['scrapeOptions']['excludeTags'] = config['exclude_tags']
+                logger.info(f"❌ HTML标签: 排除 {config['exclude_tags']}")
+
+            # 等待动态内容加载
+            if config.get('wait_for'):
+                body['scrapeOptions']['waitFor'] = config['wait_for']
+                logger.info(f"⏱️  等待加载: {config['wait_for']}ms")
 
         # 添加可选参数
         # 注意: v2 API不支持includeDomains和excludeDomains参数

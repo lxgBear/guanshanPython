@@ -89,25 +89,37 @@ class SearchConfigTemplate:
     """搜索配置模板（第二层）"""
     name: str = ""  # 模板名称
     description: str = ""  # 模板描述
-    
+
     # 搜索参数
     limit: int = 20  # 结果数量
     sources: List[str] = field(default_factory=list)  # 搜索来源
     categories: List[str] = field(default_factory=list)  # 搜索类别
     language: str = SearchLanguage.ZH.value  # 语言
-    
+
     # 过滤器
     include_domains: List[str] = field(default_factory=list)  # 包含域名
     exclude_domains: List[str] = field(default_factory=list)  # 排除域名
-    
+
     # 时间范围
     time_range: Optional[str] = None  # 时间范围: "day", "week", "month", "year"
-    
+
     # 高级选项
     enable_ai_summary: bool = False  # 启用AI摘要
     extract_metadata: bool = True    # 提取元数据
     follow_links: bool = False        # 跟随链接
     max_depth: int = 1               # 最大深度
+
+    # HTML清理选项 (Firecrawl scrapeOptions)
+    only_main_content: bool = True           # 只保留主要内容
+    remove_base64_images: bool = False       # 保留base64图片（保留正文图片，配合onlyMainContent移除非主内容区域图片）
+    block_ads: bool = True                   # 屏蔽广告
+    scrape_formats: List[str] = field(default_factory=lambda: ['markdown', 'html', 'links'])  # 抓取格式
+    include_tags: Optional[List[str]] = None  # 包含的HTML标签
+    exclude_tags: Optional[List[str]] = None  # 排除的HTML标签
+    wait_for: Optional[int] = None           # 等待时间(毫秒), 用于动态内容加载
+
+    # 语言过滤
+    strict_language_filter: bool = True      # 严格语言过滤
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -122,7 +134,16 @@ class SearchConfigTemplate:
             "enable_ai_summary": self.enable_ai_summary,
             "extract_metadata": self.extract_metadata,
             "follow_links": self.follow_links,
-            "max_depth": self.max_depth
+            "max_depth": self.max_depth,
+            # HTML清理选项
+            "only_main_content": self.only_main_content,
+            "remove_base64_images": self.remove_base64_images,
+            "block_ads": self.block_ads,
+            "scrape_formats": self.scrape_formats,
+            "include_tags": self.include_tags,
+            "exclude_tags": self.exclude_tags,
+            "wait_for": self.wait_for,
+            "strict_language_filter": self.strict_language_filter
         }
 
 
