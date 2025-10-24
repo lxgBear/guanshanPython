@@ -8,11 +8,12 @@ from uuid import UUID, uuid4
 
 
 class ResultStatus(Enum):
-    """结果状态枚举"""
-    PENDING = "pending"     # 待处理
-    PROCESSED = "processed" # 已处理
-    FAILED = "failed"       # 处理失败
-    ARCHIVED = "archived"   # 已归档
+    """结果状态枚举（数据源管理版）"""
+    PENDING = "pending"         # 初始状态：刚采集
+    ARCHIVED = "archived"       # 已留存：用户标记重要
+    PROCESSING = "processing"   # 处理中：数据源正在整编
+    COMPLETED = "completed"     # 已完成：数据源已确定
+    DELETED = "deleted"         # 已删除：软删除
 
 
 @dataclass
@@ -62,14 +63,24 @@ class SearchResult:
     # 测试模式标记
     is_test_data: bool = False  # 是否为测试数据
     
-    def mark_as_processed(self) -> None:
-        """标记为已处理"""
-        self.status = ResultStatus.PROCESSED
+    def mark_as_archived(self) -> None:
+        """标记为已留存"""
+        self.status = ResultStatus.ARCHIVED
         self.processed_at = datetime.utcnow()
-    
-    def mark_as_failed(self) -> None:
-        """标记为处理失败"""
-        self.status = ResultStatus.FAILED
+
+    def mark_as_processing(self) -> None:
+        """标记为处理中（数据源整编中）"""
+        self.status = ResultStatus.PROCESSING
+        self.processed_at = datetime.utcnow()
+
+    def mark_as_completed(self) -> None:
+        """标记为已完成（数据源已确定）"""
+        self.status = ResultStatus.COMPLETED
+        self.processed_at = datetime.utcnow()
+
+    def mark_as_deleted(self) -> None:
+        """标记为已删除（软删除）"""
+        self.status = ResultStatus.DELETED
         self.processed_at = datetime.utcnow()
     
     def to_summary(self) -> Dict[str, Any]:

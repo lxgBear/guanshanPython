@@ -411,10 +411,189 @@ class SearchResultRepository:
         try:
             collection = await self._get_collection()
             result = await collection.delete_many({"task_id": task_id})
-            
+
             logger.info(f"删除任务结果: {task_id}, 删除数量: {result.deleted_count}")
             return result.deleted_count
-            
+
         except Exception as e:
             logger.error(f"删除任务结果失败: {e}")
+            raise
+
+    # ==================== 状态管理方法 (v2.1.0新增) ====================
+
+    async def get_results_by_status(
+        self,
+        task_id: str,
+        status: ResultStatus,
+        page: int = 1,
+        page_size: int = 20
+    ) -> tuple[List[SearchResult], int]:
+        """按状态筛选搜索结果
+
+        Args:
+            task_id: 任务ID
+            status: 结果状态
+            page: 页码
+            page_size: 每页数量
+
+        Returns:
+            (结果列表, 总数)
+        """
+        try:
+            collection = await self._get_collection()
+
+            query = {
+                "task_id": task_id,
+                "status": status.value
+            }
+
+            # 总数
+            total = await collection.count_documents(query)
+
+            # 分页查询
+            skip = (page - 1) * page_size
+            cursor = collection.find(query).sort("created_at", -1).skip(skip).limit(page_size)
+
+            results = []
+            async for data in cursor:
+                results.append(self._dict_to_result(data))
+
+            return results, total
+
+        except Exception as e:
+            logger.error(f"按状态获取结果失败: {e}")
+            raise
+
+    async def count_by_status(self, task_id: str) -> Dict[str, int]:
+        """统计各状态结果数量
+
+        Args:
+            task_id: 任务ID
+
+        Returns:
+            状态计数字典 {"pending": 10, "archived": 5, ...}
+        """
+        try:
+            collection = await self._get_collection()
+
+            pipeline = [
+                {"$match": {"task_id": task_id}},
+                {"$group": {
+                    "_id": "$status",
+                    "count": {"$sum": 1}
+                }}
+            ]
+
+            status_counts = {status.value: 0 for status in ResultStatus}
+
+            async for doc in collection.aggregate(pipeline):
+                status_counts[doc["_id"]] = doc["count"]
+
+            return status_counts
+
+        except Exception as e:
+            logger.error(f"统计状态失败: {e}")
+            raise
+
+    async def update_result_status(
+        self,
+        result_id: str,
+        new_status: ResultStatus
+    ) -> bool:
+        """更新单个结果状态
+
+        Args:
+            result_id: 结果ID
+            new_status: 新状态
+
+        Returns:
+            是否更新成功
+        """
+        try:
+            collection = await self._get_collection()
+
+            update_data = {
+                "status": new_status.value,
+                "processed_at": datetime.utcnow()
+            }
+
+            result = await collection.update_one(
+                {"_id": result_id},
+                {"$set": update_data}
+            )
+
+            if result.modified_count > 0:
+                logger.info(f"更新结果状态: {result_id} -> {new_status.value}")
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"更新结果状态失败: {e}")
+            raise
+
+    async def bulk_update_status(
+        self,
+        result_ids: List[str],
+        new_status: ResultStatus
+    ) -> int:
+        """批量更新结果状态
+
+        Args:
+            result_ids: 结果ID列表
+            new_status: 新状态
+
+        Returns:
+            更新的记录数
+        """
+        try:
+            collection = await self._get_collection()
+
+            update_data = {
+                "status": new_status.value,
+                "processed_at": datetime.utcnow()
+            }
+
+            result = await collection.update_many(
+                {"_id": {"$in": result_ids}},
+                {"$set": update_data}
+            )
+
+            logger.info(f"批量更新状态: {result.modified_count}条 -> {new_status.value}")
+            return result.modified_count
+
+        except Exception as e:
+            logger.error(f"批量更新状态失败: {e}")
+            raise
+
+    async def get_status_distribution(self, task_id: str) -> Dict[str, Any]:
+        """获取状态分布统计
+
+        Args:
+            task_id: 任务ID
+
+        Returns:
+            状态分布统计信息
+        """
+        try:
+            # 获取各状态计数
+            status_counts = await self.count_by_status(task_id)
+            total = sum(status_counts.values())
+
+            # 计算百分比
+            distribution = {}
+            for status, count in status_counts.items():
+                percentage = (count / total * 100) if total > 0 else 0
+                distribution[status] = {
+                    "count": count,
+                    "percentage": round(percentage, 2)
+                }
+
+            return {
+                "total": total,
+                "distribution": distribution
+            }
+
+        except Exception as e:
+            logger.error(f"获取状态分布失败: {e}")
             raise
