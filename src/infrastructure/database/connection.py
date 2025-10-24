@@ -144,6 +144,7 @@ async def create_indexes():
         await search_results.create_index("task_id")
         await search_results.create_index("execution_time")
         await search_results.create_index([("task_id", 1), ("execution_time", -1)])
+        await search_results.create_index("status")  # v2.1.0: 状态查询优化
 
         # ==================== v1.3.0 即时搜索索引 ====================
 
@@ -162,6 +163,7 @@ async def create_indexes():
         await instant_search_results.create_index("url_normalized")
         await instant_search_results.create_index("first_found_at")
         await instant_search_results.create_index("last_found_at")
+        await instant_search_results.create_index("status")  # v2.1.0: 状态查询优化
         logger.info("✅ 即时搜索结果索引创建完成（含content_hash唯一索引）")
 
         # 即时搜索映射索引（v1.3.0核心）
@@ -178,6 +180,16 @@ async def create_indexes():
             unique=True
         )
         logger.info("✅ 即时搜索映射索引创建完成（含唯一约束）")
+
+        # ==================== v2.1.0 智能搜索结果索引 ====================
+
+        # 智能搜索结果索引（基于SearchResult实体的状态管理）
+        smart_search_results = db.smart_search_results
+        await smart_search_results.create_index("task_id")
+        await smart_search_results.create_index("status")  # v2.1.0: 状态查询优化
+        await smart_search_results.create_index("created_at")
+        await smart_search_results.create_index([("task_id", 1), ("status", 1)])  # 复合索引优化
+        logger.info("✅ 智能搜索结果索引创建完成（含状态查询优化）")
 
         logger.info("✅ 数据库索引创建完成（含v1.3.0即时搜索索引）")
 

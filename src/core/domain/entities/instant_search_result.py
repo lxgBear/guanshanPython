@@ -7,10 +7,15 @@ v1.3.0 架构重大变更：
 - ✅ 新增 url_normalized 字段（URL规范化）
 - ✅ 全局唯一结果，多次搜索共享同一结果记录
 
+v1.4.0 数据源管理支持：
+- ✅ 新增 status 字段（支持数据源状态管理）
+- ✅ 状态枚举：pending, archived, processing, completed, deleted
+
 设计优势：
 - 92.5% 存储空间节省（避免重复存储相同内容）
 - 完整的发现历史追踪
 - 支持跨搜索结果可见性
+- 数据源状态同步管理
 """
 
 import hashlib
@@ -18,9 +23,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any
 from urllib.parse import urlparse, urlunparse
+from enum import Enum
 
 # 导入雪花算法ID生成器
 from src.infrastructure.id_generator import generate_string_id
+
+
+class InstantSearchResultStatus(Enum):
+    """即时搜索结果状态枚举"""
+    PENDING = "pending"         # 初始状态：刚采集
+    ARCHIVED = "archived"       # 已留存：用户标记重要
+    PROCESSING = "processing"   # 处理中：数据源正在整编
+    COMPLETED = "completed"     # 已完成：数据源已确定
+    DELETED = "deleted"         # 已删除：软删除
 
 
 @dataclass
@@ -67,6 +82,9 @@ class InstantSearchResult:
     # 质量指标
     relevance_score: float = 0.0  # 相关性分数
     quality_score: float = 0.0  # 质量分数
+
+    # v1.4.0 数据源管理字段
+    status: InstantSearchResultStatus = InstantSearchResultStatus.PENDING  # 数据状态
 
     # v1.3.0 发现统计字段（核心新增）
     first_found_at: datetime = field(default_factory=datetime.utcnow)  # 首次发现时间
@@ -152,6 +170,26 @@ class InstantSearchResult:
         self.last_found_at = datetime.utcnow()
         self.found_count += 1
         self.unique_searches += 1
+        self.updated_at = datetime.utcnow()
+
+    def mark_as_archived(self) -> None:
+        """标记为已留存"""
+        self.status = InstantSearchResultStatus.ARCHIVED
+        self.updated_at = datetime.utcnow()
+
+    def mark_as_processing(self) -> None:
+        """标记为处理中（数据源整编中）"""
+        self.status = InstantSearchResultStatus.PROCESSING
+        self.updated_at = datetime.utcnow()
+
+    def mark_as_completed(self) -> None:
+        """标记为已完成（数据源已确定）"""
+        self.status = InstantSearchResultStatus.COMPLETED
+        self.updated_at = datetime.utcnow()
+
+    def mark_as_deleted(self) -> None:
+        """标记为已删除（软删除）"""
+        self.status = InstantSearchResultStatus.DELETED
         self.updated_at = datetime.utcnow()
 
     def to_dict(self) -> Dict[str, Any]:
