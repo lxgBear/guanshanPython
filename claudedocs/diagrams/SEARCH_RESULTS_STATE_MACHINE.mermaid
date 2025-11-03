@@ -1,0 +1,60 @@
+```mermaid
+stateDiagram-v2
+    %% ProcessedResult 状态机图
+
+    [*] --> PENDING: 定时任务创建<br/>待处理记录
+
+    PENDING --> PROCESSING: AI服务开始处理
+
+    PROCESSING --> COMPLETED: AI处理成功<br/>保存分析结果
+    PROCESSING --> FAILED: AI处理失败<br/>记录错误信息
+
+    FAILED --> PENDING: 重试<br/>(retry_count < 3)
+    FAILED --> [*]: 超过重试次数<br/>(retry_count >= 3)
+
+    COMPLETED --> ARCHIVED: 用户标记留存<br/>mark_as_archived()
+    COMPLETED --> DELETED: 用户标记删除<br/>mark_as_deleted()
+
+    ARCHIVED --> DELETED: 用户取消留存<br/>删除记录
+    DELETED --> [*]: 软删除<br/>不展示给用户
+
+    note right of PENDING
+        初始状态
+        - 等待AI服务处理
+        - 可批量获取待处理记录
+    end note
+
+    note right of PROCESSING
+        处理中
+        - AI服务正在分析
+        - 防止重复处理
+    end note
+
+    note right of COMPLETED
+        完成状态
+        - AI处理成功
+        - 包含所有增强数据
+        - 可供用户查询
+    end note
+
+    note right of FAILED
+        失败状态
+        - 记录错误信息
+        - 支持重试机制
+        - 最多重试3次
+    end note
+
+    note right of ARCHIVED
+        用户留存
+        - 用户标记为重要
+        - 优先展示
+        - 可添加评分和备注
+    end note
+
+    note right of DELETED
+        软删除
+        - 不物理删除记录
+        - 不在列表中展示
+        - 支持数据恢复
+    end note
+```

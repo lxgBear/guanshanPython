@@ -1,0 +1,98 @@
+```mermaid
+classDiagram
+    %% 实体类图：搜索结果职责分离数据模型
+
+    class SearchResult {
+        <<Entity>> 原始搜索结果
+        +string id
+        +string task_id
+        +string title
+        +string url
+        +string content
+        +string snippet
+        +string source
+        +datetime published_date
+        +string author
+        +string language
+        +string markdown_content
+        +string html_content
+        +string article_tag
+        +string article_published_time
+        +string source_url
+        +int http_status_code
+        +int search_position
+        +dict metadata
+        +float relevance_score
+        +float quality_score
+        +datetime created_at
+        +bool is_test_data
+        +to_summary() dict
+    }
+
+    class ProcessedResult {
+        <<Entity>> AI处理结果
+        +string id
+        +string raw_result_id
+        +string task_id
+        +string translated_title
+        +string translated_content
+        +string summary
+        +list~string~ key_points
+        +string sentiment
+        +list~string~ categories
+        +string ai_model
+        +int ai_processing_time_ms
+        +float ai_confidence_score
+        +dict ai_metadata
+        +ProcessedStatus status
+        +int user_rating
+        +string user_notes
+        +datetime created_at
+        +datetime processed_at
+        +datetime updated_at
+        +string processing_error
+        +int retry_count
+        +mark_as_processing()
+        +mark_as_completed()
+        +mark_as_failed()
+        +mark_as_archived()
+        +mark_as_deleted()
+    }
+
+    class ProcessedStatus {
+        <<Enumeration>>
+        PENDING
+        PROCESSING
+        COMPLETED
+        FAILED
+        ARCHIVED
+        DELETED
+    }
+
+    class SearchTask {
+        <<Entity>> 搜索任务
+        +string id
+        +string name
+        +string query
+        +string target_website
+        +string crawl_url
+        +dict search_config
+        +string schedule_interval
+        +bool is_active
+        +TaskStatus status
+        +datetime created_at
+        +datetime updated_at
+        +int execution_count
+        +int success_count
+    }
+
+    %% 关联关系
+    ProcessedResult --> SearchResult : references (raw_result_id)
+    ProcessedResult --> ProcessedStatus : has status
+    SearchResult --> SearchTask : belongs to (task_id)
+    ProcessedResult --> SearchTask : belongs to (task_id)
+
+    %% 注释
+    note for SearchResult "职责：纯原始数据存储\n只写一次，不可修改\n不包含业务状态"
+    note for ProcessedResult "职责：AI增强数据 + 用户操作\n由AI服务写入和更新\n包含处理状态和用户交互"
+```

@@ -1,0 +1,70 @@
+```mermaid
+sequenceDiagram
+    %% 定时任务数据流序列图（v2.0.0 职责分离）
+
+    participant Scheduler as TaskScheduler<br/>定时任务调度器
+    participant Firecrawl as FirecrawlAdapter<br/>搜索API
+    participant RawRepo as SearchResultRepo<br/>原始结果仓储
+    participant RawDB as search_results<br/>原始数据表
+    participant ProcessedRepo as ProcessedResultRepo<br/>处理结果仓储
+    participant ProcessedDB as processed_results<br/>处理结果表
+    participant AI as AI Service<br/>AI处理服务
+    participant Frontend as Frontend<br/>前端应用
+
+    %% Phase 1: 定时任务执行
+    Note over Scheduler: Phase 1: 获取原始数据
+    Scheduler->>Scheduler: _execute_search_task(task_id)
+    Scheduler->>Firecrawl: search(query, config)
+    Firecrawl-->>Scheduler: SearchResultBatch<br/>(10条原始结果)
+
+    %% Phase 2: 保存原始数据
+    Note over Scheduler,RawDB: Phase 2: 保存原始数据（只写一次）
+    Scheduler->>RawRepo: save_results(results)
+    RawRepo->>RawDB: insert_many(raw_documents)
+    RawDB-->>RawRepo: inserted_ids: [id1, id2, ...]
+    RawRepo-->>Scheduler: saved_ids: [id1, id2, ...]
+
+    %% Phase 3: 创建待处理记录
+    Note over Scheduler,ProcessedDB: Phase 3: 创建待处理记录
+    loop for each raw_id in saved_ids
+        Scheduler->>ProcessedRepo: create_pending_result(raw_id, task_id)
+        ProcessedRepo->>ProcessedDB: insert_one({<br/>  raw_result_id: raw_id,<br/>  status: PENDING<br/>})
+    end
+    ProcessedDB-->>ProcessedRepo: created
+    ProcessedRepo-->>Scheduler: success
+
+    %% Phase 4: 通知AI服务
+    Note over Scheduler,AI: Phase 4: 通知AI服务（异步）
+    Scheduler->>AI: POST /ai/process<br/>{<br/>  raw_result_ids: [id1, id2, ...],<br/>  task_id: task_id<br/>}
+    AI-->>Scheduler: 202 Accepted
+
+    Note over Scheduler: 定时任务完成
+
+    %% Phase 5: AI服务异步处理
+    Note over AI,ProcessedDB: Phase 5: AI异步处理（后台）
+    AI->>ProcessedRepo: update_status(id, PROCESSING)
+    ProcessedRepo->>ProcessedDB: update status
+
+    AI->>RawRepo: get_by_id(raw_result_id)
+    RawDB-->>AI: SearchResult (原始数据)
+
+    AI->>AI: 执行AI分析<br/>- 翻译<br/>- 总结<br/>- 分类<br/>- 情感分析
+
+    AI->>ProcessedRepo: save_ai_result(<br/>  translated_title,<br/>  translated_content,<br/>  summary,<br/>  key_points<br/>)
+    ProcessedRepo->>ProcessedDB: update with AI results<br/>status = COMPLETED
+    ProcessedDB-->>AI: success
+
+    %% Phase 6: 前端查询
+    Note over Frontend,ProcessedDB: Phase 6: 前端查询处理结果
+    Frontend->>ProcessedRepo: get_by_task(task_id, status=COMPLETED)
+    ProcessedRepo->>ProcessedDB: find({<br/>  task_id: task_id,<br/>  status: COMPLETED<br/>})
+    ProcessedDB-->>Frontend: List[ProcessedResult]<br/>(包含AI增强数据)
+
+    Note over Frontend: 展示AI处理后的结果
+
+    %% Phase 7: 用户操作（可选）
+    Note over Frontend,ProcessedDB: Phase 7: 用户操作（留存/删除）
+    Frontend->>ProcessedRepo: update_user_action(<br/>  result_id,<br/>  status=ARCHIVED<br/>)
+    ProcessedRepo->>ProcessedDB: update status = ARCHIVED
+    ProcessedDB-->>Frontend: success
+```
