@@ -191,11 +191,17 @@ class InstantSearchResultRepository:
         db = await get_mongodb_database()
         return db[self.collection_name]
 
-    def _result_to_dict(self, result: InstantSearchResult) -> Dict[str, Any]:
-        """将结果实体转换为字典"""
+    def _result_to_dict(self, result: InstantSearchResult, search_type: str = "instant") -> Dict[str, Any]:
+        """将结果实体转换为字典
+
+        Args:
+            result: 结果实体
+            search_type: 搜索类型 ("instant" | "smart") v2.1.0新增
+        """
         return {
             "_id": result.id,
             "task_id": result.task_id,
+            "search_type": search_type,  # v2.1.0 统一架构
             "title": result.title,
             "url": result.url,
             "content": result.content,
@@ -339,6 +345,52 @@ class InstantSearchResultRepository:
 
         except Exception as e:
             logger.error(f"获取即时搜索结果失败: {e}")
+            raise
+
+    async def get_results_by_task_and_type(
+        self,
+        task_id: str,
+        search_type: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 50
+    ) -> Tuple[List[InstantSearchResult], int]:
+        """根据任务ID和搜索类型获取结果（v2.1.0 统一架构查询）
+
+        Args:
+            task_id: 任务ID
+            search_type: 搜索类型筛选 ("instant" | "smart")，None表示不筛选
+            skip: 跳过的记录数
+            limit: 返回的最大记录数
+
+        Returns:
+            (结果列表, 总数)
+        """
+        try:
+            collection = await self._get_collection()
+
+            # 构建查询条件
+            query = {"task_id": task_id}
+            if search_type:
+                query["search_type"] = search_type
+
+            # 总数
+            total = await collection.count_documents(query)
+
+            # 查询
+            cursor = collection.find(query).sort([
+                ("relevance_score", -1),
+                ("created_at", -1)
+            ]).skip(skip).limit(limit)
+
+            results = []
+            async for data in cursor:
+                results.append(self._dict_to_result(data))
+
+            logger.debug(f"查询任务结果成功: task_id={task_id}, search_type={search_type}, total={total}")
+            return results, total
+
+        except Exception as e:
+            logger.error(f"查询任务结果失败: {e}")
             raise
 
 
