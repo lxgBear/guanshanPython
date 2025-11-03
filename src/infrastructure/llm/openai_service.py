@@ -106,6 +106,12 @@ class LLMService:
         Raises:
             LLMException: LLM调用失败
         """
+        # v1.5.2: 测试模式支持 - 返回模拟分解结果
+        test_mode = os.getenv("TEST_MODE", "false").lower() == "true"
+        if test_mode:
+            logger.info(f"⚙️ 测试模式: 模拟LLM分解查询: {query}")
+            return self._get_mock_decomposition(query)
+
         try:
             logger.info(f"开始分解查询: {query}")
 
@@ -297,3 +303,68 @@ class LLMService:
             error_msg = f"解析分解响应失败: {str(e)}"
             logger.error(error_msg)
             raise LLMException(error_msg, model=self.model)
+
+    def _get_mock_decomposition(self, query: str) -> QueryDecomposition:
+        """
+        测试模式：返回模拟的查询分解结果
+
+        v1.5.2 新增功能，用于开发测试环境
+
+        Args:
+            query: 原始查询
+
+        Returns:
+            QueryDecomposition: 模拟分解结果
+        """
+        # 根据查询内容生成针对性的子查询
+        decomposed_queries = []
+
+        # 默认分解策略：将查询分解为3个维度
+        if "特朗普" in query or "Trump" in query.lower():
+            decomposed_queries = [
+                DecomposedQuery(
+                    query="特朗普2024年总统选举最新情况",
+                    reasoning="了解特朗普的政治动态和选举进展",
+                    focus="政治选举"
+                ),
+                DecomposedQuery(
+                    query="特朗普最新法律诉讼案件进展",
+                    reasoning="了解特朗普面临的法律挑战和司法程序",
+                    focus="司法法律"
+                ),
+                DecomposedQuery(
+                    query="特朗普近期公开言论和政策主张",
+                    reasoning="了解特朗普的政策立场和公开表态",
+                    focus="政策主张"
+                )
+            ]
+        else:
+            # 通用分解策略：事实、分析、影响
+            decomposed_queries = [
+                DecomposedQuery(
+                    query=f"{query} 最新消息",
+                    reasoning="获取最新的事实性报道和新闻",
+                    focus="最新动态"
+                ),
+                DecomposedQuery(
+                    query=f"{query} 深度分析",
+                    reasoning="获取专业分析和深度解读",
+                    focus="专业分析"
+                ),
+                DecomposedQuery(
+                    query=f"{query} 影响和意义",
+                    reasoning="了解事件的影响范围和重要性",
+                    focus="影响评估"
+                )
+            ]
+
+        logger.info(
+            f"🧪 测试模式生成分解结果: {len(decomposed_queries)} 个子查询"
+        )
+
+        return QueryDecomposition(
+            decomposed_queries=decomposed_queries,
+            overall_strategy=f"测试模式：针对'{query}'的模拟分解策略，生成多维度子查询以覆盖不同信息需求",
+            tokens_used=0,
+            model="gpt-4-mock-test-mode"
+        )

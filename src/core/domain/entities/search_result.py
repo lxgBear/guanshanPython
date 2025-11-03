@@ -1,26 +1,37 @@
-"""搜索结果实体模型"""
+"""搜索结果实体模型
+
+v1.5.0 ID系统统一：
+- ✅ 统一使用雪花算法ID（替代UUID）
+- ✅ 与InstantSearchResult、DataSource保持一致
+- ✅ 支持分布式环境和高并发场景
+"""
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Optional, Dict, Any, List
-from uuid import UUID, uuid4
+
+# 导入雪花算法ID生成器
+from src.infrastructure.id_generator import generate_string_id
 
 
 class ResultStatus(Enum):
-    """结果状态枚举（数据源管理版）"""
-    PENDING = "pending"         # 初始状态：刚采集
-    ARCHIVED = "archived"       # 已留存：用户标记重要
-    PROCESSING = "processing"   # 处理中：数据源正在整编
-    COMPLETED = "completed"     # 已完成：数据源已确定
-    DELETED = "deleted"         # 已删除：软删除
+    """结果状态枚举（v1.5.2 简化版）"""
+    PENDING = "pending"         # 待处理：初始状态
+    ARCHIVED = "archived"       # 留存：用户标记重要
+    DELETED = "deleted"         # 删除：软删除
 
 
 @dataclass
 class SearchResult:
-    """搜索结果实体"""
-    id: UUID = field(default_factory=uuid4)
-    task_id: UUID = field(default_factory=uuid4)  # 关联的任务ID
+    """搜索结果实体
+
+    v1.5.0 改进：统一使用雪花算法ID
+    """
+    # 主键（雪花算法ID，全局唯一）
+    id: str = field(default_factory=generate_string_id)
+    # 关联的任务ID（雪花算法ID）
+    task_id: str = ""
     
     # 搜索结果核心数据
     title: str = ""
@@ -68,16 +79,6 @@ class SearchResult:
         self.status = ResultStatus.ARCHIVED
         self.processed_at = datetime.utcnow()
 
-    def mark_as_processing(self) -> None:
-        """标记为处理中（数据源整编中）"""
-        self.status = ResultStatus.PROCESSING
-        self.processed_at = datetime.utcnow()
-
-    def mark_as_completed(self) -> None:
-        """标记为已完成（数据源已确定）"""
-        self.status = ResultStatus.COMPLETED
-        self.processed_at = datetime.utcnow()
-
     def mark_as_deleted(self) -> None:
         """标记为已删除（软删除）"""
         self.status = ResultStatus.DELETED
@@ -86,7 +87,7 @@ class SearchResult:
     def to_summary(self) -> Dict[str, Any]:
         """返回摘要信息"""
         return {
-            "id": str(self.id),
+            "id": self.id,  # 直接返回字符串ID
             "title": self.title,
             "url": self.url,
             "snippet": self.snippet or self.content[:200],
@@ -97,11 +98,16 @@ class SearchResult:
         }
 
 
-@dataclass 
+@dataclass
 class SearchResultBatch:
-    """搜索结果批次"""
-    id: UUID = field(default_factory=uuid4)
-    task_id: UUID = field(default_factory=uuid4)
+    """搜索结果批次
+
+    v1.5.0 改进：统一使用雪花算法ID
+    """
+    # 批次ID（雪花算法ID）
+    id: str = field(default_factory=generate_string_id)
+    # 关联的任务ID（雪花算法ID）
+    task_id: str = ""
     execution_id: str = ""  # 执行ID（用于跟踪）
     
     # 结果数据

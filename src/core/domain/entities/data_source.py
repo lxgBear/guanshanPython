@@ -122,6 +122,12 @@ class DataSource:
     tags: List[str] = field(default_factory=list)  # 标签
     metadata: Dict[str, Any] = field(default_factory=dict)  # 扩展元数据
 
+    # 分类字段（三级分类体系）
+    primary_category: Optional[str] = None      # 第一级分类：大类
+    secondary_category: Optional[str] = None    # 第二级分类：子目录
+    tertiary_category: Optional[str] = None     # 第三级分类：具体分类
+    custom_tags: List[str] = field(default_factory=list)  # 自定义标签数组
+
     def __post_init__(self):
         """初始化后自动更新统计信息"""
         self._update_statistics()
@@ -153,11 +159,11 @@ class DataSource:
         return self.status == DataSourceStatus.DRAFT
 
     def can_confirm(self) -> bool:
-        """是否可以确定"""
-        return (
-            self.status == DataSourceStatus.DRAFT and
-            self.total_raw_data_count > 0  # 必须有数据才能确定
-        )
+        """是否可以确定
+
+        允许确定空数据源（不包含任何原始数据）
+        """
+        return self.status == DataSourceStatus.DRAFT
 
     def can_revert_to_draft(self) -> bool:
         """是否可以恢复为草稿"""
@@ -181,8 +187,7 @@ class DataSource:
         """
         if not self.can_confirm():
             raise ValueError(
-                f"Cannot confirm data source in status '{self.status.value}' "
-                f"or with no raw data (count: {self.total_raw_data_count})"
+                f"Cannot confirm data source in status '{self.status.value}'"
             )
 
         self.status = DataSourceStatus.CONFIRMED
@@ -246,8 +251,25 @@ class DataSource:
             )
 
         # 检查是否已存在
-        if any(ref.data_id == data_id for ref in self.raw_data_refs):
-            raise ValueError(f"Raw data '{data_id}' already exists in data source")
+        existing_ref = next((ref for ref in self.raw_data_refs if ref.data_id == data_id), None)
+        if existing_ref:
+            # 格式化添加时间
+            added_time = "未知时间"
+            if existing_ref.added_at:
+                if isinstance(existing_ref.added_at, datetime):
+                    added_time = existing_ref.added_at.strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    added_time = str(existing_ref.added_at)
+
+            # 构建详细的错误消息
+            error_msg = (
+                f"数据已存在于当前数据源中。\n"
+                f"数据源: {self.title} (ID: {self.id})\n"
+                f"重复数据: {existing_ref.title or title}\n"
+                f"URL: {existing_ref.url or url}\n"
+                f"已于 {added_time} 由 {existing_ref.added_by or '未知用户'} 添加"
+            )
+            raise ValueError(error_msg)
 
         # 添加引用
         ref = RawDataReference(
@@ -359,7 +381,12 @@ class DataSource:
             "updated_by": self.updated_by,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "tags": self.tags,
-            "metadata": self.metadata
+            "metadata": self.metadata,
+            # 分类字段
+            "primary_category": self.primary_category,
+            "secondary_category": self.secondary_category,
+            "tertiary_category": self.tertiary_category,
+            "custom_tags": self.custom_tags
         }
 
     def to_summary(self) -> Dict[str, Any]:
@@ -376,5 +403,10 @@ class DataSource:
             "created_by": self.created_by,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
-            "tags": self.tags
+            "tags": self.tags,
+            # 分类字段
+            "primary_category": self.primary_category,
+            "secondary_category": self.secondary_category,
+            "tertiary_category": self.tertiary_category,
+            "custom_tags": self.custom_tags
         }

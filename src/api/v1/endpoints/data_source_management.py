@@ -33,6 +33,11 @@ class CreateDataSourceRequest(BaseModel):
     created_by: str = Field(..., description="创建者", min_length=1)
     tags: Optional[List[str]] = Field(default=None, description="标签列表")
     metadata: Optional[dict] = Field(default=None, description="扩展元数据")
+    # 分类字段
+    primary_category: Optional[str] = Field(default=None, description="第一级分类：大类")
+    secondary_category: Optional[str] = Field(default=None, description="第二级分类：子目录")
+    tertiary_category: Optional[str] = Field(default=None, description="第三级分类：具体分类")
+    custom_tags: Optional[List[str]] = Field(default=None, description="自定义标签数组")
 
 
 class UpdateDataSourceInfoRequest(BaseModel):
@@ -40,6 +45,11 @@ class UpdateDataSourceInfoRequest(BaseModel):
     title: Optional[str] = Field(None, description="新标题", min_length=1, max_length=200)
     description: Optional[str] = Field(None, description="新描述", max_length=1000)
     tags: Optional[List[str]] = Field(None, description="新标签列表")
+    # 分类字段
+    primary_category: Optional[str] = Field(None, description="第一级分类：大类")
+    secondary_category: Optional[str] = Field(None, description="第二级分类：子目录")
+    tertiary_category: Optional[str] = Field(None, description="第三级分类：具体分类")
+    custom_tags: Optional[List[str]] = Field(None, description="自定义标签数组")
     updated_by: str = Field(..., description="更新者", min_length=1)
 
 
@@ -53,6 +63,7 @@ class AddRawDataRequest(BaseModel):
     """添加原始数据请求"""
     data_id: str = Field(..., description="原始数据ID")
     data_type: str = Field(..., description="数据类型（scheduled或instant）", pattern="^(scheduled|instant)$")
+    source_task_id: Optional[str] = Field(None, description="来源任务ID（可选，用于追溯数据来源）")
     added_by: str = Field(..., description="添加者", min_length=1)
 
 
@@ -60,6 +71,7 @@ class RemoveRawDataRequest(BaseModel):
     """移除原始数据请求"""
     data_id: str = Field(..., description="原始数据ID")
     data_type: str = Field(..., description="数据类型（scheduled或instant）", pattern="^(scheduled|instant)$")
+    source_task_id: Optional[str] = Field(None, description="来源任务ID（可选，用于追溯数据来源）")
     removed_by: str = Field(..., description="移除者", min_length=1)
 
 
@@ -122,7 +134,11 @@ async def create_data_source(
             description=request.description,
             created_by=request.created_by,
             tags=request.tags,
-            metadata=request.metadata
+            metadata=request.metadata,
+            primary_category=request.primary_category,
+            secondary_category=request.secondary_category,
+            tertiary_category=request.tertiary_category,
+            custom_tags=request.custom_tags
         )
 
         return {
@@ -169,6 +185,10 @@ async def list_data_sources(
     source_type: Optional[str] = Query(None, description="数据源类型过滤（scheduled/instant/mixed）"),
     start_date: Optional[datetime] = Query(None, description="开始日期过滤"),
     end_date: Optional[datetime] = Query(None, description="结束日期过滤"),
+    # 分类过滤参数
+    primary_category: Optional[str] = Query(None, description="第一级分类过滤"),
+    secondary_category: Optional[str] = Query(None, description="第二级分类过滤"),
+    tertiary_category: Optional[str] = Query(None, description="第三级分类过滤"),
     limit: int = Query(50, ge=1, le=100, description="每页数量"),
     skip: int = Query(0, ge=0, description="跳过数量"),
     service: DataCurationService = Depends(get_data_curation_service)
@@ -193,6 +213,9 @@ async def list_data_sources(
             source_type=source_type,
             start_date=start_date,
             end_date=end_date,
+            primary_category=primary_category,
+            secondary_category=secondary_category,
+            tertiary_category=tertiary_category,
             limit=limit,
             skip=skip
         )
@@ -235,6 +258,10 @@ async def update_data_source_info(
             title=request.title,
             description=request.description,
             tags=request.tags,
+            primary_category=request.primary_category,
+            secondary_category=request.secondary_category,
+            tertiary_category=request.tertiary_category,
+            custom_tags=request.custom_tags,
             updated_by=request.updated_by
         )
 
@@ -377,6 +404,7 @@ async def add_raw_data_to_source(
             raise HTTPException(status_code=400, detail="原始数据添加失败")
 
     except ValueError as e:
+        logger.warning(f"添加原始数据业务逻辑错误: {str(e)} (data_source_id={data_source_id}, data_id={request.data_id}, data_type={request.data_type})")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"添加原始数据失败: {str(e)}")
@@ -439,12 +467,12 @@ async def confirm_data_source(
     - 数据源：DRAFT → CONFIRMED
 
     **状态同步（MongoDB事务）：**
-    - 所有原始数据：processing → completed
-    - 批量更新所有关联数据
+    - 所有关联的原始数据：processing → completed
+    - 批量更新所有关联数据（如果有）
 
     **前置条件：**
     - 数据源必须为草稿状态（DRAFT）
-    - 数据源必须包含至少1条原始数据
+    - 允许确定空数据源（不包含任何原始数据）
 
     **操作说明：**
     - 确定后数据源变为只读
@@ -607,3 +635,127 @@ async def batch_delete_raw_data(
     except Exception as e:
         logger.error(f"批量删除失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"批量删除失败: {str(e)}")
+
+
+# ==========================================
+# 存档数据查询端点
+# ==========================================
+
+@router.get("/{data_source_id}/archived-data", summary="获取数据源的存档数据")
+async def get_archived_data(
+    data_source_id: str,
+    page: int = Query(1, ge=1, description="页码（从1开始）"),
+    page_size: int = Query(50, ge=1, le=100, description="每页数量"),
+    service: DataCurationService = Depends(get_data_curation_service)
+):
+    """获取数据源的存档数据（分页）
+
+    **功能说明：**
+    - 查询数据源确认时自动存档的原始数据
+    - 存档数据保存完整content字段（非200字符截断）
+    - 支持分页查询
+    - 按创建时间倒序排列（最新的在前）
+
+    **数据来源：**
+    - scheduled类型：定时搜索结果
+    - instant类型：即时搜索结果
+
+    **分页参数：**
+    - page: 页码（从1开始，默认1）
+    - page_size: 每页数量（1-100，默认50）
+
+    **返回数据包含：**
+    - id: 存档数据ID（雪花算法）
+    - data_source_id: 所属数据源ID
+    - original_data_id: 原始数据ID
+    - data_type: 数据类型（scheduled/instant）
+    - title, url, content: 完整内容快照
+    - archived_at: 存档时间
+    - archived_by: 存档操作者
+    - archived_reason: 存档原因（confirm/manual）
+    - type_specific_fields: 类型特定字段
+    """
+    try:
+        # 验证数据源是否存在
+        data_source = await service.get_data_source(data_source_id)
+        if not data_source:
+            raise HTTPException(status_code=404, detail="数据源不存在")
+
+        # 查询存档数据
+        archived_list, total = await service.get_archived_data(
+            data_source_id=data_source_id,
+            page=page,
+            page_size=page_size
+        )
+
+        # 计算分页信息
+        total_pages = (total + page_size - 1) // page_size
+
+        return {
+            "success": True,
+            "data": {
+                "items": [item.to_dict() for item in archived_list],
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total": total,
+                    "total_pages": total_pages,
+                    "has_next": page < total_pages,
+                    "has_prev": page > 1
+                }
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取存档数据失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取存档数据失败: {str(e)}")
+
+
+@router.get("/{data_source_id}/archived-data/stats", summary="获取存档数据统计信息")
+async def get_archived_data_statistics(
+    data_source_id: str,
+    service: DataCurationService = Depends(get_data_curation_service)
+):
+    """获取数据源的存档统计信息
+
+    **功能说明：**
+    - 统计数据源的存档数据量
+    - 按数据类型分组统计
+    - 计算总内容大小
+
+    **返回数据包含：**
+    - data_source_id: 数据源ID
+    - total_count: 总存档数量
+    - scheduled_count: scheduled类型数量
+    - instant_count: instant类型数量
+    - total_content_size: 总内容大小（字符数）
+    - by_type: 按类型详细统计
+      - count: 该类型数量
+      - content_size: 该类型内容大小
+
+    **使用场景：**
+    - 了解数据源存档情况
+    - 监控存储空间使用
+    - 统计数据来源分布
+    """
+    try:
+        # 验证数据源是否存在
+        data_source = await service.get_data_source(data_source_id)
+        if not data_source:
+            raise HTTPException(status_code=404, detail="数据源不存在")
+
+        # 获取统计信息
+        stats = await service.get_archived_data_statistics(data_source_id)
+
+        return {
+            "success": True,
+            "data": stats
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取存档统计失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取存档统计失败: {str(e)}")

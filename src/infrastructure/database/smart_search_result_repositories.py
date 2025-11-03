@@ -1,8 +1,13 @@
-"""智能搜索结果仓储"""
+"""智能搜索结果仓储
+
+v1.5.0 ID系统统一：
+- 移除UUID依赖
+- 所有ID使用雪花算法字符串格式
+- 与系统ID标准保持一致
+"""
 
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
-from uuid import UUID
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -115,15 +120,21 @@ class SmartSearchResultRepository:
     def _dict_to_result(self, doc: Dict[str, Any]) -> SearchResult:
         """将MongoDB文档转换为SearchResult实体
 
+        v1.5.0: 修复ID类型 - 直接使用雪花ID字符串
+
         Args:
             doc: MongoDB文档
 
         Returns:
             搜索结果实体
         """
+        # v1.5.0: 优先使用id字段（雪花ID），fallback到_id（向后兼容）
+        result_id = str(doc.get("id") or doc.get("_id", ""))
+        task_id = str(doc.get("task_id", ""))
+
         return SearchResult(
-            id=UUID(doc["_id"]),
-            task_id=UUID(doc["task_id"]),
+            id=result_id,      # v1.5.0: 直接使用雪花ID字符串
+            task_id=task_id,   # v1.5.0: 直接使用雪花ID字符串
 
             # 搜索结果核心数据
             title=doc.get("title", ""),

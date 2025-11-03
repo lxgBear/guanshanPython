@@ -1,10 +1,15 @@
-"""定时搜索任务实体模型"""
+"""定时搜索任务实体模型
+
+v1.5.0 ID系统统一：
+- ✅ 完全统一使用雪花算法ID（移除UUID fallback）
+- ✅ 与其他实体保持一致
+- ✅ 简化ID处理逻辑
+"""
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, Any, List, Union
-from uuid import UUID, uuid4
+from typing import Optional, Dict, Any, List
 
 # 导入安全ID生成器
 from src.infrastructure.id_generator import generate_string_id
@@ -62,13 +67,14 @@ def _generate_secure_id() -> str:
 class SearchTask:
     """
     搜索任务实体
-    
-    安全性改进：
-    - 使用雪花算法生成不可预测的ID
-    - 替代简单的"test-task-001"等易被枚举的ID
-    - 支持高并发和分布式环境
+
+    v1.5.0 改进：
+    - ✅ 统一使用雪花算法ID（移除UUID）
+    - ✅ 支持高并发和分布式环境
+    - ✅ 全局唯一且不可预测
     """
-    id: Union[str, UUID] = field(default_factory=_generate_secure_id)
+    # 主键（雪花算法ID，全局唯一）
+    id: str = field(default_factory=_generate_secure_id)
     name: str = ""
     description: Optional[str] = None
     query: str = ""  # 搜索关键词
@@ -151,16 +157,13 @@ class SearchTask:
             self.target_website = self.extract_target_website()
     
     def get_id_string(self) -> str:
-        """获取字符串格式的ID（统一接口）"""
-        if isinstance(self.id, UUID):
-            return str(self.id)
+        """获取字符串格式的ID（统一接口，v1.5.0后始终返回雪花ID）"""
         return str(self.id)
-    
+
     def is_secure_id(self) -> bool:
-        """检查是否使用安全的雪花算法ID"""
-        id_str = self.get_id_string()
+        """检查是否使用安全的雪花算法ID（v1.5.0后始终返回True）"""
         # 雪花算法ID特征：纯数字且长度在15-19位之间
-        return id_str.isdigit() and 15 <= len(id_str) <= 19
+        return self.id.isdigit() and 15 <= len(self.id) <= 19
     
     @classmethod
     def create_with_secure_id(cls, **kwargs) -> 'SearchTask':
