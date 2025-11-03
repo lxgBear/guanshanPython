@@ -74,31 +74,66 @@ async def get_processed_result_repository():
 # ==========================================
 
 class SearchResultResponse(BaseModel):
-    """搜索结果响应（v2.0.0: 从 processed_results 读取AI增强数据）"""
+    """搜索结果响应（v2.0.1: 完整的原始+AI增强数据）"""
+    # ==================== 主键和关联 ====================
     id: str = Field(..., description="处理结果ID")
     raw_result_id: str = Field(..., description="原始结果ID")
     task_id: str = Field(..., description="任务ID")
 
-    # AI增强数据（优先展示）
-    title: str = Field(..., description="标题（AI翻译后）")
-    content: str = Field(..., description="内容（AI翻译后或摘要）")
+    # ==================== 原始字段（v2.0.1 新增）====================
+    title: str = Field(..., description="原始标题")
+    url: str = Field(..., description="原始URL")
+    source_url: Optional[str] = Field(None, description="来源URL")
+    content: str = Field(..., description="原始内容")
+    snippet: Optional[str] = Field(None, description="内容摘要")
+    markdown_content: Optional[str] = Field(None, description="Markdown格式内容")
+    html_content: Optional[str] = Field(None, description="HTML格式内容")
+    author: Optional[str] = Field(None, description="作者")
+    published_date: Optional[datetime] = Field(None, description="发布日期")
+    language: Optional[str] = Field(None, description="语言")
+    source: str = Field("web", description="来源类型")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="扩展元数据")
+    quality_score: float = Field(0.0, description="质量分数")
+    relevance_score: float = Field(0.0, description="相关性分数")
+    search_position: int = Field(0, description="搜索位置")
+
+    # ==================== AI增强数据 ====================
+    # AI翻译和生成
+    content_zh: Optional[str] = Field(None, description="AI翻译的中文内容")
+    title_generated: Optional[str] = Field(None, description="AI生成的标题")
+    translated_title: Optional[str] = Field(None, description="翻译后的标题")
+    translated_content: Optional[str] = Field(None, description="翻译后的内容")
     summary: Optional[str] = Field(None, description="AI生成的摘要")
     key_points: List[str] = Field(default_factory=list, description="AI提取的关键点")
+
+    # AI分类和分析
+    cls_results: Optional[Dict[str, Any]] = Field(None, description="分类结果（大类、子目录）")
     sentiment: Optional[str] = Field(None, description="情感分析")
     categories: List[str] = Field(default_factory=list, description="AI分类标签")
 
-    # 用户操作
+    # AI处理的HTML
+    html_ctx_llm: Optional[str] = Field(None, description="LLM处理后的HTML")
+    html_ctx_regex: Optional[str] = Field(None, description="Regex处理后的HTML")
+
+    # AI提取的元数据
+    article_published_time: Optional[str] = Field(None, description="文章发布时间")
+    article_tag: Optional[str] = Field(None, description="文章标签")
+
+    # ==================== AI处理元数据 ====================
+    ai_model: Optional[str] = Field(None, description="AI模型")
+    ai_processing_time_ms: int = Field(0, description="AI处理耗时（毫秒）")
+    ai_confidence_score: Optional[float] = Field(None, description="AI置信度")
+    processing_status: str = Field("pending", description="处理状态（success/failed/pending）")
+
+    # ==================== 用户操作 ====================
     status: str = Field(..., description="处理状态")
     user_rating: Optional[int] = Field(None, description="用户评分(1-5)")
     user_notes: Optional[str] = Field(None, description="用户备注")
 
-    # AI元数据
-    ai_model: Optional[str] = Field(None, description="AI模型")
-    ai_confidence_score: Optional[float] = Field(None, description="AI置信度")
-
-    # 时间戳
+    # ==================== 时间戳 ====================
     created_at: datetime = Field(..., description="创建时间")
     processed_at: Optional[datetime] = Field(None, description="AI处理完成时间")
+    updated_at: datetime = Field(..., description="更新时间")
 
 
 class SearchResultListResponse(BaseModel):
@@ -141,32 +176,55 @@ class SearchResultSummary(BaseModel):
 # ==========================================
 
 def processed_result_to_response(result: ProcessedResult) -> SearchResultResponse:
-    """将AI处理结果实体转换为响应模型（v2.0.0 新版）"""
-    # 获取展示用的标题和内容（优先使用AI翻译版本，回退到空字符串）
-    title = result.translated_title or ""
-    content = result.summary or result.translated_content or ""
-
+    """将AI处理结果实体转换为响应模型（v2.0.1: 完整字段映射）"""
     return SearchResultResponse(
+        # 主键和关联
         id=str(result.id),
         raw_result_id=str(result.raw_result_id),
         task_id=str(result.task_id),
+        # 原始字段（v2.0.1）
+        title=result.title,
+        url=result.url,
+        source_url=result.source_url,
+        content=result.content,
+        snippet=result.snippet,
+        markdown_content=result.markdown_content,
+        html_content=result.html_content,
+        author=result.author,
+        published_date=result.published_date,
+        language=result.language,
+        source=result.source,
+        metadata=result.metadata,
+        quality_score=result.quality_score,
+        relevance_score=result.relevance_score,
+        search_position=result.search_position,
         # AI增强数据
-        title=title,
-        content=content,
+        content_zh=result.content_zh,
+        title_generated=result.title_generated,
+        translated_title=result.translated_title,
+        translated_content=result.translated_content,
         summary=result.summary,
         key_points=result.key_points,
+        cls_results=result.cls_results,
         sentiment=result.sentiment,
         categories=result.categories,
+        html_ctx_llm=result.html_ctx_llm,
+        html_ctx_regex=result.html_ctx_regex,
+        article_published_time=result.article_published_time,
+        article_tag=result.article_tag,
+        # AI处理元数据
+        ai_model=result.ai_model,
+        ai_processing_time_ms=result.ai_processing_time_ms,
+        ai_confidence_score=result.ai_confidence_score,
+        processing_status=result.processing_status,
         # 用户操作
         status=result.status.value,
         user_rating=result.user_rating,
         user_notes=result.user_notes,
-        # AI元数据
-        ai_model=result.ai_model,
-        ai_confidence_score=result.ai_confidence_score,
         # 时间戳
         created_at=result.created_at,
-        processed_at=result.processed_at
+        processed_at=result.processed_at,
+        updated_at=result.updated_at
     )
 
 
@@ -348,3 +406,172 @@ async def get_search_result_detail(task_id: str, result_id: str):
         raise HTTPException(404, f"搜索结果不属于任务: {task_id}")
 
     return processed_result_to_response(result)
+
+
+# ==========================================
+# v2.0.1 用户操作 API
+# ==========================================
+
+class UserActionRequest(BaseModel):
+    """用户操作请求"""
+    pass
+
+
+class ArchiveRequest(UserActionRequest):
+    """留存请求"""
+    notes: Optional[str] = Field(None, description="留存备注", max_length=500)
+
+
+class RatingRequest(UserActionRequest):
+    """评分请求"""
+    rating: int = Field(..., description="用户评分(1-5)", ge=1, le=5)
+    notes: Optional[str] = Field(None, description="评分备注", max_length=500)
+
+
+class UserActionResponse(BaseModel):
+    """用户操作响应"""
+    success: bool = Field(..., description="操作是否成功")
+    message: str = Field(..., description="操作结果消息")
+    result: SearchResultResponse = Field(..., description="更新后的结果")
+
+
+@router.post(
+    "/{task_id}/results/{result_id}/archive",
+    response_model=UserActionResponse,
+    summary="留存搜索结果",
+    description="将搜索结果标记为留存状态，用于保存重要的搜索结果。"
+)
+async def archive_search_result(
+    task_id: str,
+    result_id: str,
+    request: ArchiveRequest
+):
+    """留存搜索结果 - v2.0.1 用户操作 API"""
+
+    # 验证任务存在
+    await validate_task_exists(task_id)
+
+    # 获取AI处理结果仓储
+    processed_repo = await get_processed_result_repository()
+
+    # 验证结果存在
+    result = await processed_repo.get_by_id(result_id)
+    if not result:
+        raise HTTPException(404, f"搜索结果不存在: {result_id}")
+
+    # 验证结果属于指定任务
+    if str(result.task_id) != task_id:
+        raise HTTPException(404, f"搜索结果不属于任务: {task_id}")
+
+    # 更新为留存状态
+    success = await processed_repo.update_user_action(
+        result_id=result_id,
+        status=ProcessedStatus.ARCHIVED,
+        user_notes=request.notes
+    )
+
+    if not success:
+        raise HTTPException(500, "留存操作失败")
+
+    # 获取更新后的结果
+    updated_result = await processed_repo.get_by_id(result_id)
+
+    return UserActionResponse(
+        success=True,
+        message="搜索结果已成功留存",
+        result=processed_result_to_response(updated_result)
+    )
+
+
+@router.post(
+    "/{task_id}/results/{result_id}/delete",
+    response_model=UserActionResponse,
+    summary="删除搜索结果",
+    description="将搜索结果标记为删除状态（软删除），不会真正删除数据。"
+)
+async def delete_search_result(
+    task_id: str,
+    result_id: str
+):
+    """删除搜索结果（软删除）- v2.0.1 用户操作 API"""
+
+    # 验证任务存在
+    await validate_task_exists(task_id)
+
+    # 获取AI处理结果仓储
+    processed_repo = await get_processed_result_repository()
+
+    # 验证结果存在
+    result = await processed_repo.get_by_id(result_id)
+    if not result:
+        raise HTTPException(404, f"搜索结果不存在: {result_id}")
+
+    # 验证结果属于指定任务
+    if str(result.task_id) != task_id:
+        raise HTTPException(404, f"搜索结果不属于任务: {task_id}")
+
+    # 更新为删除状态
+    success = await processed_repo.update_user_action(
+        result_id=result_id,
+        status=ProcessedStatus.DELETED
+    )
+
+    if not success:
+        raise HTTPException(500, "删除操作失败")
+
+    # 获取更新后的结果
+    updated_result = await processed_repo.get_by_id(result_id)
+
+    return UserActionResponse(
+        success=True,
+        message="搜索结果已成功删除",
+        result=processed_result_to_response(updated_result)
+    )
+
+
+@router.post(
+    "/{task_id}/results/{result_id}/rating",
+    response_model=UserActionResponse,
+    summary="评分搜索结果",
+    description="为搜索结果添加用户评分（1-5星）和可选的评分备注。"
+)
+async def rate_search_result(
+    task_id: str,
+    result_id: str,
+    request: RatingRequest
+):
+    """评分搜索结果 - v2.0.1 用户操作 API"""
+
+    # 验证任务存在
+    await validate_task_exists(task_id)
+
+    # 获取AI处理结果仓储
+    processed_repo = await get_processed_result_repository()
+
+    # 验证结果存在
+    result = await processed_repo.get_by_id(result_id)
+    if not result:
+        raise HTTPException(404, f"搜索结果不存在: {result_id}")
+
+    # 验证结果属于指定任务
+    if str(result.task_id) != task_id:
+        raise HTTPException(404, f"搜索结果不属于任务: {task_id}")
+
+    # 更新评分和备注
+    success = await processed_repo.update_user_action(
+        result_id=result_id,
+        user_rating=request.rating,
+        user_notes=request.notes
+    )
+
+    if not success:
+        raise HTTPException(500, "评分操作失败")
+
+    # 获取更新后的结果
+    updated_result = await processed_repo.get_by_id(result_id)
+
+    return UserActionResponse(
+        success=True,
+        message=f"搜索结果已评分: {request.rating}星",
+        result=processed_result_to_response(updated_result)
+    )
