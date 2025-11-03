@@ -276,14 +276,19 @@ class InstantSearchResultRepository:
             logger.error(f"查找content_hash失败: {e}")
             raise
 
-    async def create(self, result: InstantSearchResult) -> InstantSearchResult:
-        """创建结果"""
+    async def create(self, result: InstantSearchResult, search_type: str = "instant") -> InstantSearchResult:
+        """创建结果
+
+        Args:
+            result: 搜索结果实体
+            search_type: 搜索类型 ("instant" | "smart") v2.1.0
+        """
         try:
             collection = await self._get_collection()
-            result_dict = self._result_to_dict(result)
+            result_dict = self._result_to_dict(result, search_type=search_type)  # v2.1.0 传递搜索类型
 
             await collection.insert_one(result_dict)
-            logger.info(f"创建即时搜索结果成功: {result.title[:50]}... (ID: {result.id})")
+            logger.info(f"创建即时搜索结果成功: {result.title[:50]}... (ID: {result.id}, type={search_type})")
 
             return result
 

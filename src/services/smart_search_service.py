@@ -341,12 +341,13 @@ class SmartSearchService:
                 try:
                     logger.info(f"[{index+1}/{len(queries)}] 开始搜索: {query}")
 
-                    # 执行即时搜索
+                    # 执行即时搜索（v2.1.0 指定搜索类型为"smart"）
                     task = await self.instant_search_service.create_and_execute_search(
                         name=f"子搜索: {query}",
                         query=query,
                         search_config=search_config,
-                        created_by="smart_search_system"
+                        created_by="smart_search_system",
+                        search_type="smart"  # v2.1.0 统一架构：智能搜索结果存入instant_search_results
                     )
 
                     logger.info(

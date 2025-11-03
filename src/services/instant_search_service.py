@@ -51,7 +51,8 @@ class InstantSearchService:
         query: Optional[str] = None,
         crawl_url: Optional[str] = None,
         search_config: Optional[Dict[str, Any]] = None,
-        created_by: str = "system"
+        created_by: str = "system",
+        search_type: str = "instant"  # v2.1.0 统一架构：支持 "instant" | "smart"
     ) -> InstantSearchTask:
         """
         创建并执行即时搜索
@@ -114,7 +115,8 @@ class InstantSearchService:
             new_count, shared_count = await self._process_and_save_results(
                 task_id=task.id,
                 search_execution_id=task.search_execution_id,
-                results_data=results_data
+                results_data=results_data,
+                search_type=search_type  # v2.1.0 传递搜索类型
             )
 
             # 5. 标记完成
@@ -231,10 +233,11 @@ class InstantSearchService:
         self,
         task_id: str,
         search_execution_id: str,
-        results_data: List[Dict[str, Any]]
+        results_data: List[Dict[str, Any]],
+        search_type: str = "instant"  # v2.1.0 搜索类型
     ) -> Tuple[int, int]:
         """
-        处理并保存结果（v1.3.0 核心逻辑）
+        处理并保存结果（v1.3.0 核心逻辑 + v2.1.0 search_type支持）
 
         流程：
         1. 遍历每个结果
@@ -244,7 +247,7 @@ class InstantSearchService:
            - 更新发现统计
            - shared_count + 1
         5. 如果不存在：
-           - 创建新结果
+           - 创建新结果（指定search_type）
            - new_count + 1
         6. 创建映射记录
 
@@ -252,6 +255,7 @@ class InstantSearchService:
             task_id: 任务ID
             search_execution_id: 搜索执行ID
             results_data: Firecrawl返回的结果数据
+            search_type: 搜索类型 ("instant" | "smart") v2.1.0
 
         Returns:
             (new_count, shared_count): 新结果数和共享结果数
@@ -287,8 +291,8 @@ class InstantSearchService:
                 # 新结果
                 logger.debug(f"新结果: {result.title[:50]}...")
 
-                # 创建新结果
-                await self.result_repo.create(result)
+                # 创建新结果（v2.1.0 传递搜索类型）
+                await self.result_repo.create(result, search_type=search_type)
 
                 result_id = result.id
                 is_first_discovery = True
