@@ -4,6 +4,10 @@ v2.0.0 职责分离架构：
 - 管理 processed_results 集合的所有数据访问操作
 - 支持状态管理和用户操作
 - 提供AI服务所需的查询和更新接口
+
+v2.0.1 字段扩展：
+- 支持原始字段（title, url, content等）
+- 支持AI服务新增字段（content_zh, cls_results等）
 """
 
 from datetime import datetime
@@ -29,23 +33,49 @@ class ProcessedResultRepository:
         return db[self.collection_name]
 
     def _result_to_dict(self, result: ProcessedResult) -> Dict[str, Any]:
-        """将ProcessedResult实体转换为字典"""
+        """将ProcessedResult实体转换为字典（v2.0.1 扩展）"""
         return {
             "_id": str(result.id),
             "raw_result_id": str(result.raw_result_id),
             "task_id": str(result.task_id),
+            # 原始字段（v2.0.1 新增）
+            "title": result.title,
+            "url": result.url,
+            "source_url": result.source_url,
+            "content": result.content,
+            "snippet": result.snippet,
+            "markdown_content": result.markdown_content,
+            "html_content": result.html_content,
+            "author": result.author,
+            "published_date": result.published_date,
+            "language": result.language,
+            "source": result.source,
+            "metadata": result.metadata,
+            "quality_score": result.quality_score,
+            "relevance_score": result.relevance_score,
+            "search_position": result.search_position,
             # AI处理数据
+            "content_zh": result.content_zh,
+            "title_generated": result.title_generated,
             "translated_title": result.translated_title,
             "translated_content": result.translated_content,
             "summary": result.summary,
             "key_points": result.key_points,
+            "cls_results": result.cls_results,
             "sentiment": result.sentiment,
             "categories": result.categories,
+            "html_ctx_llm": result.html_ctx_llm,
+            "html_ctx_regex": result.html_ctx_regex,
+            "article_published_time": result.article_published_time,
+            "article_tag": result.article_tag,
             # AI元数据
             "ai_model": result.ai_model,
             "ai_processing_time_ms": result.ai_processing_time_ms,
             "ai_confidence_score": result.ai_confidence_score,
             "ai_metadata": result.ai_metadata,
+            "processing_status": result.processing_status,
+            "http_status_code": result.http_status_code,
+            "is_test_data": result.is_test_data,
             # 用户操作
             "status": result.status.value,
             "user_rating": result.user_rating,
@@ -60,23 +90,49 @@ class ProcessedResultRepository:
         }
 
     def _dict_to_result(self, data: Dict[str, Any]) -> ProcessedResult:
-        """将字典转换为ProcessedResult实体"""
+        """将字典转换为ProcessedResult实体（v2.0.1 扩展）"""
         return ProcessedResult(
             id=str(data.get("_id", "")),
             raw_result_id=str(data.get("raw_result_id", "")),
             task_id=str(data.get("task_id", "")),
+            # 原始字段（v2.0.1 新增）
+            title=data.get("title", ""),
+            url=data.get("url", ""),
+            source_url=data.get("source_url", ""),
+            content=data.get("content", ""),
+            snippet=data.get("snippet"),
+            markdown_content=data.get("markdown_content"),
+            html_content=data.get("html_content"),
+            author=data.get("author"),
+            published_date=data.get("published_date"),
+            language=data.get("language"),
+            source=data.get("source", "web"),
+            metadata=data.get("metadata", {}),
+            quality_score=data.get("quality_score", 0.0),
+            relevance_score=data.get("relevance_score", 0.0),
+            search_position=data.get("search_position", 0),
             # AI处理数据
+            content_zh=data.get("content_zh"),
+            title_generated=data.get("title_generated"),
             translated_title=data.get("translated_title"),
             translated_content=data.get("translated_content"),
             summary=data.get("summary"),
             key_points=data.get("key_points", []),
+            cls_results=data.get("cls_results"),
             sentiment=data.get("sentiment"),
             categories=data.get("categories", []),
+            html_ctx_llm=data.get("html_ctx_llm"),
+            html_ctx_regex=data.get("html_ctx_regex"),
+            article_published_time=data.get("article_published_time"),
+            article_tag=data.get("article_tag"),
             # AI元数据
             ai_model=data.get("ai_model"),
             ai_processing_time_ms=data.get("ai_processing_time_ms", 0),
             ai_confidence_score=data.get("ai_confidence_score", 0.0),
             ai_metadata=data.get("ai_metadata", {}),
+            processing_status=data.get("processing_status", "pending"),
+            http_status_code=data.get("http_status_code"),
+            is_test_data=data.get("is_test_data", False),
             # 用户操作
             status=ProcessedStatus(data.get("status", "pending")),
             user_rating=data.get("user_rating"),
@@ -94,7 +150,10 @@ class ProcessedResultRepository:
 
     async def create_pending_result(self, raw_result_id: str, task_id: str) -> ProcessedResult:
         """
-        创建待处理的结果记录
+        创建待处理的结果记录（v2.0.1 复制原始字段）
+
+        从 search_results 获取原始数据并复制到 processed_results，
+        避免前端查询时需要 JOIN 操作。
 
         Args:
             raw_result_id: 原始结果ID（来自search_results）
@@ -106,14 +165,44 @@ class ProcessedResultRepository:
         try:
             collection = await self._get_collection()
 
-            # 创建待处理结果实体
-            result = ProcessedResult(
-                raw_result_id=raw_result_id,
-                task_id=task_id,
-                status=ProcessedStatus.PENDING
-            )
+            # 1. 从 search_results 查询原始数据
+            db = await get_mongodb_database()
+            search_results_collection = db['search_results']
+            raw_data = await search_results_collection.find_one({"_id": raw_result_id})
 
-            # 保存到数据库
+            # 2. 创建待处理结果实体，复制原始字段
+            if raw_data:
+                result = ProcessedResult(
+                    raw_result_id=raw_result_id,
+                    task_id=task_id,
+                    status=ProcessedStatus.PENDING,
+                    # 复制原始字段（v2.0.1）
+                    title=raw_data.get("title", ""),
+                    url=raw_data.get("url", ""),
+                    source_url=raw_data.get("source_url", ""),
+                    content=raw_data.get("content", ""),
+                    snippet=raw_data.get("snippet"),
+                    markdown_content=raw_data.get("markdown_content"),
+                    html_content=raw_data.get("html_content"),
+                    author=raw_data.get("author"),
+                    published_date=raw_data.get("published_date"),
+                    language=raw_data.get("language"),
+                    source=raw_data.get("source", "web"),
+                    metadata=raw_data.get("metadata", {}),
+                    quality_score=raw_data.get("quality_score", 0.0),
+                    relevance_score=raw_data.get("relevance_score", 0.0),
+                    search_position=raw_data.get("search_position", 0)
+                )
+            else:
+                # 如果找不到原始数据，创建最小记录
+                logger.warning(f"⚠️ 未找到原始结果数据: {raw_result_id}")
+                result = ProcessedResult(
+                    raw_result_id=raw_result_id,
+                    task_id=task_id,
+                    status=ProcessedStatus.PENDING
+                )
+
+            # 3. 保存到数据库
             result_dict = self._result_to_dict(result)
             await collection.insert_one(result_dict)
 
@@ -451,7 +540,10 @@ class ProcessedResultRepository:
         task_id: str
     ) -> List[ProcessedResult]:
         """
-        批量创建待处理结果
+        批量创建待处理结果（v2.0.1 复制原始字段）
+
+        从 search_results 获取原始数据并复制到 processed_results，
+        避免前端查询时需要 JOIN 操作。
 
         Args:
             raw_result_ids: 原始结果ID列表
@@ -463,21 +555,65 @@ class ProcessedResultRepository:
         try:
             collection = await self._get_collection()
 
-            # 创建所有待处理结果实体
-            results = [
-                ProcessedResult(
-                    raw_result_id=raw_id,
-                    task_id=task_id,
-                    status=ProcessedStatus.PENDING
-                )
-                for raw_id in raw_result_ids
-            ]
+            # 1. 从 search_results 查询原始数据
+            db = await get_mongodb_database()
+            search_results_collection = db['search_results']
 
-            # 批量插入
-            result_dicts = [self._result_to_dict(r) for r in results]
-            await collection.insert_many(result_dicts)
+            # 批量查询原始结果
+            search_results_cursor = search_results_collection.find({
+                "_id": {"$in": raw_result_ids}
+            })
 
-            logger.info(f"✅ 批量创建待处理结果: {len(results)}条")
+            # 构建 ID -> 原始结果的映射
+            search_results_map = {}
+            async for raw_data in search_results_cursor:
+                search_results_map[str(raw_data["_id"])] = raw_data
+
+            # 2. 创建所有待处理结果实体，复制原始字段
+            results = []
+            for raw_id in raw_result_ids:
+                raw_data = search_results_map.get(raw_id)
+
+                if raw_data:
+                    # 复制原始字段到 ProcessedResult
+                    result = ProcessedResult(
+                        raw_result_id=raw_id,
+                        task_id=task_id,
+                        status=ProcessedStatus.PENDING,
+                        # 复制原始字段（v2.0.1）
+                        title=raw_data.get("title", ""),
+                        url=raw_data.get("url", ""),
+                        source_url=raw_data.get("source_url", ""),
+                        content=raw_data.get("content", ""),
+                        snippet=raw_data.get("snippet"),
+                        markdown_content=raw_data.get("markdown_content"),
+                        html_content=raw_data.get("html_content"),
+                        author=raw_data.get("author"),
+                        published_date=raw_data.get("published_date"),
+                        language=raw_data.get("language"),
+                        source=raw_data.get("source", "web"),
+                        metadata=raw_data.get("metadata", {}),
+                        quality_score=raw_data.get("quality_score", 0.0),
+                        relevance_score=raw_data.get("relevance_score", 0.0),
+                        search_position=raw_data.get("search_position", 0)
+                    )
+                else:
+                    # 如果找不到原始数据，创建最小记录
+                    logger.warning(f"⚠️ 未找到原始结果数据: {raw_id}")
+                    result = ProcessedResult(
+                        raw_result_id=raw_id,
+                        task_id=task_id,
+                        status=ProcessedStatus.PENDING
+                    )
+
+                results.append(result)
+
+            # 3. 批量插入
+            if results:
+                result_dicts = [self._result_to_dict(r) for r in results]
+                await collection.insert_many(result_dicts)
+                logger.info(f"✅ 批量创建待处理结果: {len(results)}条（已复制原始字段）")
+
             return results
 
         except Exception as e:

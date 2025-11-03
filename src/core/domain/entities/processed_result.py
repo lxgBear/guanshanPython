@@ -5,6 +5,10 @@ v2.0.0 职责分离架构：
 - 作为前端主查询数据源
 - 支持用户操作（留存、删除、评分、备注）
 - 与 search_results（原始数据表）职责分离
+
+v2.0.1 字段扩展：
+- 添加原始字段（title, url, content等）以支持前端直接查询
+- 添加AI服务新增字段（content_zh, cls_results等）
 """
 
 from dataclasses import dataclass, field
@@ -27,47 +31,89 @@ class ProcessedStatus(Enum):
 
 @dataclass
 class ProcessedResult:
-    """AI处理结果实体（v2.0.0 新增）
+    """AI处理结果实体（v2.0.1 扩展）
 
     职责：
-    1. 存储AI分析、翻译、总结后的数据
-    2. 管理用户操作状态（留存、删除）
-    3. 记录AI处理元数据
+    1. 存储原始搜索结果数据（避免JOIN查询）
+    2. 存储AI分析、翻译、总结后的增强数据
+    3. 管理用户操作状态（留存、删除）
+    4. 记录AI处理元数据
     """
-    # 主键
+    # ==================== 主键和关联 ====================
     id: str = field(default_factory=generate_string_id)
-
-    # 关联原始结果
     raw_result_id: str = ""  # 关联 search_results 的 ID
     task_id: str = ""        # 关联的搜索任务ID
 
-    # AI处理后的数据
-    translated_title: Optional[str] = None  # 翻译后的标题
-    translated_content: Optional[str] = None  # 翻译后的内容
-    summary: Optional[str] = None  # AI生成的摘要
-    key_points: List[str] = field(default_factory=list)  # 关键要点
-    sentiment: Optional[str] = None  # 情感分析（positive/neutral/negative）
-    categories: List[str] = field(default_factory=list)  # AI分类标签
+    # ==================== 原始字段（v2.0.1 新增）====================
+    # 核心内容
+    title: str = ""                                    # 原始标题
+    url: str = ""                                      # 原始URL
+    source_url: str = ""                               # 来源URL
+    content: str = ""                                  # 原始内容
+    snippet: Optional[str] = None                      # 内容摘要
 
-    # AI处理元数据
-    ai_model: Optional[str] = None  # 使用的AI模型（如：gpt-4）
-    ai_processing_time_ms: int = 0  # AI处理耗时（毫秒）
-    ai_confidence_score: float = 0.0  # AI置信度分数（0-1）
+    # 格式化内容
+    markdown_content: Optional[str] = None             # Markdown格式
+    html_content: Optional[str] = None                 # HTML格式
+
+    # 元数据
+    author: Optional[str] = None                       # 作者
+    published_date: Optional[datetime] = None          # 发布日期
+    language: Optional[str] = None                     # 语言
+    source: str = "web"                                # 来源类型
+    metadata: Dict[str, Any] = field(default_factory=dict)  # 扩展元数据
+
+    # 质量指标
+    quality_score: float = 0.0                         # 质量分数
+    relevance_score: float = 0.0                       # 相关性分数
+    search_position: int = 0                           # 搜索位置
+
+    # ==================== AI处理字段 ====================
+    # AI翻译和生成
+    content_zh: Optional[str] = None                   # AI翻译的中文内容
+    title_generated: Optional[str] = None              # AI生成的标题
+    translated_title: Optional[str] = None             # 翻译后的标题（保留兼容）
+    translated_content: Optional[str] = None           # 翻译后的内容（保留兼容）
+    summary: Optional[str] = None                      # AI生成的摘要
+    key_points: List[str] = field(default_factory=list)  # 关键要点
+
+    # AI分类和分析
+    cls_results: Optional[Dict[str, Any]] = None       # 分类结果（大类、子目录）
+    sentiment: Optional[str] = None                    # 情感分析
+    categories: List[str] = field(default_factory=list)  # 分类标签（保留兼容）
+
+    # AI处理的HTML
+    html_ctx_llm: Optional[str] = None                 # LLM处理后的HTML
+    html_ctx_regex: Optional[str] = None               # Regex处理后的HTML
+
+    # AI提取的元数据
+    article_published_time: Optional[str] = None       # 文章发布时间
+    article_tag: Optional[str] = None                  # 文章标签
+
+    # ==================== AI处理元数据 ====================
+    ai_model: Optional[str] = None                     # 使用的AI模型
+    ai_processing_time_ms: int = 0                     # AI处理耗时（毫秒）
+    ai_confidence_score: float = 0.0                   # AI置信度分数
     ai_metadata: Dict[str, Any] = field(default_factory=dict)  # AI额外元数据
 
-    # 用户操作状态
-    status: ProcessedStatus = ProcessedStatus.PENDING
-    user_rating: Optional[int] = None  # 用户评分（1-5）
-    user_notes: Optional[str] = None  # 用户备注
+    # 处理状态
+    processing_status: str = "pending"                 # 处理状态（success/failed/pending）
+    http_status_code: Optional[int] = None             # HTTP状态码
+    is_test_data: bool = False                         # 是否测试数据
 
-    # 时间戳
-    created_at: datetime = field(default_factory=datetime.utcnow)  # 创建时间（原始结果时间）
-    processed_at: Optional[datetime] = None  # AI处理完成时间
-    updated_at: datetime = field(default_factory=datetime.utcnow)  # 最后更新时间
+    # ==================== 用户操作状态 ====================
+    status: ProcessedStatus = ProcessedStatus.PENDING  # 用户操作状态
+    user_rating: Optional[int] = None                  # 用户评分（1-5）
+    user_notes: Optional[str] = None                   # 用户备注
 
-    # 错误处理
-    processing_error: Optional[str] = None  # AI处理错误信息
-    retry_count: int = 0  # 重试次数
+    # ==================== 时间戳 ====================
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    processed_at: Optional[datetime] = None
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+    # ==================== 错误处理 ====================
+    processing_error: Optional[str] = None
+    retry_count: int = 0
 
     def mark_as_processing(self) -> None:
         """标记为AI处理中"""
