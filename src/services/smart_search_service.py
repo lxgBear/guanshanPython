@@ -44,11 +44,15 @@ from typing import Optional, Dict, Any, List, Callable
 
 from src.core.domain.entities.smart_search_task import SmartSearchTask, SmartSearchStatus, SubSearchResult
 from src.core.domain.entities.instant_search_task import InstantSearchTask
+from src.core.domain.entities.aggregated_search_result import AggregatedSearchResult, SourceInfo
 from src.infrastructure.llm.openai_service import LLMService, LLMException
 from src.services.instant_search_service import InstantSearchService
 from src.infrastructure.database.smart_search_repositories import (
     SmartSearchTaskRepository,
     QueryDecompositionCacheRepository
+)
+from src.infrastructure.database.aggregated_search_result_repositories import (
+    AggregatedSearchResultRepository
 )
 from src.services.result_aggregator import ResultAggregator
 from src.utils.logger import get_logger
@@ -69,6 +73,7 @@ class SmartSearchService:
         self.task_repo = SmartSearchTaskRepository()
         self.cache_repo = QueryDecompositionCacheRepository()
         self.aggregator = ResultAggregator()
+        self.aggregated_result_repo = AggregatedSearchResultRepository()  # v1.5.2: 职责分离
 
         # 并发控制
         self.max_concurrent_searches = int(
@@ -265,6 +270,9 @@ class SmartSearchService:
             logger.info(f"开始聚合 {len(sub_tasks)} 个子搜索的结果")
             aggregation_result = await self.aggregator.aggregate(sub_tasks)
 
+            # 6.5. 保存聚合结果到 smart_search_results 集合（v1.5.2 职责分离）
+            await self._save_aggregated_results(task.id, aggregation_result)
+
             # 7. 更新任务状态
             stats = aggregation_result["stats"]
             task.aggregated_stats = stats
@@ -412,6 +420,8 @@ class SmartSearchService:
         """
         获取聚合搜索结果
 
+        v1.5.2: 职责分离 - 从 smart_search_results 集合读取聚合结果
+
         Args:
             task_id: 智能搜索任务ID
             view_mode: 视图模式（combined=综合去重, by_query=按查询分组）
@@ -434,24 +444,65 @@ class SmartSearchService:
             ]:
                 raise ValueError(f"任务尚未完成: {task.status.value}")
 
-            # 3. 获取所有子搜索任务
-            sub_tasks = []
-            for task_id in task.sub_search_task_ids:
-                sub_task = await self.instant_search_service.get_task_by_id(task_id)
-                if sub_task:
-                    sub_tasks.append(sub_task)
-
             # 4. 根据视图模式返回结果
             if view_mode == "combined":
-                # 综合去重视图
-                aggregation_result = await self.aggregator.aggregate(sub_tasks)
-                return await self.aggregator.get_combined_view(
-                    aggregated_data=aggregation_result,
-                    page=page,
-                    page_size=page_size
+                # v1.5.2: 从 smart_search_results 集合读取聚合结果
+                results, total = await self.aggregated_result_repo.get_results_by_task(
+                    smart_task_id=task_id,
+                    skip=(page - 1) * page_size,
+                    limit=page_size,
+                    sort_by="composite_score"
                 )
+
+                # 转换为 API 响应格式
+                formatted_results = []
+                for result in results:
+                    formatted_results.append({
+                        "result": {
+                            "id": result.id,
+                            "title": result.title,
+                            "url": result.url,
+                            "content": result.content,
+                            "snippet": result.snippet,
+                            "result_type": result.result_type,
+                            "language": result.language,
+                            "published_date": result.published_date.isoformat() if result.published_date else None,
+                            "status": result.status.value
+                        },
+                        "composite_score": result.composite_score,
+                        "sources": [
+                            {
+                                "query": s.query,
+                                "task_id": s.task_id,
+                                "position": s.position,
+                                "relevance_score": s.relevance_score
+                            }
+                            for s in result.sources
+                        ],
+                        "multi_source_bonus": result.multi_source_bonus,
+                        "source_count": result.source_count
+                    })
+
+                # 返回分页结果
+                return {
+                    "statistics": task.aggregated_stats or {},  # 从任务读取统计信息
+                    "results": formatted_results,
+                    "pagination": {
+                        "page": page,
+                        "page_size": page_size,
+                        "total": total,
+                        "total_pages": (total + page_size - 1) // page_size
+                    }
+                }
+
             elif view_mode == "by_query":
-                # 按查询分组视图
+                # 按查询分组视图 - 仍从 instant_search_results 读取（保持原有行为）
+                sub_tasks = []
+                for sub_task_id in task.sub_search_task_ids:
+                    sub_task = await self.instant_search_service.get_task_by_id(sub_task_id)
+                    if sub_task:
+                        sub_tasks.append(sub_task)
+
                 return await self.aggregator.get_by_query_view(
                     sub_search_tasks=sub_tasks,
                     page=page,
@@ -480,3 +531,105 @@ class SmartSearchService:
             page_size=page_size,
             status=status
         )
+
+    async def _save_aggregated_results(
+        self,
+        smart_task_id: str,
+        aggregation_result: Dict[str, Any]
+    ) -> int:
+        """保存聚合结果到 smart_search_results 集合
+
+        v1.5.2: 职责分离实现
+        - instant_search_results: 存储原始子搜索结果
+        - smart_search_results: 存储去重聚合后的结果
+
+        Args:
+            smart_task_id: 智能搜索任务ID
+            aggregation_result: ResultAggregator.aggregate() 返回的聚合结果
+
+        Returns:
+            保存的结果数量
+        """
+        scored_results = aggregation_result.get("results", [])
+
+        if not scored_results:
+            logger.warning(f"聚合结果为空: task_id={smart_task_id}")
+            return 0
+
+        # 转换为 AggregatedSearchResult 实体列表
+        aggregated_entities = []
+
+        for item in scored_results:
+            # item 结构：
+            # {
+            #   "result": InstantSearchResult,
+            #   "composite_score": float,
+            #   "sources": [{"query", "task_id", "position", "relevance_score"}, ...],
+            #   "multi_source": bool,
+            #   "source_count": int
+            # }
+
+            result_data = item["result"]  # InstantSearchResult 实体
+
+            # 构建 SourceInfo 列表
+            sources = [
+                SourceInfo(
+                    query=s["query"],
+                    task_id=s["task_id"],
+                    position=s["position"],
+                    relevance_score=s["relevance_score"]
+                )
+                for s in item["sources"]
+            ]
+
+            # 计算分项评分
+            relevance_scores = [s.relevance_score for s in sources]
+            positions = [s.position for s in sources]
+
+            avg_relevance_score = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+            avg_position = sum(positions) / len(positions) if positions else 1
+            position_score = 1.0 / (1.0 + avg_position)
+            multi_source_score = item["source_count"] / aggregation_result["stats"]["total_searches"]
+
+            # 创建 AggregatedSearchResult 实体
+            aggregated_entity = AggregatedSearchResult(
+                smart_task_id=smart_task_id,
+
+                # 基础搜索结果字段（从 InstantSearchResult 复制）
+                title=result_data.title,
+                url=result_data.url,
+                content=result_data.content,
+                snippet=result_data.snippet,
+
+                # 聚合评分
+                composite_score=item["composite_score"],
+                avg_relevance_score=avg_relevance_score,
+                avg_quality_score=0.0,  # InstantSearchResult 暂无 quality_score
+                position_score=position_score,
+                multi_source_score=multi_source_score,
+
+                # 多源信息
+                sources=sources,
+                source_count=item["source_count"],
+                multi_source_bonus=item["multi_source"],
+
+                # 元数据（从 InstantSearchResult 复制）
+                result_type=result_data.result_type,
+                language=result_data.language,
+                published_date=result_data.published_date,
+
+                # 状态（继承原始结果状态）
+                status=result_data.status
+            )
+
+            aggregated_entities.append(aggregated_entity)
+
+        # 批量保存到 smart_search_results 集合
+        saved_count = await self.aggregated_result_repo.save_results(aggregated_entities)
+
+        logger.info(
+            f"保存聚合结果: task_id={smart_task_id}, "
+            f"数量={saved_count}/{len(scored_results)}"
+        )
+
+        return saved_count

@@ -90,13 +90,13 @@ class SearchResultListResponse(BaseModel):
 
 
 class SearchResultStats(BaseModel):
-    """搜索结果统计"""
+    """搜索结果统计（v1.5.2 简化状态版本）"""
     task_id: str = Field(..., description="任务ID")
     task_name: str = Field(..., description="任务名称")
     total_results: int = Field(..., description="结果总数")
-    processed_count: int = Field(..., description="已处理数量")
     pending_count: int = Field(..., description="待处理数量")
-    failed_count: int = Field(..., description="失败数量")
+    archived_count: int = Field(..., description="已留存数量")
+    deleted_count: int = Field(..., description="已删除数量")
     average_relevance_score: float = Field(..., ge=0, le=1, description="平均相关性评分")
     average_quality_score: float = Field(..., ge=0, le=1, description="平均质量评分")
     sources_distribution: Dict[str, int] = Field(..., description="来源分布")
@@ -146,15 +146,15 @@ async def validate_task_exists(task_id: str) -> str:
 
 
 def calculate_result_stats(task_id: str, task_name: str, results: List[SearchResult]) -> SearchResultStats:
-    """计算搜索结果统计信息"""
+    """计算搜索结果统计信息（v1.5.2 简化状态版本）"""
     if not results:
         return SearchResultStats(
             task_id=task_id,
             task_name=task_name,
             total_results=0,
-            processed_count=0,
             pending_count=0,
-            failed_count=0,
+            archived_count=0,
+            deleted_count=0,
             average_relevance_score=0.0,
             average_quality_score=0.0,
             sources_distribution={},
@@ -163,7 +163,7 @@ def calculate_result_stats(task_id: str, task_name: str, results: List[SearchRes
             last_updated=datetime.utcnow()
         )
 
-    # 状态统计
+    # v1.5.2: 使用新的3状态系统
     status_counts = {status.value: 0 for status in ResultStatus}
     sources_dist = {}
     languages_dist = {}
@@ -200,9 +200,9 @@ def calculate_result_stats(task_id: str, task_name: str, results: List[SearchRes
         task_id=task_id,
         task_name=task_name,
         total_results=total_count,
-        processed_count=status_counts.get("processed", 0),
         pending_count=status_counts.get("pending", 0),
-        failed_count=status_counts.get("failed", 0),
+        archived_count=status_counts.get("archived", 0),
+        deleted_count=status_counts.get("deleted", 0),
         average_relevance_score=total_relevance / total_count if total_count > 0 else 0.0,
         average_quality_score=total_quality / total_count if total_count > 0 else 0.0,
         sources_distribution=sources_dist,

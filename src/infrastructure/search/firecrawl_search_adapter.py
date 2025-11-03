@@ -432,7 +432,10 @@ Firecrawl 搜索API适配器
         return filtered_results
     
     def _generate_test_results(self, query: str, task_id: Optional[str]) -> SearchResultBatch:
-        """生成测试模式的模拟结果"""
+        """生成测试模式的模拟结果
+
+        v1.5.2: 修复状态使用 - ResultStatus.PENDING而非不存在的PROCESSED
+        """
         batch = SearchResultBatch(
             task_id=task_id if task_id else "",
             query=query,
@@ -440,7 +443,7 @@ Firecrawl 搜索API适配器
             is_test_mode=True,
             test_limit_applied=True
         )
-        
+
         # 生成10条模拟结果
         for i in range(10):
             result = SearchResult(
@@ -453,14 +456,14 @@ Firecrawl 搜索API适配器
                 published_date=datetime.utcnow(),
                 relevance_score=0.9 - (i * 0.05),
                 is_test_data=True,
-                status=ResultStatus.PROCESSED
+                status=ResultStatus.PENDING  # v1.5.2: 修复 - 使用PENDING而非不存在的PROCESSED
             )
             batch.add_result(result)
-        
+
         batch.total_count = 10
         batch.credits_used = 0  # 测试模式不消耗积分
         batch.execution_time_ms = 100  # 模拟100ms响应时间
-        
+
         return batch
     
     async def batch_search(self, 

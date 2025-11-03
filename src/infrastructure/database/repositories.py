@@ -283,22 +283,13 @@ class SearchResultRepository:
         }
     
     def _dict_to_result(self, data: Dict[str, Any]) -> SearchResult:
-        """将字典转换为结果实体"""
-        # 处理ID转换 - task_id可能是字符串格式的数字ID（雪花算法）
-        # 需要转换为UUID格式，如果不是有效的UUID，使用uuid5生成
-        try:
-            result_id = UUID(data["_id"])
-        except (ValueError, AttributeError):
-            # 如果不是有效的UUID，使用字符串作为命名空间生成UUID
-            import uuid
-            result_id = uuid.uuid5(uuid.NAMESPACE_OID, str(data["_id"]))
+        """将字典转换为结果实体
 
-        try:
-            task_id = UUID(data["task_id"])
-        except (ValueError, AttributeError):
-            # 使用雪花ID字符串生成UUID
-            import uuid
-            task_id = uuid.uuid5(uuid.NAMESPACE_OID, str(data["task_id"]))
+        v1.5.0: 修复ID类型 - 使用id字段（雪花ID）而非_id字段（MongoDB主键）
+        """
+        # v1.5.0: 优先使用id字段（迁移后的雪花ID），fallback到_id（向后兼容）
+        result_id = str(data.get("id") or data.get("_id", ""))
+        task_id = str(data.get("task_id", ""))
 
         # 处理article_tag：数据库中可能存储为列表
         article_tag_raw = data.get("article_tag")
@@ -307,6 +298,15 @@ class SearchResultRepository:
             article_tag = ', '.join(str(tag) for tag in article_tag_raw) if article_tag_raw else None
         else:
             article_tag = article_tag_raw
+
+        # v1.5.2: 处理旧状态值的向后兼容
+        status_value = data.get("status", "pending")
+        try:
+            status = ResultStatus(status_value)
+        except ValueError:
+            # 处理旧状态值: processing/completed → pending (回归到待处理)
+            logger.warning(f"⚠️  检测到已废弃的状态值 '{status_value}'，将转换为 'pending' (ID: {result_id})")
+            status = ResultStatus.PENDING
 
         return SearchResult(
             id=result_id,
@@ -331,7 +331,7 @@ class SearchResultRepository:
             # 已移除字段: raw_data (不再从数据库读取)
             relevance_score=data.get("relevance_score", 0.0),
             quality_score=data.get("quality_score", 0.0),
-            status=ResultStatus(data.get("status", "pending")),
+            status=status,
             created_at=data.get("created_at", datetime.utcnow()),
             processed_at=data.get("processed_at"),
             is_test_data=data.get("is_test_data", False)

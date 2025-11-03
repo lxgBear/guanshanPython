@@ -30,12 +30,10 @@ from src.infrastructure.id_generator import generate_string_id
 
 
 class InstantSearchResultStatus(Enum):
-    """即时搜索结果状态枚举"""
-    PENDING = "pending"         # 初始状态：刚采集
-    ARCHIVED = "archived"       # 已留存：用户标记重要
-    PROCESSING = "processing"   # 处理中：数据源正在整编
-    COMPLETED = "completed"     # 已完成：数据源已确定
-    DELETED = "deleted"         # 已删除：软删除
+    """即时搜索结果状态枚举（v1.5.2 简化版）"""
+    PENDING = "pending"         # 待处理：初始状态
+    ARCHIVED = "archived"       # 留存：用户标记重要
+    DELETED = "deleted"         # 删除：软删除
 
 
 @dataclass
@@ -175,16 +173,6 @@ class InstantSearchResult:
     def mark_as_archived(self) -> None:
         """标记为已留存"""
         self.status = InstantSearchResultStatus.ARCHIVED
-        self.updated_at = datetime.utcnow()
-
-    def mark_as_processing(self) -> None:
-        """标记为处理中（数据源整编中）"""
-        self.status = InstantSearchResultStatus.PROCESSING
-        self.updated_at = datetime.utcnow()
-
-    def mark_as_completed(self) -> None:
-        """标记为已完成（数据源已确定）"""
-        self.status = InstantSearchResultStatus.COMPLETED
         self.updated_at = datetime.utcnow()
 
     def mark_as_deleted(self) -> None:

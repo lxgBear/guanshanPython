@@ -1,6 +1,6 @@
 # 关山智能搜索系统 - 文档中心
 
-**版本**: v1.3.0 | **最后更新**: 2025-10-17
+**版本**: v1.5.2 | **最后更新**: 2025-10-31
 
 ---
 
@@ -59,6 +59,36 @@ PUT    /api/v1/search-tasks/{id}          # 更新任务
 DELETE /api/v1/search-tasks/{id}          # 删除任务
 GET    /api/v1/search-tasks/{id}/results  # 查询结果
 ```
+
+#### 数据源管理
+
+**文档**: [DATA_SOURCE_CURATION_BACKEND.md](DATA_SOURCE_CURATION_BACKEND.md)
+
+**内容**:
+- 数据源创建和编辑
+- 状态管理（draft ⇄ confirmed）
+- 原始数据引用和状态同步
+- 数据源确认和退回流程
+
+**存档系统**:
+- [数据源存档系统指南](ARCHIVED_DATA_GUIDE.md) - 完整技术方案、UML图表、API文档、部署指南
+
+#### ID系统 (v1.5.0)
+
+**文档**: [ID_SYSTEM_V1.5.0.md](ID_SYSTEM_V1.5.0.md)
+
+**内容**:
+- ID系统统一为雪花算法（UUID → Snowflake ID）
+- 历史数据迁移（255条记录）
+- Repository序列化修复
+- 智能错误处理和向后兼容
+- 完整的问题分析、解决方案和验证结果
+
+**关键成果**:
+- ✅ 所有ID统一为雪花算法格式（15-19位数字）
+- ✅ 100%历史数据迁移成功
+- ✅ 智能UUID检测和用户友好的错误提示
+- ✅ 代码简化，移除UUID相关逻辑
 
 ### 基础设施
 
@@ -158,9 +188,15 @@ src/
 
 **文档**: [VERSION_MANAGEMENT.md](VERSION_MANAGEMENT.md)
 
-**当前版本**: v1.3.0
+**当前版本**: v1.5.2
 
-**版本历史**:
+**最近更新**:
+- v1.5.2 (2025-10-31): 状态系统简化（5状态→3状态）
+- v1.5.0 (2025-10-31): ID系统统一（UUID→雪花ID）+ 历史数据迁移
+- v1.4.2 (2025-10-31): 智能ID检测（临时方案）
+- v1.4.1 (2025-10-30): 空数据源确认Bug修复
+
+**早期版本**:
 - v1.3.0 (2025-10-17): 重试机制、手动执行API
 - v1.2.0 (2025-10-15): 即时搜索功能
 - v1.1.0 (2025-10-13): 调度器集成
@@ -234,25 +270,51 @@ curl "http://localhost:8000/api/v1/search-tasks/{id}/results?page=1&page_size=10
 
 ```
 docs/
-├── README.md                      # 本文档(索引)
-├── API_GUIDE.md                   # API完整参考
-├── SCHEDULER_GUIDE.md             # 调度器指南
-├── MONGODB_GUIDE.md               # MongoDB配置
-├── FIRECRAWL_GUIDE.md             # Firecrawl集成
-├── RETRY_MECHANISM.md             # 重试机制
-├── SYSTEM_ARCHITECTURE.md         # 系统架构
-├── VPN_DATABASE_GUIDE.md          # VPN数据库连接指南
-├── BACKEND_DEVELOPMENT.md         # 后端开发
-├── FEATURE_TRACKER.md             # 功能追踪
-├── FUTURE_ROADMAP.md              # 发展路线
-├── VERSION_MANAGEMENT.md          # 版本管理
-├── SUMMARY_REPORT_SYSTEM_PRD.md   # 总结报告系统PRD
-├── reports/                       # 报告目录
-│   ├── fixes/                     # 问题修复报告
-│   └── tests/                     # 测试报告
-└── archive/                       # 历史文档归档
-    └── startup/                   # 旧版启动文档（已合并到STARTUP_GUIDE.md）
+├── README.md                              # 本文档(索引)
+├── SYSTEM_ARCHITECTURE.md                 # 系统架构
+├── DATA_SOURCE_CURATION_BACKEND.md        # 数据源管理后端（完整实现指南）
+├── ARCHIVED_DATA_GUIDE.md                 # 数据源存档系统（完整技术方案）
+├── ID_SYSTEM_V1.5.0.md                    # ID系统统一（v1.5.0完整报告）
+├── DOCUMENTATION_CONSOLIDATION_PLAN.md    # 文档整理计划
+├── API_GUIDE.md                           # API完整参考
+├── SCHEDULER_GUIDE.md                     # 调度器指南
+├── MONGODB_GUIDE.md                       # MongoDB配置
+├── FIRECRAWL_GUIDE.md                     # Firecrawl集成
+├── RETRY_MECHANISM.md                     # 重试机制
+├── VPN_DATABASE_GUIDE.md                  # VPN数据库连接
+├── BACKEND_DEVELOPMENT.md                 # 后端开发
+├── FEATURE_TRACKER.md                     # 功能追踪
+├── FUTURE_ROADMAP.md                      # 发展路线
+├── VERSION_MANAGEMENT.md                  # 版本管理
+├── SUMMARY_REPORT_SYSTEM_PRD.md           # 总结报告系统PRD
+├── diagrams/                              # 架构图目录
+├── reports/                               # 报告目录
+│   ├── fixes/                             # 问题修复报告
+│   └── tests/                             # 测试报告
+└── archive/                               # 历史文档归档
+    ├── v1.4.1/                            # v1.4.1版本历史文档
+    │   └── BUG_FIX_EMPTY_DATASOURCE_CONFIRM.md
+    ├── v1.4.2/                            # v1.4.2版本历史文档
+    │   └── BUG_FIX_RAW_DATA_TYPE_DETECTION.md
+    ├── analysis/                          # 一次性分析报告
+    │   └── MODULAR_DEVELOPMENT_COMPLIANCE.md
+    └── startup/                           # 旧版启动文档
 ```
+
+### 文档组织说明
+
+**核心活跃文档** (5个):
+- `README.md` - 文档中心索引
+- `SYSTEM_ARCHITECTURE.md` - 系统架构概览
+- `DATA_SOURCE_CURATION_BACKEND.md` - 数据源管理（1395行完整指南）
+- `ARCHIVED_DATA_GUIDE.md` - 数据源存档系统（896行完整方案）
+- `ID_SYSTEM_V1.5.0.md` - ID系统统一报告（v1.5.0，合并了迁移报告和摘要）
+
+**历史归档** (archive/):
+- `v1.4.1/` - v1.4.1版本的Bug修复文档
+- `v1.4.2/` - v1.4.2版本的Bug修复文档（已被v1.5.0取代）
+- `analysis/` - 一次性架构分析报告
+- `startup/` - 旧版启动文档（已合并）
 
 ---
 
@@ -299,5 +361,15 @@ docs/
 ---
 
 **文档维护**: Backend Team
-**最后审核**: 2025-10-17
-**下次审核**: 2025-11-17
+**最后审核**: 2025-10-31
+**下次审核**: 2025-11-30
+
+## 📋 文档整理记录
+
+**v1.5.2 文档整理 (2025-10-31)**:
+- ✅ 合并ID系统文档：`ID_SYSTEM_MIGRATION_REPORT.md` + `ID_SYSTEM_UNIFICATION_v1.5.0_SUMMARY.md` → `ID_SYSTEM_V1.5.0.md`
+- ✅ 归档历史Bug修复文档到 `archive/v1.4.1/` 和 `archive/v1.4.2/`
+- ✅ 归档一次性分析报告到 `archive/analysis/`
+- ✅ 更新文档索引结构
+- ✅ 减少顶层文档数量：9个 → 5个核心文档 (-44%)
+- ✅ 详细整理计划：参见 `DOCUMENTATION_CONSOLIDATION_PLAN.md`

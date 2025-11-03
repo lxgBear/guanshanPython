@@ -63,7 +63,27 @@ graph TB
 
 ## 核心组件
 
-### 1. 定时搜索任务系统
+### 1. 数据源管理系统
+
+#### 1.1 数据源整编流程
+- **功能**: 将多条原始数据整合为高质量数据源
+- **状态管理**: DRAFT（待审核）⇄ CONFIRMED（已通过）
+- **状态同步**: 数据源操作自动同步原始数据状态（通过MongoDB事务保证一致性）
+
+#### 1.2 数据源存档系统 ✅ 已实施
+
+**业务价值**: 确保已确认的数据源拥有独立的数据生命周期，不受原始数据表清理影响。
+
+**核心设计**:
+- **存档表**: `data_source_archived_data` - 独立集合存储完整数据快照
+- **触发时机**: 数据源确认（DRAFT → CONFIRMED）时自动存档
+- **事务保证**: MongoDB事务保证状态更新和数据存档的原子性
+
+**性能指标**: 确认操作 <2秒 | 查询 <100ms | 存储成本可控（1000个数据源约250-500MB）
+
+**详细文档**: [数据源存档系统完整指南](ARCHIVED_DATA_GUIDE.md) - 完整技术方案、UML图表、API文档、部署指南
+
+### 2. 定时搜索任务系统
 
 #### 1.1 任务管理
 - **任务实体**: `SearchTask` - 支持安全ID生成
@@ -82,7 +102,22 @@ graph TB
 
 ### 2. API接口设计
 
-#### 2.1 搜索任务管理
+#### 2.1 数据源管理
+```
+POST   /api/v1/data-sources/                     # 创建数据源
+GET    /api/v1/data-sources/                     # 查询列表
+GET    /api/v1/data-sources/{id}                 # 数据源详情
+PUT    /api/v1/data-sources/{id}/content         # 更新内容
+POST   /api/v1/data-sources/{id}/confirm         # 确定数据源（触发存档）
+POST   /api/v1/data-sources/{id}/revert-to-draft # 退回待处理
+DELETE /api/v1/data-sources/{id}                 # 删除数据源
+
+# 存档系统API
+GET    /api/v1/data-sources/{id}/archived-data        # 获取存档数据
+POST   /api/v1/data-sources/{id}/archived-data/stats  # 获取存档统计
+```
+
+#### 2.2 搜索任务管理
 ```
 POST   /api/v1/search-tasks              # 创建任务
 GET    /api/v1/search-tasks              # 列表查询
@@ -100,7 +135,7 @@ PATCH  /api/v1/search-tasks/{id}/status  # 状态控制 (启用/禁用)
 - 包含成功/失败次数、成功率、平均结果数等关键指标
 - 支持实时查询下次运行时间和调度间隔信息
 
-#### 2.2 调度器管理
+#### 2.3 调度器管理
 ```
 GET    /api/v1/scheduler/status          # 调度器状态
 POST   /api/v1/scheduler/start           # 启动调度器
@@ -110,7 +145,7 @@ POST   /api/v1/scheduler/tasks/{id}/pause    # 暂停任务
 POST   /api/v1/scheduler/tasks/{id}/resume   # 恢复任务
 ```
 
-#### 2.3 搜索结果查询
+#### 2.4 搜索结果查询
 ```
 GET    /api/v1/search-results/tasks/{id} # 任务结果
 GET    /api/v1/search-results/{id}       # 结果详情

@@ -21,7 +21,7 @@ _mariadb_session_factory: Optional[async_sessionmaker] = None
 async def get_mongodb_database() -> AsyncIOMotorDatabase:
     """获取MongoDB数据库连接"""
     global _mongodb_client, _mongodb_database
-    
+
     if _mongodb_database is None:
         try:
             _mongodb_client = AsyncIOMotorClient(
@@ -31,19 +31,50 @@ async def get_mongodb_database() -> AsyncIOMotorDatabase:
                 serverSelectionTimeoutMS=5000  # 5秒超时
             )
             _mongodb_database = _mongodb_client[settings.MONGODB_DB_NAME]
-            
+
             # 测试连接（使用超时）
             await asyncio.wait_for(_mongodb_client.admin.command('ping'), timeout=5.0)
             logger.info(f"MongoDB连接成功: {settings.MONGODB_DB_NAME}")
-            
+
         except asyncio.TimeoutError:
             logger.warning("MongoDB连接超时，可能服务未启动")
             raise ConnectionError("MongoDB连接超时")
         except Exception as e:
             logger.error(f"MongoDB连接失败: {e}")
             raise
-    
+
     return _mongodb_database
+
+
+async def is_mongodb_replica_set() -> bool:
+    """检查MongoDB是否支持事务（replica set或mongos）
+
+    Returns:
+        bool: True表示支持事务，False表示standalone模式
+    """
+    try:
+        client = _mongodb_client
+        if client is None:
+            await get_mongodb_database()
+            client = _mongodb_client
+
+        # 检查服务器信息
+        server_info = await client.admin.command('isMaster')
+
+        # replica set有setName字段，mongos有msg='isdbgrid'
+        is_replica_set = 'setName' in server_info
+        is_mongos = server_info.get('msg') == 'isdbgrid'
+
+        if is_replica_set or is_mongos:
+            logger.info(f"MongoDB支持事务 (replica_set={is_replica_set}, mongos={is_mongos})")
+            return True
+        else:
+            logger.info("MongoDB standalone模式，事务功能已禁用")
+            return False
+
+    except Exception as e:
+        logger.warning(f"检查MongoDB事务支持失败: {e}，默认禁用事务")
+        return False
 
 
 async def get_mariadb_session() -> AsyncSession:
@@ -299,6 +330,42 @@ async def create_indexes():
         logger.info("✅ 联表查询外键索引优化完成")
 
         logger.info("✅ 智能总结报告系统所有索引创建完成")
+
+        # ==================== 数据源存档系统索引 ====================
+
+        # data_source_archived_data - 数据源存档表
+        archived_data = db.data_source_archived_data
+
+        # 基础索引
+        await archived_data.create_index("data_source_id", name="idx_data_source_id")
+        await archived_data.create_index("data_type", name="idx_data_type")
+        await archived_data.create_index("archived_at", name="idx_archived_at")
+        await archived_data.create_index("created_at", name="idx_created_at")
+
+        # 复合索引（最常用：按数据源查询并按时间排序）
+        await archived_data.create_index(
+            [("data_source_id", 1), ("created_at", -1)],
+            name="idx_datasource_created"
+        )
+
+        # 复合索引（按数据源和类型查询）
+        await archived_data.create_index(
+            [("data_source_id", 1), ("data_type", 1)],
+            name="idx_datasource_type"
+        )
+
+        # 防重复存档索引（确保同一原始数据不被重复存档）
+        await archived_data.create_index(
+            [("original_data_id", 1), ("data_type", 1)],
+            unique=True,
+            name="idx_unique_original_data"
+        )
+
+        # 存档元信息索引（查询特定人员或原因的存档）
+        await archived_data.create_index("archived_by", name="idx_archived_by")
+        await archived_data.create_index("archived_reason", name="idx_archived_reason")
+
+        logger.info("✅ 数据源存档系统索引创建完成（含防重复存档唯一索引）")
 
     except Exception as e:
         logger.warning(f"创建索引失败: {e}")

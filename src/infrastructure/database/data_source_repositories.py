@@ -70,6 +70,9 @@ class DataSourceRepository:
         source_type: Optional[str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        primary_category: Optional[str] = None,
+        secondary_category: Optional[str] = None,
+        tertiary_category: Optional[str] = None,
         limit: int = 50,
         skip: int = 0
     ) -> List[DataSource]:
@@ -81,6 +84,9 @@ class DataSourceRepository:
             source_type: 数据源类型过滤（scheduled, instant, mixed）
             start_date: 开始日期过滤（创建时间）
             end_date: 结束日期过滤（创建时间）
+            primary_category: 第一级分类过滤
+            secondary_category: 第二级分类过滤
+            tertiary_category: 第三级分类过滤
             limit: 每页数量
             skip: 跳过数量
 
@@ -106,6 +112,16 @@ class DataSourceRepository:
             if end_date:
                 query["created_at"]["$lte"] = end_date
 
+        # 分类过滤
+        if primary_category:
+            query["primary_category"] = primary_category
+
+        if secondary_category:
+            query["secondary_category"] = secondary_category
+
+        if tertiary_category:
+            query["tertiary_category"] = tertiary_category
+
         cursor = self.collection.find(query).sort("created_at", -1).skip(skip).limit(limit)
         docs = await cursor.to_list(length=limit)
         return [self._from_document(doc) for doc in docs]
@@ -116,7 +132,10 @@ class DataSourceRepository:
         status: Optional[str] = None,
         source_type: Optional[str] = None,
         start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None
+        end_date: Optional[datetime] = None,
+        primary_category: Optional[str] = None,
+        secondary_category: Optional[str] = None,
+        tertiary_category: Optional[str] = None
     ) -> int:
         """统计数据源数量
 
@@ -126,6 +145,9 @@ class DataSourceRepository:
             source_type: 数据源类型过滤
             start_date: 开始日期过滤
             end_date: 结束日期过滤
+            primary_category: 第一级分类过滤
+            secondary_category: 第二级分类过滤
+            tertiary_category: 第三级分类过滤
 
         Returns:
             数据源数量
@@ -147,6 +169,16 @@ class DataSourceRepository:
                 query["created_at"]["$gte"] = start_date
             if end_date:
                 query["created_at"]["$lte"] = end_date
+
+        # 分类过滤
+        if primary_category:
+            query["primary_category"] = primary_category
+
+        if secondary_category:
+            query["secondary_category"] = secondary_category
+
+        if tertiary_category:
+            query["tertiary_category"] = tertiary_category
 
         return await self.collection.count_documents(query)
 
@@ -344,7 +376,12 @@ class DataSourceRepository:
             "updated_by": data_source.updated_by,
             "updated_at": data_source.updated_at,
             "tags": data_source.tags,
-            "metadata": data_source.metadata
+            "metadata": data_source.metadata,
+            # 分类字段
+            "primary_category": data_source.primary_category,
+            "secondary_category": data_source.secondary_category,
+            "tertiary_category": data_source.tertiary_category,
+            "custom_tags": data_source.custom_tags
         }
 
     def _from_document(self, doc: Dict[str, Any]) -> DataSource:
@@ -394,5 +431,10 @@ class DataSourceRepository:
             updated_by=doc.get("updated_by", ""),
             updated_at=doc.get("updated_at", datetime.utcnow()),
             tags=doc.get("tags", []),
-            metadata=doc.get("metadata", {})
+            metadata=doc.get("metadata", {}),
+            # 分类字段
+            primary_category=doc.get("primary_category"),
+            secondary_category=doc.get("secondary_category"),
+            tertiary_category=doc.get("tertiary_category"),
+            custom_tags=doc.get("custom_tags", [])
         )
