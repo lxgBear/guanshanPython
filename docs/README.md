@@ -39,6 +39,37 @@ curl -X POST http://localhost:8000/api/v1/scheduler/tasks/{id}/execute
 curl http://localhost:8000/api/v1/scheduler/status
 ```
 
+#### 搜索结果处理系统 (v2.0.0) 🎯 最新
+
+**文档**: [职责分离架构设计](../claudedocs/SEARCH_RESULTS_SEPARATION_ARCHITECTURE.md)
+
+**核心特性**:
+- **双表架构**: `search_results`（原始数据）+ `processed_results`（AI处理结果）
+- **职责分离**: 原始存储与AI处理完全解耦
+- **异步处理**: AI服务独立处理，不阻塞定时任务
+- **智能增强**: AI翻译、总结、分类、情感分析
+- **状态管理**: 6种处理状态，支持重试机制
+- **用户操作**: 留存、删除、评分、备注功能
+
+**查询优先级**:
+1. **主要查询**: `/api/v1/search-tasks/{id}/results` → 返回 `processed_results`（AI增强数据）
+2. **备用查询**: `/api/v1/search-results/tasks/{id}` → 返回 `search_results`（原始数据）
+
+**数据流程**:
+```
+定时任务 → Firecrawl → search_results（只写一次）
+                    → create pending in processed_results
+                    → AI异步处理
+                    → processed_results（完成）
+                    → 前端展示
+```
+
+**详细文档**:
+- [完整架构设计](../claudedocs/SEARCH_RESULTS_SEPARATION_ARCHITECTURE.md) - 54KB完整方案
+- [UML图表和数据流](../claudedocs/diagrams/) - 4个mermaid图表
+- [实施指南](../claudedocs/SEARCH_RESULTS_IMPLEMENTATION_GUIDE.md) - 9天实施计划
+- [数据库集合指南](../claudedocs/DATABASE_COLLECTIONS_GUIDE.md) - v2.1.0更新
+
 #### 搜索API
 
 **文档**: [API_GUIDE.md](API_GUIDE.md)
@@ -177,20 +208,33 @@ search_config = {
 ```
 src/
 ├── api/v1/endpoints/         # API端点
+│   ├── search_task_management.py
+│   ├── scheduler_management.py
+│   └── processed_results.py  # v2.0.0新增：AI处理结果API
 ├── core/domain/entities/     # 领域实体
+│   ├── search_task.py
+│   ├── search_result.py      # v2.0.0简化：移除状态管理
+│   └── processed_result.py   # v2.0.0新增：AI处理结果实体
 ├── infrastructure/
 │   ├── database/             # 数据库层
+│   │   ├── repositories.py   # SearchResultRepository（简化）
+│   │   └── processed_result_repositories.py  # v2.0.0新增
 │   └── search/               # 搜索适配器
 └── services/                 # 业务逻辑
+    └── task_scheduler.py     # v2.0.0更新：集成AI通知
 ```
 
 ### 版本管理
 
 **文档**: [VERSION_MANAGEMENT.md](VERSION_MANAGEMENT.md)
 
-**当前版本**: v1.5.2
+**当前版本**: v2.0.0 (设计中)
 
 **最近更新**:
+- v2.0.0 (2025-11-03): 🎯 **搜索结果职责分离架构** - 双表设计（设计完成，待实施）
+  - search_results: 纯原始数据存储（不可变）
+  - processed_results: AI处理结果（主查询源）
+  - 完整架构文档、UML图表、实施指南
 - v1.5.2 (2025-10-31): 状态系统简化（5状态→3状态）
 - v1.5.0 (2025-10-31): ID系统统一（UUID→雪花ID）+ 历史数据迁移
 - v1.4.2 (2025-10-31): 智能ID检测（临时方案）
