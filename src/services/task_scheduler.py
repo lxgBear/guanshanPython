@@ -23,6 +23,7 @@ from src.core.domain.entities.search_task import SearchTask, TaskStatus, Schedul
 from src.core.domain.entities.search_config import UserSearchConfig
 from src.core.domain.entities.search_result import SearchResult, SearchResultBatch, ResultStatus
 from src.infrastructure.database.repositories import SearchTaskRepository, SearchResultRepository
+from src.infrastructure.database.processed_result_repositories import ProcessedResultRepository
 from src.infrastructure.database.memory_repositories import InMemorySearchTaskRepository
 from src.infrastructure.database.connection import get_mongodb_database
 from src.infrastructure.search.firecrawl_search_adapter import FirecrawlSearchAdapter
@@ -44,6 +45,7 @@ class TaskSchedulerService(ITaskScheduler):
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.task_repository: Optional[SearchTaskRepository] = None
         self.result_repository: Optional[SearchResultRepository] = None
+        self.processed_result_repository: Optional[ProcessedResultRepository] = None  # v2.0.0 新增
         self.search_adapter: Optional[FirecrawlSearchAdapter] = None
         self._is_running = False
 
@@ -96,6 +98,18 @@ class TaskSchedulerService(ITaskScheduler):
                 logger.warning(f"MongoDB不可用，搜索结果将仅保存到内存: {e}")
                 self.result_repository = None
         return self.result_repository
+
+    async def _get_processed_result_repository(self):
+        """获取AI处理结果仓储实例（v2.0.0 新增）"""
+        if self.processed_result_repository is None:
+            try:
+                await get_mongodb_database()
+                self.processed_result_repository = ProcessedResultRepository()
+                logger.info("调度器使用MongoDB AI处理结果仓储")
+            except Exception as e:
+                logger.warning(f"MongoDB不可用，AI处理结果将不可用: {e}")
+                self.processed_result_repository = None
+        return self.processed_result_repository
     
     async def start(self):
         """启动调度器服务"""
@@ -318,17 +332,33 @@ class TaskSchedulerService(ITaskScheduler):
                     task_id=str(task.id)
                 )
 
-            # 保存搜索结果到数据库
+            # v2.0.0 职责分离架构：保存到 search_results 和 processed_results
             if result_batch.results:
                 try:
                     result_repo = await self._get_result_repository()
                     if result_repo:
+                        # 1. 保存原始结果到 search_results（纯数据存储）
                         await result_repo.save_results(result_batch.results)
-                        logger.info(f"✅ 搜索结果已保存到数据库: {len(result_batch.results)}条")
+                        logger.info(f"✅ 原始搜索结果已保存: {len(result_batch.results)}条")
+
+                        # 2. 为每个原始结果创建待处理记录到 processed_results
+                        processed_repo = await self._get_processed_result_repository()
+                        if processed_repo:
+                            # 提取所有原始结果ID
+                            raw_result_ids = [str(r.id) for r in result_batch.results]
+
+                            # 批量创建待处理记录
+                            await processed_repo.bulk_create_pending_results(
+                                raw_result_ids=raw_result_ids,
+                                task_id=str(task_id)
+                            )
+                            logger.info(f"✅ 已创建{len(raw_result_ids)}条待AI处理记录")
+                        else:
+                            logger.warning("⚠️ processed_results仓储不可用，跳过AI处理记录创建")
                     else:
                         logger.warning("⚠️ MongoDB不可用，搜索结果未保存")
                 except Exception as e:
-                    logger.error(f"❌ 保存搜索结果到数据库失败: {e}")
+                    logger.error(f"❌ 保存搜索结果失败: {e}")
                     # 失败不影响任务继续执行
             
             # 更新任务统计
