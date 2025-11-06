@@ -33,6 +33,7 @@ from src.services.interfaces.task_scheduler_interface import (
     TaskScheduleError, TaskRemoveError, TaskUpdateError,
     TaskNotFoundError, TaskExecutionError
 )
+from src.services.firecrawl import ExecutorFactory
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -290,11 +291,12 @@ class TaskSchedulerService(ITaskScheduler):
             logger.error(f"主任务检查失败: {e}")
     
     async def _execute_search_task(self, task_id: str):
-        """执行单个搜索任务（支持关键词搜索和URL爬取）
+        """执行单个搜索任务（使用新的模块化执行器架构）
 
-        优先级逻辑：
-        1. 如果 crawl_url 存在 → 使用 Firecrawl Scrape API (网址爬取)
-        2. 如果 crawl_url 不存在 → 使用 Firecrawl Search API (关键词搜索)
+        根据任务类型自动选择对应的执行器：
+        - SEARCH_KEYWORD: 关键词搜索 + 详情页爬取
+        - CRAWL_WEBSITE: 网站递归爬取
+        - SCRAPE_URL: 单页面爬取
         """
         start_time = datetime.utcnow()
         logger.info(f"🔍 开始执行搜索任务: {task_id}")
@@ -316,23 +318,18 @@ class TaskSchedulerService(ITaskScheduler):
             task.last_executed_at = start_time
 
             # ========================================
-            # 优先级逻辑：crawl_url 优先于 query
+            # v2.0.0 新架构：使用执行器工厂创建执行器
             # ========================================
-            if task.crawl_url:
-                # 方案1：使用 Firecrawl Scrape API 爬取指定网址
-                logger.info(f"🌐 使用网址爬取模式: {task.crawl_url}")
-                result_batch = await self._execute_crawl_task_internal(task, start_time)
-            else:
-                # 方案2：使用 Firecrawl Search API 关键词搜索
-                logger.info(f"🔍 使用关键词搜索模式: {task.query}")
-                user_config = UserSearchConfig.from_json(task.search_config)
-                result_batch = await self.search_adapter.search(
-                    query=task.query,
-                    user_config=user_config,
-                    task_id=str(task.id)
-                )
+            task_type = task.get_task_type()
+            logger.info(f"🏭 任务类型: {task_type.value}")
 
-            # v2.0.0 职责分离架构：保存到 search_results 和 processed_results
+            # 创建对应的执行器
+            executor = ExecutorFactory.create(task_type)
+
+            # 执行任务
+            result_batch = await executor.execute(task)
+
+            # v2.0.0 职责分离架构：保存到 search_results 和 processed_results_new
             if result_batch.results:
                 try:
                     result_repo = await self._get_result_repository()
@@ -341,7 +338,7 @@ class TaskSchedulerService(ITaskScheduler):
                         await result_repo.save_results(result_batch.results)
                         logger.info(f"✅ 原始搜索结果已保存: {len(result_batch.results)}条")
 
-                        # 2. 为每个原始结果创建待处理记录到 processed_results
+                        # 2. 为每个原始结果创建待处理记录到 processed_results_new
                         processed_repo = await self._get_processed_result_repository()
                         if processed_repo:
                             # 提取所有原始结果ID
@@ -354,100 +351,59 @@ class TaskSchedulerService(ITaskScheduler):
                             )
                             logger.info(f"✅ 已创建{len(raw_result_ids)}条待AI处理记录")
                         else:
-                            logger.warning("⚠️ processed_results仓储不可用，跳过AI处理记录创建")
+                            logger.warning("⚠️ processed_results_new仓储不可用，跳过AI处理记录创建")
                     else:
                         logger.warning("⚠️ MongoDB不可用，搜索结果未保存")
                 except Exception as e:
                     logger.error(f"❌ 保存搜索结果失败: {e}")
                     # 失败不影响任务继续执行
-            
+
             # 更新任务统计
             task.record_execution(
                 success=result_batch.success,
                 results_count=result_batch.returned_count,
                 credits_used=result_batch.credits_used
             )
-            
+
             # 计算下次执行时间
             interval = ScheduleInterval.from_value(task.schedule_interval)
             trigger = CronTrigger.from_crontab(interval.cron_expression)
             next_run = trigger.get_next_fire_time(None, datetime.now())
             if next_run:
                 task.next_run_time = next_run
-            
+
             # 保存任务更新
             await repo.update(task)
-            
+
             execution_time = (datetime.utcnow() - start_time).total_seconds()
-            
+
             logger.info(
                 f"✅ 搜索任务执行完成: {task.name} | "
+                f"任务类型: {task_type.value} | "
                 f"结果数: {result_batch.returned_count} | "
                 f"耗时: {execution_time:.2f}s | "
                 f"下次执行: {next_run.strftime('%Y-%m-%d %H:%M:%S') if next_run else 'N/A'}"
             )
-            
+
         except Exception as e:
             logger.error(f"❌ 搜索任务执行失败 {task_id}: {e}")
-            
-            # 记录失败
+
+            # 记录失败（包含错误信息）
             try:
                 repo = await self._get_task_repository()
                 task = await repo.get_by_id(task_id)
                 if task:
-                    task.record_execution(success=False)
+                    # 提取简洁的错误信息
+                    error_message = str(e)
+                    # 如果错误信息太长，截取前500个字符
+                    if len(error_message) > 500:
+                        error_message = error_message[:500] + "..."
+
+                    task.record_execution(success=False, error_message=error_message)
                     await repo.update(task)
+                    logger.info(f"已记录任务失败信息: {task.name}")
             except Exception as update_error:
                 logger.error(f"更新失败统计时出错: {update_error}")
-
-    async def _execute_crawl_task_internal(self, task: SearchTask, start_time: datetime) -> SearchResultBatch:
-        """执行网址爬取任务的内部方法"""
-        # 创建爬虫适配器
-        crawler = FirecrawlAdapter()
-
-        # 构建爬取选项（从 search_config 提取）
-        scrape_options = {
-            "wait_for": task.search_config.get("wait_for", 1000),
-            "include_tags": task.search_config.get("include_tags"),
-            "exclude_tags": task.search_config.get("exclude_tags", ["nav", "footer", "header"])
-        }
-
-        # 执行爬取
-        crawl_result = await crawler.scrape(task.crawl_url, **scrape_options)
-
-        # 将 CrawlResult 转换为 SearchResult
-        search_result = SearchResult(
-            task_id=str(task.id),
-            title=crawl_result.metadata.get("title", task.crawl_url),
-            url=crawl_result.url,
-            content=crawl_result.content[:5000] if crawl_result.content else "",
-            snippet=crawl_result.content[:200] if crawl_result.content else "",
-            source="crawl",
-            markdown_content=crawl_result.markdown[:5000] if crawl_result.markdown else None,
-            html_content=crawl_result.html,
-            metadata=crawl_result.metadata or {},
-            relevance_score=1.0,  # 直接爬取的页面相关性为100%
-            status=ResultStatus.PROCESSED
-        )
-
-        # 创建结果批次
-        batch = SearchResultBatch(
-            task_id=str(task.id),
-            query=f"URL爬取: {task.crawl_url}",
-            search_config=task.search_config,
-            is_test_mode=False
-        )
-        batch.add_result(search_result)
-        batch.total_count = 1
-        batch.credits_used = 1  # Scrape API 通常消耗1个积分
-
-        # 计算执行时间
-        end_time = datetime.utcnow()
-        batch.execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
-
-        logger.info(f"✅ 网址爬取完成: {task.crawl_url}, 耗时: {batch.execution_time_ms}ms")
-
-        return batch
 
     def is_running(self) -> bool:
         """检查调度器是否在运行"""

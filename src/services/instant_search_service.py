@@ -25,6 +25,7 @@ from src.infrastructure.database.instant_search_repositories import (
     InstantSearchResultRepository,
     InstantSearchResultMappingRepository
 )
+from src.infrastructure.database.processed_result_repositories import ProcessedResultRepository
 from src.infrastructure.crawlers.firecrawl_adapter import FirecrawlAdapter
 from src.infrastructure.search.firecrawl_search_adapter import FirecrawlSearchAdapter
 from src.core.domain.entities.search_config import UserSearchConfig
@@ -40,6 +41,7 @@ class InstantSearchService:
         self.task_repo = InstantSearchTaskRepository()
         self.result_repo = InstantSearchResultRepository()
         self.mapping_repo = InstantSearchResultMappingRepository()
+        self.processed_repo = ProcessedResultRepository()  # v2.0.0 新增：news_results存储
         # 使用 FirecrawlSearchAdapter（稳定的HTTP直接调用）代替 FirecrawlAdapter
         self.firecrawl_search = FirecrawlSearchAdapter()
         # 保留 FirecrawlAdapter 用于 scrape 功能
@@ -188,7 +190,7 @@ class InstantSearchService:
                     'url': search_result.url,
                     'markdown': search_result.markdown_content,
                     'html': search_result.html_content,
-                    'content': search_result.content,
+                    # v2.1.1: 移除 'content' 字段（SearchResult 已改用 markdown_content 和 html_content）
                     'metadata': search_result.metadata
                 })
 
@@ -218,7 +220,7 @@ class InstantSearchService:
                 'url': crawl_result.url,
                 'markdown': crawl_result.markdown,
                 'html': crawl_result.html,
-                'content': crawl_result.content,
+                # v2.1.1: 移除 'content' 字段（统一使用 markdown 和 html）
                 'metadata': crawl_result.metadata
             }]
 

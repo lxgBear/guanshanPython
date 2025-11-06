@@ -111,11 +111,11 @@ graph TB
 ```
 定时任务 → Firecrawl搜索 → search_results（原始数据，只写一次）
                         ↓
-                  create pending in processed_results
+                  create pending in news_results
                         ↓
                   AI服务异步处理
                         ↓
-                  processed_results（AI增强数据）
+                  news_results（AI增强数据）
                         ↓
                   前端查询展示（主要来源）
 ```
@@ -126,7 +126,7 @@ graph TB
   - 数据写入后不再修改（immutable）
   - 提供原始数据查询接口（备用）
 
-- **processed_results**: AI处理结果（主查询源）
+- **news_results**: AI处理结果（主查询源）
   - 存储AI翻译、总结、分类后的增强数据
   - 管理处理状态（pending → processing → completed/failed）
   - **前端主要查询来源**，提供用户友好的展示数据
@@ -159,7 +159,7 @@ graph TB
                            ├─ search_type="instant": 即时搜索结果
                            └─ search_type="smart": 智能搜索聚合结果
                                     ↓
-                           instant_processed_results（统一AI处理表）
+                           instant_news_results（统一AI处理表）
                                     ↓
                            前端查询展示（主要来源）
 ```
@@ -183,7 +183,7 @@ instant_search_results（search_type="instant"）
     ↓
 AI服务异步处理
     ↓
-instant_processed_results
+instant_news_results
     ↓
 前端查询展示
 ```
@@ -204,7 +204,7 @@ instant_search_results（search_type="smart", 聚合结果）
     ↓
 AI服务异步处理
     ↓
-instant_processed_results
+instant_news_results
     ↓
 前端查询展示（combined或by_query模式）
 ```
@@ -214,7 +214,7 @@ instant_processed_results
 | 表名 | 职责 | search_type | 数据特性 |
 |-----|------|------------|---------|
 | `instant_search_results` | 统一原始数据存储 | instant/smart | 不可变、去重 |
-| `instant_processed_results` | 统一AI处理结果 | instant/smart | 状态管理、用户操作 |
+| `instant_news_results` | 统一AI处理结果 | instant/smart | 状态管理、用户操作 |
 
 **关键字段**:
 - `search_type`: 区分即时搜索（instant）和智能搜索（smart）
@@ -277,7 +277,7 @@ POST   /api/v1/scheduler/tasks/{id}/resume   # 恢复任务
 
 **定时搜索结果查询（v2.0.0）**:
 
-**主要查询接口（processed_results）**:
+**主要查询接口（news_results）**:
 ```
 GET    /api/v1/search-tasks/{task_id}/results      # 任务的AI处理结果（默认）
 GET    /api/v1/processed-results/{id}              # 处理结果详情
@@ -296,7 +296,7 @@ GET    /api/v1/search-results/{id}                 # 原始结果详情
 
 **即时+智能搜索结果查询（v2.1.0 统一）**:
 
-**主要查询接口（instant_processed_results）**:
+**主要查询接口（instant_news_results）**:
 ```
 GET    /api/v1/instant-search/{task_id}/results    # 即时搜索AI处理结果（默认）
 GET    /api/v1/smart-search/{task_id}/results      # 智能搜索AI处理结果（默认）
@@ -316,7 +316,7 @@ GET    /api/v1/instant-search-results/{id}                 # 原始结果详情
 ```
 
 **统一查询说明**:
-- 前端默认查询 `instant_processed_results`（AI增强数据）
+- 前端默认查询 `instant_news_results`（AI增强数据）
 - 支持 `view=raw` 参数查询原始数据
 - 智能搜索支持 `mode` 参数切换聚合/子查询视图
 

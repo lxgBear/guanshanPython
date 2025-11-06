@@ -336,15 +336,23 @@ class DataCurationService:
             )
 
         # v1.5.0: 统一雪花ID后，data_type直接决定集合
-        # 不再需要智能检测，所有ID都是雪花格式
+        # v2.0.2: 支持从 news_results 查找AI处理后的数据
         if data_type == "scheduled":
             collection = self.search_results_collection
+            # 首先在原始数据集合中查找
+            raw_data_doc = await collection.find_one({"_id": data_id})
+            # 如果未找到，尝试在AI处理结果集合中查找
+            if not raw_data_doc:
+                news_collection = self.db.news_results
+                raw_data_doc = await news_collection.find_one({"_id": data_id})
+                if raw_data_doc:
+                    logger.info(f"📰 在news_results中找到AI处理后的数据: {data_id}")
         elif data_type == "instant":
             collection = self.instant_search_results_collection
+            raw_data_doc = await collection.find_one({"_id": data_id})
         else:
             raise ValueError(f"Invalid data type: {data_type}")
 
-        raw_data_doc = await collection.find_one({"id": data_id})
         if not raw_data_doc:
             # v1.5.0+: 智能错误提示 - 检测UUID格式并提供帮助信息
             is_uuid_format = "-" in data_id
@@ -457,7 +465,7 @@ class DataCurationService:
             raise ValueError(f"Invalid data type: {data_type}")
 
         # 获取当前状态（用于日志）
-        raw_data_doc = await collection.find_one({"id": data_id})
+        raw_data_doc = await collection.find_one({"_id": data_id})
         current_status = raw_data_doc.get("status", "pending") if raw_data_doc else "unknown"
 
         # v1.5.1: 使用兼容的事务上下文（支持standalone和replica set）
@@ -557,7 +565,7 @@ class DataCurationService:
                 for data_id in scheduled_ids:
                     try:
                         raw_doc = await self.search_results_collection.find_one(
-                            {"id": data_id},
+                            {"_id": data_id},
                             session=session
                         )
 
@@ -582,7 +590,7 @@ class DataCurationService:
                 for data_id in instant_ids:
                     try:
                         raw_doc = await self.instant_search_results_collection.find_one(
-                            {"id": data_id},
+                            {"_id": data_id},
                             session=session
                         )
 
@@ -756,7 +764,7 @@ class DataCurationService:
             raise ValueError(f"Invalid data type: {data_type}")
 
         result = await collection.update_many(
-            {"id": {"$in": data_ids}},
+            {"_id": {"$in": data_ids}},
             {
                 "$set": {
                     "status": "archived",
@@ -801,7 +809,7 @@ class DataCurationService:
             raise ValueError(f"Invalid data type: {data_type}")
 
         result = await collection.update_many(
-            {"id": {"$in": data_ids}},
+            {"_id": {"$in": data_ids}},
             {
                 "$set": {
                     "status": "deleted",

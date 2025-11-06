@@ -1,13 +1,17 @@
 """AI处理结果数据仓储
 
 v2.0.0 职责分离架构：
-- 管理 processed_results 集合的所有数据访问操作
+- 管理 news_results 集合的所有数据访问操作
 - 支持状态管理和用户操作
 - 提供AI服务所需的查询和更新接口
 
 v2.0.1 字段扩展：
 - 支持原始字段（title, url, content等）
 - 支持AI服务新增字段（content_zh, cls_results等）
+
+v2.0.2 表名更新：
+- 集合名从 processed_results_new 更新为 news_results
+- 添加 news_results 嵌套字段和 content_cleaned 字段支持
 """
 
 from datetime import datetime
@@ -25,7 +29,7 @@ class ProcessedResultRepository:
     """AI处理结果仓储（v2.0.0 新增）"""
 
     def __init__(self):
-        self.collection_name = "processed_results"
+        self.collection_name = "news_results"
 
     async def _get_collection(self):
         """获取集合"""
@@ -86,11 +90,27 @@ class ProcessedResultRepository:
             "updated_at": result.updated_at,
             # 错误处理
             "processing_error": result.processing_error,
-            "retry_count": result.retry_count
+            "retry_count": result.retry_count,
+            # news_results嵌套字段（v2.0.2）
+            "news_results": result.news_results,
+            # 内容清理字段（v2.0.2）
+            "content_cleaned": result.content_cleaned
         }
 
     def _dict_to_result(self, data: Dict[str, Any]) -> ProcessedResult:
         """将字典转换为ProcessedResult实体（v2.0.1 扩展）"""
+        # 安全地解析 status 字段，防止数据损坏导致的错误
+        status_value = data.get("status", "pending")
+        try:
+            status = ProcessedStatus(status_value)
+        except ValueError:
+            # 如果 status 值无效，记录错误并使用默认值
+            logger.error(
+                f"⚠️  数据损坏：无效的 status 值 '{status_value}' (文档ID: {data.get('_id')}), "
+                f"已重置为 'pending'"
+            )
+            status = ProcessedStatus.PENDING
+
         return ProcessedResult(
             id=str(data.get("_id", "")),
             raw_result_id=str(data.get("raw_result_id", "")),
@@ -134,7 +154,7 @@ class ProcessedResultRepository:
             http_status_code=data.get("http_status_code"),
             is_test_data=data.get("is_test_data", False),
             # 用户操作
-            status=ProcessedStatus(data.get("status", "pending")),
+            status=status,
             user_rating=data.get("user_rating"),
             user_notes=data.get("user_notes"),
             # 时间戳
@@ -143,7 +163,11 @@ class ProcessedResultRepository:
             updated_at=data.get("updated_at", datetime.utcnow()),
             # 错误处理
             processing_error=data.get("processing_error"),
-            retry_count=data.get("retry_count", 0)
+            retry_count=data.get("retry_count", 0),
+            # news_results嵌套字段（v2.0.2）
+            news_results=data.get("news_results"),
+            # 内容清理字段（v2.0.2）
+            content_cleaned=data.get("content_cleaned")
         )
 
     # ==================== 创建和初始化 ====================

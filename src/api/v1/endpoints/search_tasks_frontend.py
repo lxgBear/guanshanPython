@@ -50,35 +50,91 @@ class SearchTaskCreate(BaseModel):
     """创建搜索任务请求"""
     name: str = Field(..., description="任务名称", min_length=1, max_length=100)
     description: Optional[str] = Field(None, description="任务描述", max_length=500)
-    query: str = Field(..., description="搜索关键词", min_length=1, max_length=200)
+    query: Optional[str] = Field(None, description="搜索关键词（SEARCH_KEYWORD模式必填）", min_length=1, max_length=200)
     target_website: Optional[str] = Field(None, description="主要目标网站（例如：www.gnlm.com.mm）", max_length=200)
-    crawl_url: Optional[str] = Field(None, description="定时爬取的URL（优先于query关键词搜索）", max_length=500)
-    search_config: Dict[str, Any] = Field(default_factory=dict, description="搜索配置")
+    crawl_url: Optional[str] = Field(None, description="爬取的URL（CRAWL_WEBSITE和SCRAPE_URL模式必填）", max_length=500)
+
+    # v2.0.0 新增：任务类型
+    task_type: Optional[str] = Field(
+        None,
+        description="任务类型：search_keyword（关键词搜索）、crawl_website（网站爬取）、scrape_url（单页面爬取）",
+        pattern="^(search_keyword|crawl_website|scrape_url)$"
+    )
+
+    # 配置字段
+    search_config: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="搜索配置（用于SEARCH_KEYWORD和SCRAPE_URL模式）"
+    )
+    crawl_config: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="网站爬取配置（用于CRAWL_WEBSITE模式）"
+    )
+
     schedule_interval: str = Field("DAILY", description="调度间隔")
     is_active: bool = Field(True, description="是否启用")
+    execute_immediately: bool = Field(True, description="创建后是否立即执行一次")
     
     class Config:
         json_schema_extra = {
-            "example": {
-                "name": "AI新闻监控",
-                "description": "监控人工智能领域最新进展",
-                "query": "人工智能 深度学习 最新进展",
-                "target_website": "www.36kr.com",
-                "search_config": {
-                    "limit": 20,
-                    "sources": ["web", "news"],
-                    "language": "zh",
-                    "include_domains": [
-                        "www.36kr.com",
-                        "tech.sina.com.cn",
-                        "www.ithome.com"
-                    ],
-                    "time_range": "day",
-                    "enable_ai_summary": True
+            "examples": [
+                {
+                    "name": "示例1：关键词搜索任务",
+                    "value": {
+                        "name": "AI新闻监控",
+                        "description": "监控人工智能领域最新进展",
+                        "query": "人工智能 深度学习 最新进展",
+                        "task_type": "search_keyword",
+                        "target_website": "www.36kr.com",
+                        "search_config": {
+                            "limit": 10,
+                            "language": "zh",
+                            "enable_detail_scrape": True,
+                            "max_concurrent_scrapes": 3,
+                            "include_domains": ["www.36kr.com", "tech.sina.com.cn"]
+                        },
+                        "schedule_interval": "DAILY",
+                        "is_active": True,
+                        "execute_immediately": True
+                    }
                 },
-                "schedule_interval": "DAILY",
-                "is_active": True
-            }
+                {
+                    "name": "示例2：网站爬取任务",
+                    "value": {
+                        "name": "技术博客归档",
+                        "description": "定期爬取技术博客的所有文章",
+                        "crawl_url": "https://example.com/blog",
+                        "task_type": "crawl_website",
+                        "crawl_config": {
+                            "limit": 100,
+                            "max_depth": 3,
+                            "include_paths": ["/blog/*", "/articles/*"],
+                            "exclude_paths": ["/admin/*"],
+                            "only_main_content": True
+                        },
+                        "schedule_interval": "WEEKLY",
+                        "is_active": True,
+                        "execute_immediately": False
+                    }
+                },
+                {
+                    "name": "示例3：单页面爬取任务",
+                    "value": {
+                        "name": "官网首页监控",
+                        "description": "定期监控官网首页内容变化",
+                        "crawl_url": "https://example.com",
+                        "task_type": "scrape_url",
+                        "search_config": {
+                            "only_main_content": True,
+                            "wait_for": 2000,
+                            "exclude_tags": ["nav", "footer", "header"]
+                        },
+                        "schedule_interval": "HOURLY",
+                        "is_active": True,
+                        "execute_immediately": True
+                    }
+                }
+            ]
         }
 
 
@@ -89,7 +145,16 @@ class SearchTaskUpdate(BaseModel):
     query: Optional[str] = Field(None, min_length=1, max_length=200)
     target_website: Optional[str] = Field(None, max_length=200)
     crawl_url: Optional[str] = Field(None, max_length=500)
+
+    # v2.0.0 新增：任务类型
+    task_type: Optional[str] = Field(
+        None,
+        description="任务类型：search_keyword、crawl_website、scrape_url",
+        pattern="^(search_keyword|crawl_website|scrape_url)$"
+    )
+
     search_config: Optional[Dict[str, Any]] = None
+    crawl_config: Optional[Dict[str, Any]] = None
     schedule_interval: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -104,10 +169,16 @@ class SearchTaskResponse(BaseModel):
     id: str = Field(..., description="任务ID")
     name: str = Field(..., description="任务名称")
     description: Optional[str] = Field(None, description="任务描述")
-    query: str = Field(..., description="搜索关键词")
+    query: Optional[str] = Field(None, description="搜索关键词")
     target_website: Optional[str] = Field(None, description="主要目标网站")
-    crawl_url: Optional[str] = Field(None, description="定时爬取的URL")
+    crawl_url: Optional[str] = Field(None, description="爬取的URL")
+
+    # v2.0.0 新增：任务类型
+    task_type: str = Field(..., description="任务类型：search_keyword、crawl_website、scrape_url")
+    task_mode: str = Field(..., description="任务模式描述（用于前端显示）")
+
     search_config: Dict[str, Any] = Field(..., description="搜索配置")
+    crawl_config: Optional[Dict[str, Any]] = Field(None, description="网站爬取配置")
     schedule_interval: str = Field(..., description="调度间隔值")
     schedule_display: str = Field(..., description="调度间隔显示名称")
     schedule_description: str = Field(..., description="调度间隔说明")
@@ -151,6 +222,16 @@ class ScheduleIntervalOption(BaseModel):
 def task_to_response(task: SearchTask) -> SearchTaskResponse:
     """将任务实体转换为响应模型"""
     interval = task.get_schedule_interval()
+    task_type = task.get_task_type()
+
+    # 获取任务模式描述
+    task_mode_map = {
+        "search_keyword": "关键词搜索 + 详情页爬取",
+        "crawl_website": "网站递归爬取",
+        "scrape_url": "单页面爬取"
+    }
+    task_mode = task_mode_map.get(task_type.value, task_type.value)
+
     return SearchTaskResponse(
         id=task.get_id_string(),
         name=task.name,
@@ -158,7 +239,10 @@ def task_to_response(task: SearchTask) -> SearchTaskResponse:
         query=task.query,
         target_website=task.target_website,
         crawl_url=task.crawl_url,
+        task_type=task_type.value,
+        task_mode=task_mode,
         search_config=task.search_config,
+        crawl_config=task.crawl_config if hasattr(task, 'crawl_config') else {},
         schedule_interval=task.schedule_interval,
         schedule_display=interval.display_name,
         schedule_description=interval.description,
@@ -221,10 +305,12 @@ async def create_search_task(task_data: SearchTaskCreate):
         task = SearchTask.create_with_secure_id(
             name=task_data.name,
             description=task_data.description,
-            query=task_data.query,
+            query=task_data.query or "",  # 允许为空（crawl/scrape模式不需要query）
             target_website=task_data.target_website,
             crawl_url=task_data.crawl_url,
-            search_config=task_data.search_config,
+            task_type=task_data.task_type,  # v2.0.0 新增
+            search_config=task_data.search_config or {},
+            crawl_config=task_data.crawl_config or {},  # v2.0.0 新增
             schedule_interval=task_data.schedule_interval,
             is_active=task_data.is_active,
             created_by="current_user",  # TODO: 从JWT token获取用户信息
@@ -239,6 +325,21 @@ async def create_search_task(task_data: SearchTaskCreate):
         await repo.create(task)
 
         logger.info(f"创建搜索任务: {task.name} (ID: {task.get_id_string()}, 目标网站: {task.target_website})")
+
+        # 首次立即执行（如果启用且 execute_immediately=True）
+        if task.is_active and task_data.execute_immediately:
+            try:
+                scheduler = await get_scheduler()
+                if scheduler.is_running():
+                    # 异步触发首次执行（不阻塞API响应）
+                    import asyncio
+                    asyncio.create_task(scheduler.execute_task_now(str(task.id)))
+                    logger.info(f"✅ 已触发首次立即执行: {task.name} (ID: {task.get_id_string()})")
+                else:
+                    logger.warning(f"⚠️ 调度器未运行，跳过首次执行: {task.name}")
+            except Exception as e:
+                # 首次执行失败不影响任务创建
+                logger.warning(f"⚠️ 触发首次执行失败（不影响任务创建）: {e}")
 
         return task_to_response(task)
 
@@ -342,6 +443,10 @@ async def update_search_task(task_id: str, task_data: SearchTaskUpdate):
     if task_data.crawl_url is not None:
         task.crawl_url = task_data.crawl_url
 
+    # v2.0.0 新增：任务类型
+    if task_data.task_type is not None:
+        task.task_type = task_data.task_type
+
     # 标记是否显式更新了 target_website
     target_website_explicitly_updated = False
 
@@ -355,6 +460,10 @@ async def update_search_task(task_id: str, task_data: SearchTaskUpdate):
         if not target_website_explicitly_updated:
             # 强制更新 target_website 为新的第一个域名
             task.target_website = task.extract_target_website()
+
+    # v2.0.0 新增：网站爬取配置
+    if task_data.crawl_config is not None:
+        task.crawl_config = task_data.crawl_config
 
     if task_data.schedule_interval is not None:
         try:

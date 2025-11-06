@@ -113,7 +113,7 @@ class ArchivedData:
             data_type="scheduled",
             title=search_result.title,
             url=search_result.url,
-            content=search_result.content or "",  # 完整内容
+            content=search_result.markdown_content or "",  # 完整内容
             snippet=search_result.snippet,
             published_date=search_result.published_date,
             markdown_content=getattr(search_result, 'markdown_content', None),
@@ -173,7 +173,7 @@ class ArchivedData:
             data_type="instant",
             title=instant_result.title,
             url=instant_result.url,
-            content=instant_result.content or "",  # 完整内容
+            content=instant_result.markdown_content or "",  # 完整内容
             snippet=instant_result.snippet,
             published_date=instant_result.published_date,
             markdown_content=instant_result.markdown_content,

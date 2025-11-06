@@ -100,7 +100,7 @@ async def test_single_field_copy():
         # 4. 清理测试数据
         db = await get_mongodb_database()
         await db['search_results'].delete_one({"_id": search_result.id})
-        await db['processed_results'].delete_one({"_id": processed_result.id})
+        await db['processed_results_new'].delete_one({"_id": processed_result.id})
         print("\n🗑️ 清理测试数据完成")
 
         print("\n✅ 测试 1 通过: create_pending_result() 原始字段复制正常")
@@ -173,7 +173,7 @@ async def test_bulk_field_copy():
         await db['search_results'].delete_many({
             "_id": {"$in": [r.id for r in search_results]}
         })
-        await db['processed_results'].delete_many({
+        await db['processed_results_new'].delete_many({
             "_id": {"$in": [r.id for r in processed_results]}
         })
         print("\n🗑️ 清理测试数据完成")
@@ -224,7 +224,7 @@ async def test_missing_original_data():
 
         # 清理测试数据
         db = await get_mongodb_database()
-        await db['processed_results'].delete_one({"_id": processed_result.id})
+        await db['processed_results_new'].delete_one({"_id": processed_result.id})
         print("\n🗑️ 清理测试数据完成")
 
         print("\n✅ 测试 3 通过: 容错处理正常")

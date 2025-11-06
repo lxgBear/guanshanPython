@@ -74,13 +74,12 @@ async def get_processed_result_repository():
 # ==========================================
 
 class SearchResultResponse(BaseModel):
-    """搜索结果响应（v2.0.1: 完整的原始+AI增强数据）"""
+    """搜索结果响应（v2.0.1: 原始数据 + 实际使用的AI字段）"""
     # ==================== 主键和关联 ====================
     id: str = Field(..., description="处理结果ID")
-    raw_result_id: str = Field(..., description="原始结果ID")
     task_id: str = Field(..., description="任务ID")
 
-    # ==================== 原始字段（v2.0.1 新增）====================
+    # ==================== 原始字段 ====================
     title: str = Field(..., description="原始标题")
     url: str = Field(..., description="原始URL")
     source_url: Optional[str] = Field(None, description="来源URL")
@@ -97,19 +96,13 @@ class SearchResultResponse(BaseModel):
     relevance_score: float = Field(0.0, description="相关性分数")
     search_position: int = Field(0, description="搜索位置")
 
-    # ==================== AI增强数据 ====================
+    # ==================== AI增强数据（实际使用的字段）====================
     # AI翻译和生成
     content_zh: Optional[str] = Field(None, description="AI翻译的中文内容")
     title_generated: Optional[str] = Field(None, description="AI生成的标题")
-    translated_title: Optional[str] = Field(None, description="翻译后的标题")
-    translated_content: Optional[str] = Field(None, description="翻译后的内容")
-    summary: Optional[str] = Field(None, description="AI生成的摘要")
-    key_points: List[str] = Field(default_factory=list, description="AI提取的关键点")
 
     # AI分类和分析
     cls_results: Optional[Dict[str, Any]] = Field(None, description="分类结果（大类、子目录）")
-    sentiment: Optional[str] = Field(None, description="情感分析")
-    categories: List[str] = Field(default_factory=list, description="AI分类标签")
 
     # AI处理的HTML
     html_ctx_llm: Optional[str] = Field(None, description="LLM处理后的HTML")
@@ -119,10 +112,10 @@ class SearchResultResponse(BaseModel):
     article_published_time: Optional[str] = Field(None, description="文章发布时间")
     article_tag: Optional[str] = Field(None, description="文章标签")
 
-    # ==================== AI处理元数据 ====================
-    ai_model: Optional[str] = Field(None, description="AI模型")
-    ai_processing_time_ms: int = Field(0, description="AI处理耗时（毫秒）")
-    ai_confidence_score: Optional[float] = Field(None, description="AI置信度")
+    # ==================== AI处理后的新闻结果（v2.0.2）====================
+    news_results: Optional[Dict[str, Any]] = Field(None, description="AI处理后的新闻结果（包含翻译标题、分类、媒体URL等）")
+
+    # ==================== 处理状态 ====================
     processing_status: str = Field("pending", description="处理状态（success/failed/pending）")
 
     # ==================== 用户操作 ====================
@@ -134,6 +127,18 @@ class SearchResultResponse(BaseModel):
     created_at: datetime = Field(..., description="创建时间")
     processed_at: Optional[datetime] = Field(None, description="AI处理完成时间")
     updated_at: datetime = Field(..., description="更新时间")
+
+    # ==================== 未使用字段（已移除）====================
+    # raw_result_id: 内部使用，前端不需要
+    # translated_title: 未实现
+    # translated_content: 未实现
+    # summary: 未实现
+    # key_points: 未实现
+    # sentiment: 未实现
+    # categories: 未实现
+    # ai_model: 未实现
+    # ai_processing_time_ms: 未实现
+    # ai_confidence_score: 未实现
 
 
 class SearchResultListResponse(BaseModel):
@@ -148,7 +153,7 @@ class SearchResultListResponse(BaseModel):
 
 
 class SearchResultStats(BaseModel):
-    """搜索结果统计（v2.0.0: 基于 processed_results）"""
+    """搜索结果统计（v2.0.0: 基于 processed_results_new）"""
     task_id: str = Field(..., description="任务ID")
     task_name: str = Field(..., description="任务名称")
     total_results: int = Field(..., description="结果总数")
@@ -176,13 +181,17 @@ class SearchResultSummary(BaseModel):
 # ==========================================
 
 def processed_result_to_response(result: ProcessedResult) -> SearchResultResponse:
-    """将AI处理结果实体转换为响应模型（v2.0.1: 完整字段映射）"""
+    """将AI处理结果实体转换为响应模型（v2.0.1: 仅映射实际使用的字段）"""
+    # 处理 language 字段（数据库中可能是数组，需要转换为字符串）
+    language_value = result.language
+    if isinstance(language_value, list):
+        language_value = language_value[0] if language_value else None
+
     return SearchResultResponse(
         # 主键和关联
         id=str(result.id),
-        raw_result_id=str(result.raw_result_id),
         task_id=str(result.task_id),
-        # 原始字段（v2.0.1）
+        # 原始字段
         title=result.title,
         url=result.url,
         source_url=result.source_url,
@@ -192,30 +201,23 @@ def processed_result_to_response(result: ProcessedResult) -> SearchResultRespons
         html_content=result.html_content,
         author=result.author,
         published_date=result.published_date,
-        language=result.language,
+        language=language_value,
         source=result.source,
         metadata=result.metadata,
         quality_score=result.quality_score,
         relevance_score=result.relevance_score,
         search_position=result.search_position,
-        # AI增强数据
+        # AI增强数据（实际使用的字段）
         content_zh=result.content_zh,
         title_generated=result.title_generated,
-        translated_title=result.translated_title,
-        translated_content=result.translated_content,
-        summary=result.summary,
-        key_points=result.key_points,
         cls_results=result.cls_results,
-        sentiment=result.sentiment,
-        categories=result.categories,
         html_ctx_llm=result.html_ctx_llm,
         html_ctx_regex=result.html_ctx_regex,
         article_published_time=result.article_published_time,
         article_tag=result.article_tag,
-        # AI处理元数据
-        ai_model=result.ai_model,
-        ai_processing_time_ms=result.ai_processing_time_ms,
-        ai_confidence_score=result.ai_confidence_score,
+        # AI处理后的新闻结果（v2.0.2）
+        news_results=result.news_results,
+        # 处理状态
         processing_status=result.processing_status,
         # 用户操作
         status=result.status.value,
@@ -274,7 +276,7 @@ async def get_task_results(
     sort_by: str = Query("created_at", description="排序字段: created_at, processed_at"),
     order: str = Query("desc", description="排序方向: asc, desc")
 ):
-    """获取指定任务的历史搜索结果 - v2.0.0: 从 processed_results 读取AI增强数据"""
+    """获取指定任务的历史搜索结果 - v2.0.0: 从 processed_results_new 读取AI增强数据"""
 
     # 验证任务存在
     task_name = await validate_task_exists(task_id)
@@ -290,7 +292,7 @@ async def get_task_results(
         except ValueError:
             raise HTTPException(400, f"无效的状态值: {status}")
 
-    # 从 processed_results 查询（带分页和状态筛选）
+    # 从 processed_results_new 查询（带分页和状态筛选）
     processed_results, total = await processed_repo.get_by_task(
         task_id=task_id,
         status=status_filter,
@@ -330,7 +332,7 @@ async def get_task_results(
     description="获取指定搜索任务的结果统计信息，包括AI处理状态分布、用户操作统计等。"
 )
 async def get_task_result_stats(task_id: str):
-    """获取任务搜索结果统计 - v2.0.0: 从 processed_results 统计AI处理状态"""
+    """获取任务搜索结果统计 - v2.0.0: 从 processed_results_new 统计AI处理状态"""
 
     # 验证任务存在
     task_name = await validate_task_exists(task_id)
@@ -351,7 +353,7 @@ async def get_task_result_stats(task_id: str):
     description="获取任务搜索结果的摘要信息，包括统计数据和最近AI处理完成的结果，适用于任务详情页面展示。"
 )
 async def get_task_result_summary(task_id: str):
-    """获取任务结果摘要 - v2.0.0: 从 processed_results 查询AI增强数据"""
+    """获取任务结果摘要 - v2.0.0: 从 processed_results_new 查询AI增强数据"""
 
     # 验证任务存在
     task_name = await validate_task_exists(task_id)
@@ -387,7 +389,7 @@ async def get_task_result_summary(task_id: str):
     description="获取指定搜索结果的详细信息，包括AI翻译内容、摘要、关键点、情感分析等完整元数据。"
 )
 async def get_search_result_detail(task_id: str, result_id: str):
-    """获取单个搜索结果详情 - v2.0.0: 从 processed_results 查询AI增强数据"""
+    """获取单个搜索结果详情 - v2.0.0: 从 processed_results_new 查询AI增强数据"""
 
     # 验证任务存在
     await validate_task_exists(task_id)

@@ -1,0 +1,210 @@
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#E3F2FD','secondaryColor':'#FFF3E0','tertiaryColor':'#F3E5F5'}}}%%
+
+graph TB
+    subgraph "数据源管理系统架构"
+        direction TB
+
+        subgraph "API层"
+            API["/api/v1/data-sources"]
+            API_ARCHIVE["/archived-data"]
+            API_STATS["/archived-data/stats"]
+        end
+
+        subgraph "服务层 Service"
+            DS_SERVICE[DataCurationService]
+            CONFIRM[confirm_data_source]
+            GET_ARCHIVE[get_archived_data]
+            DELETE[delete_data_source]
+        end
+
+        subgraph "仓储层 Repository"
+            DS_REPO[DataSourceRepository]
+            ARCHIVE_REPO[ArchivedDataRepository<br/>【新增】]
+        end
+
+        subgraph "MongoDB 数据库"
+            direction LR
+
+            subgraph "原始数据表"
+                SR[search_results<br/>定时搜索结果]
+                ISR[instant_search_results<br/>即时搜索结果]
+            end
+
+            subgraph "数据源表"
+                DS[data_sources<br/>数据源主表]
+            end
+
+            subgraph "存档表【新增】"
+                ARCHIVE[(data_source_archived_data<br/>完整数据存档<br/>独立生命周期)]
+            end
+        end
+
+        API --> DS_SERVICE
+        API_ARCHIVE --> DS_SERVICE
+        API_STATS --> DS_SERVICE
+
+        DS_SERVICE --> DS_REPO
+        DS_SERVICE --> ARCHIVE_REPO
+
+        CONFIRM --> |"1.状态更新"| DS
+        CONFIRM --> |"2.状态同步"| SR
+        CONFIRM --> |"2.状态同步"| ISR
+        CONFIRM --> |"3.数据存档【新】"| ARCHIVE
+
+        GET_ARCHIVE --> ARCHIVE
+        DELETE --> ARCHIVE
+
+        DS_REPO --> DS
+        ARCHIVE_REPO --> ARCHIVE
+    end
+
+    classDef newComponent fill:#4CAF50,stroke:#2E7D32,stroke-width:3px,color:#fff
+    classDef dataTable fill:#2196F3,stroke:#1565C0,stroke-width:2px,color:#fff
+    classDef service fill:#FF9800,stroke:#E65100,stroke-width:2px,color:#fff
+
+    class ARCHIVE_REPO,ARCHIVE,API_ARCHIVE,API_STATS newComponent
+    class SR,ISR,DS,ARCHIVE dataTable
+    class DS_SERVICE,CONFIRM,GET_ARCHIVE,DELETE service
+```
+
+```mermaid
+%%{init: {'theme':'base'}}%%
+
+sequenceDiagram
+    autonumber
+    participant User as 用户
+    participant API as API层
+    participant Service as DataCurationService
+    participant Transaction as MongoDB事务
+    participant DS_Repo as DataSourceRepo
+    participant Archive_Repo as ArchivedDataRepo【新】
+    participant DS_Table as data_sources表
+    participant SR_Table as search_results表
+    participant Archive_Table as archived_data表【新】
+
+    User->>API: POST /data-sources/{id}/confirm
+    API->>Service: confirm_data_source(id, user)
+
+    Service->>Transaction: 开始事务
+    activate Transaction
+
+    Note over Transaction: 步骤1: 更新数据源状态
+    Service->>DS_Repo: update(status=CONFIRMED)
+    DS_Repo->>DS_Table: UPDATE status='confirmed'
+
+    Note over Transaction: 步骤2: 同步原始数据状态
+    Service->>SR_Table: UPDATE status='completed'
+
+    Note over Transaction: 步骤3: 存档原始数据【新增逻辑】
+    Service->>SR_Table: SELECT * WHERE id IN (...)
+    SR_Table-->>Service: 返回完整数据
+
+    loop 遍历每条原始数据
+        Service->>Service: 转换为ArchivedData实体
+        Service->>Archive_Repo: create(archived_data)
+        Archive_Repo->>Archive_Table: INSERT完整数据快照
+    end
+
+    Transaction->>Transaction: 提交事务
+    deactivate Transaction
+
+    Service-->>API: 返回成功(存档统计)
+    API-->>User: 200 OK
+
+    Note over User,Archive_Table: ✅ 确认完成：状态更新 + 数据存档（原子操作）
+```
+
+```mermaid
+%%{init: {'theme':'base'}}%%
+
+erDiagram
+    DATA_SOURCE ||--o{ ARCHIVED_DATA : "1:N 存档关系"
+    DATA_SOURCE ||--o{ RAW_DATA_REFERENCE : "1:N 引用关系"
+
+    DATA_SOURCE {
+        string id PK "雪花算法ID"
+        string title "标题"
+        string status "draft/confirmed"
+        array raw_data_refs "原始数据引用列表"
+        string edited_content "编辑内容"
+        datetime confirmed_at "确认时间"
+    }
+
+    RAW_DATA_REFERENCE {
+        string data_id "原始数据ID"
+        string data_type "scheduled/instant"
+        string title "标题快照"
+        string url "URL快照"
+        string snippet "摘要快照(200字符)"
+        datetime added_at "添加时间"
+    }
+
+    ARCHIVED_DATA {
+        string id PK "存档ID"
+        string data_source_id FK "数据源ID"
+        string original_data_id "原始数据ID"
+        string data_type "数据类型"
+        string title "完整标题"
+        string url "完整URL"
+        text content "完整内容【关键】"
+        string snippet "完整摘要"
+        json metadata "完整元数据"
+        datetime archived_at "存档时间"
+        string archived_by "存档者"
+        string archived_reason "confirm/manual"
+    }
+
+    SEARCH_RESULT {
+        string id PK "原始数据ID"
+        string status "pending/processing/completed"
+        text content "完整内容"
+        datetime created_at "创建时间"
+    }
+
+    INSTANT_SEARCH_RESULT {
+        string id PK "原始数据ID"
+        string status "pending/processing/completed"
+        text content "完整内容"
+        datetime created_at "创建时间"
+    }
+
+    ARCHIVED_DATA }o--|| SEARCH_RESULT : "存档来源(scheduled)"
+    ARCHIVED_DATA }o--|| INSTANT_SEARCH_RESULT : "存档来源(instant)"
+```
+
+```mermaid
+%%{init: {'theme':'base'}}%%
+
+stateDiagram-v2
+    [*] --> DRAFT: 创建数据源
+
+    DRAFT --> DRAFT: 添加/移除原始数据<br/>编辑内容
+
+    DRAFT --> CONFIRMED: confirm操作<br/>【触发存档】
+
+    state CONFIRMED {
+        [*] --> 状态更新
+        状态更新 --> 数据存档
+        数据存档 --> 完成
+        完成 --> [*]
+
+        note right of 数据存档
+            【新增逻辑】
+            1. 查询原始数据
+            2. 完整复制到存档表
+            3. 独立生命周期
+        end note
+    }
+
+    CONFIRMED --> DRAFT: revert_to_draft<br/>【保留存档】
+
+    DRAFT --> [*]: delete<br/>【无存档删除】
+    CONFIRMED --> [*]: delete<br/>【级联删除存档】
+
+    note right of CONFIRMED
+        ✅ 存档数据独立存在
+        ✅ 原始数据可删除
+        ✅ 数据源仍可访问完整内容
+    end note
+```
