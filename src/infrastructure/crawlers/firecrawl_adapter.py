@@ -7,7 +7,8 @@ import hashlib
 from typing import Optional, Dict, Any, List
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from firecrawl import FirecrawlApp
+from firecrawl import Firecrawl
+from firecrawl.v2.types import ScrapeOptions
 
 from src.core.domain.interfaces.crawler_interface import (
     CrawlerInterface,
@@ -37,11 +38,12 @@ class FirecrawlAdapter(CrawlerInterface):
         if not self.api_key:
             raise ValueError("Firecrawl API密钥未配置")
 
-        self.client = FirecrawlApp(api_key=self.api_key)
+        # v4.6.0: 使用 Firecrawl (v2 API)
+        self.client = Firecrawl(api_key=self.api_key)
         self.timeout = settings.FIRECRAWL_TIMEOUT
         self.max_retries = settings.FIRECRAWL_MAX_RETRIES
-        
-        logger.info("Firecrawl适配器初始化成功")
+
+        logger.info("Firecrawl v2 适配器初始化成功")
     
     @retry(
         stop=stop_after_attempt(3),
@@ -55,6 +57,11 @@ class FirecrawlAdapter(CrawlerInterface):
         Args:
             url: 目标URL
             **options: 爬取选项
+                - wait_for: 等待时间（毫秒），默认 1000
+                - include_tags: 要包含的 HTML 标签列表
+                - exclude_tags: 要排除的 HTML 标签列表，默认 None（不排除）
+                - only_main_content: 只提取主要内容，默认 False（获取完整 HTML）
+                - timeout: 超时时间（秒）
 
         Returns:
             CrawlResult: 爬取结果
@@ -62,19 +69,37 @@ class FirecrawlAdapter(CrawlerInterface):
         try:
             logger.info(f"开始爬取URL: {url}")
 
-            # 构建Firecrawl参数（FirecrawlApp.scrape_url使用params字典）
-            params = {
-                'formats': ['markdown', 'html']
-            }
+            # Firecrawl v2 API: 使用命名参数
+            formats = options.get('formats', ['markdown', 'html'])
+            only_main_content = options.get('only_main_content', False)  # 默认 False 获取完整 HTML
+            wait_for = options.get('wait_for', 1000)
+            include_tags = options.get('include_tags')
+            exclude_tags = options.get('exclude_tags')
+            timeout = options.get('timeout', self.timeout)
 
-            # 执行爬取（FirecrawlApp.scrape_url是同步方法，使用to_thread包装）
-            result = await asyncio.wait_for(
-                asyncio.to_thread(self.client.scrape_url, url, params),
-                timeout=self.timeout
+            logger.info(f"爬取参数: formats={formats}, onlyMainContent={only_main_content}, waitFor={wait_for}ms")
+
+            # v4.6.0: 使用 v2 API 的 scrape() 方法（同步）
+            result = await asyncio.to_thread(
+                self.client.scrape,
+                url,
+                formats=formats,
+                only_main_content=only_main_content,
+                wait_for=wait_for,
+                include_tags=include_tags,
+                exclude_tags=exclude_tags,
+                timeout=timeout
             )
 
-            # 处理结果
-            crawl_result = self._process_scrape_result(url, result)
+            # 处理结果（v2 返回 Document 对象）
+            crawl_result = CrawlResult(
+                url=url,
+                content=getattr(result, 'content', '') or '',
+                markdown=getattr(result, 'markdown', None),
+                html=getattr(result, 'html', None),
+                metadata=getattr(result, 'metadata', {}),
+                screenshot=getattr(result, 'screenshot', None)
+            )
 
             logger.info(f"成功爬取URL: {url}")
             return crawl_result
@@ -89,43 +114,80 @@ class FirecrawlAdapter(CrawlerInterface):
     async def crawl(self, url: str, limit: int = 10, **options) -> List[CrawlResult]:
         """
         爬取整个网站
-        
+
         Args:
             url: 起始URL
             limit: 最大页面数
             **options: 爬取选项
-        
+                - prompt: 自然语言描述爬取意图（v2 API新增）
+                - max_depth: 最大爬取深度
+                - include_paths: 包含的URL路径模式
+                - exclude_paths: 排除的URL路径模式
+                - only_main_content: 只提取主要内容，默认 False（获取完整 HTML）
+                - wait_for: 等待时间（毫秒）
+                - exclude_tags: 排除的HTML标签，默认 None（不排除）
+
         Returns:
             List[CrawlResult]: 爬取结果列表
         """
         try:
             logger.info(f"开始爬取网站: {url}, 限制: {limit}页")
-            
-            # 构建爬取选项
-            crawl_options = {
-                'limit': limit,
-                'maxDepth': options.get('max_depth', 3),
-                'includePaths': options.get('include_paths', []),
-                'excludePaths': options.get('exclude_paths', []),
-                'allowBackwardLinks': options.get('allow_backward_links', False)
+
+            # Firecrawl v2 API: 使用命名参数（不再使用 params 字典）
+            max_depth = options.get('max_depth', 3)
+            include_paths = options.get('include_paths', [])
+            exclude_paths = options.get('exclude_paths', [])
+            prompt = options.get('prompt')  # v2 API 新增: 自然语言描述
+
+            # v2 API: 构建 scrape_options
+            scrape_options = ScrapeOptions(
+                formats=['markdown', 'html'],  # 格式列表
+                only_main_content=options.get('only_main_content', False),  # 默认 False 获取完整 HTML
+                wait_for=options.get('wait_for', 1000),
+                exclude_tags=options.get('exclude_tags')  # 默认 None，不排除任何标签
+            )
+
+            if prompt:
+                logger.info(f"🤖 使用 prompt 参数: {prompt}")
+            logger.info(f"Firecrawl v2 爬取参数: limit={limit}, max_discovery_depth={max_depth}")
+
+            # v4.6.0: 使用 v2 API 的 crawl() 方法（同步，返回 CrawlJob）
+            # timeout=None 表示永不超时,让爬取任务完整执行
+            crawl_params = {
+                "url": url,
+                "limit": limit,
+                "max_discovery_depth": max_depth,
+                "include_paths": include_paths,
+                "exclude_paths": exclude_paths,
+                "scrape_options": scrape_options,
+                "poll_interval": 2,
+                "timeout": None  # 永不超时
             }
-            
-            # 启动爬取任务
-            job = await self.client.crawl(url, **crawl_options)
-            
-            # 处理结果
+
+            # 如果有 prompt，添加到参数中
+            if prompt:
+                crawl_params["prompt"] = prompt
+
+            job = await asyncio.to_thread(
+                self.client.crawl,
+                **crawl_params
+            )
+
+            logger.info(f"Firecrawl v2 crawl 完成，job 类型: {type(job)}")
+
+            # 处理 CrawlJob 结果
             results = []
-            if job.get('success'):
-                for page_data in job.get('data', []):
+            if hasattr(job, 'data') and job.data:
+                for document in job.data:
                     result = CrawlResult(
-                        url=page_data.get('url', ''),
-                        content=page_data.get('content', ''),
-                        markdown=page_data.get('markdown'),
-                        html=page_data.get('html'),
-                        metadata=page_data.get('metadata', {})
+                        url=getattr(document, 'url', '') or '',
+                        content=getattr(document, 'content', '') or '',
+                        markdown=getattr(document, 'markdown', None),
+                        html=getattr(document, 'html', None),
+                        metadata=getattr(document, 'metadata', {})
                     )
                     results.append(result)
-            
+
             logger.info(f"成功爬取网站: {url}, 获得 {len(results)} 页")
             return results
             
@@ -205,45 +267,40 @@ class FirecrawlAdapter(CrawlerInterface):
         try:
             logger.info(f"搜索查询: {query}, 期望限制: {limit}")
 
-            # 搜索API通常需要更长的超时时间（60秒）
-            search_timeout = min(self.timeout * 2, 60)
-
-            # 构建搜索参数（Firecrawl API v2要求）
-            search_params = {
-                'limit': limit,
-                'scrapeOptions': {
-                    'formats': ['markdown', 'html']
-                }
-            }
-
-            logger.info(f"Firecrawl搜索参数: {search_params}")
-
-            # Firecrawl的搜索功能（同步方法，需要包装为异步）
-            result = await asyncio.wait_for(
-                asyncio.to_thread(self.client.search, query, search_params),
-                timeout=search_timeout
+            # v2 API: 构建 scrape_options
+            scrape_options = ScrapeOptions(
+                formats=['markdown', 'html']
             )
 
-            # 处理搜索结果
-            results = []
-            items = result.get('data', []) if isinstance(result, dict) else result
+            logger.info(f"Firecrawl v2 搜索参数: limit={limit}")
 
-            # 限制结果数量
-            for item in items[:limit]:
-                crawl_result = CrawlResult(
-                    url=item.get('url', ''),
-                    content=item.get('content', item.get('markdown', '')),
-                    markdown=item.get('markdown'),
-                    html=item.get('html'),
-                    metadata=item.get('metadata', {})
-                )
-                results.append(crawl_result)
+            # v4.6.0: 使用 v2 API 的 search() 方法（返回 SearchData）
+            search_data = await asyncio.to_thread(
+                self.client.search,
+                query,
+                limit=limit,
+                scrape_options=scrape_options,
+                timeout=self.timeout
+            )
+
+            # 处理 SearchData 结果
+            results = []
+            if hasattr(search_data, 'data') and search_data.data:
+                for document in search_data.data[:limit]:
+                    crawl_result = CrawlResult(
+                        url=getattr(document, 'url', '') or '',
+                        content=getattr(document, 'content', '') or getattr(document, 'markdown', '') or '',
+                        markdown=getattr(document, 'markdown', None),
+                        html=getattr(document, 'html', None),
+                        metadata=getattr(document, 'metadata', {})
+                    )
+                    results.append(crawl_result)
 
             logger.info(f"搜索完成: {query}, 获得 {len(results)} 个结果")
             return results
 
         except asyncio.TimeoutError:
-            error_msg = f"搜索超时 (超过{search_timeout}秒): {query}"
+            error_msg = f"搜索超时 (超过{self.timeout}秒): {query}"
             logger.error(error_msg)
             raise CrawlException(error_msg)
         except Exception as e:

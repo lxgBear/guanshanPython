@@ -11,6 +11,7 @@ from src.api.v1.endpoints import instant_search
 from src.api.v1.endpoints import smart_search
 from src.api.v1.endpoints import summary_report_management
 from src.api.v1.endpoints import data_source_management
+from src.api.v1.endpoints import firecrawl_utils
 
 # 创建主路由器
 api_router = APIRouter()
@@ -66,6 +67,12 @@ api_router.include_router(
 api_router.include_router(
     data_source_management.router,
     tags=["📦 数据源管理"]
+)
+
+# Firecrawl 工具（积分估算和定价信息）
+api_router.include_router(
+    firecrawl_utils.router,
+    tags=["💰 Firecrawl 工具"]
 )
 
 # ==========================================

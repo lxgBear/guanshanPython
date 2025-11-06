@@ -15,6 +15,13 @@ from typing import Optional, Dict, Any, List
 from src.infrastructure.id_generator import generate_string_id
 
 
+class TaskType(Enum):
+    """任务类型枚举"""
+    SEARCH_KEYWORD = "search_keyword"  # 关键词搜索模式（Search API + Scrape API 详情页）
+    CRAWL_WEBSITE = "crawl_website"    # 网站爬取模式（Crawl API 递归爬取整个网站）
+    SCRAPE_URL = "scrape_url"          # 单页面爬取模式（Scrape API 爬取单个页面）
+
+
 class TaskStatus(Enum):
     """任务状态枚举"""
     ACTIVE = "active"       # 活跃
@@ -72,15 +79,28 @@ class SearchTask:
     - ✅ 统一使用雪花算法ID（移除UUID）
     - ✅ 支持高并发和分布式环境
     - ✅ 全局唯一且不可预测
+
+    v2.0.0 任务类型改进：
+    - ✅ 添加 task_type 字段区分任务类型
+    - ✅ 支持三种模式：关键词搜索、网站爬取、单页面爬取
+    - ✅ 添加 crawl_config 支持 Crawl API 配置
     """
     # 主键（雪花算法ID，全局唯一）
     id: str = field(default_factory=_generate_secure_id)
     name: str = ""
     description: Optional[str] = None
-    query: str = ""  # 搜索关键词
+
+    # 任务类型和目标
+    task_type: str = "search_keyword"  # 任务类型：search_keyword, crawl_website, scrape_url
+    query: str = ""  # 搜索关键词（SEARCH_KEYWORD 模式）
+    crawl_url: Optional[str] = None  # 爬取URL（CRAWL_WEBSITE 和 SCRAPE_URL 模式）
     target_website: Optional[str] = None  # 主要目标网站（用于前端展示，例如：www.gnlm.com.mm）
-    crawl_url: Optional[str] = None  # 定时爬取的URL（优先于query关键词搜索，使用Firecrawl Scrape API）
+
+    # 配置
     search_config: Dict[str, Any] = field(default_factory=dict)  # 搜索配置（JSON）
+    crawl_config: Dict[str, Any] = field(default_factory=dict)  # 爬取配置（JSON，用于 CRAWL_WEBSITE 模式）
+
+    # 调度配置
     schedule_interval: str = "DAILY"  # 调度间隔枚举值
     is_active: bool = True  # 是否启用
     status: TaskStatus = TaskStatus.ACTIVE
@@ -98,23 +118,61 @@ class SearchTask:
     failure_count: int = 0    # 失败次数
     total_results: int = 0    # 总结果数
     total_credits_used: int = 0  # 总消耗积分
+
+    # 错误信息（v2.0.1 新增）
+    last_error: Optional[str] = None  # 最后一次执行的错误信息
+    last_error_time: Optional[datetime] = None  # 最后一次错误发生时间
     
+    def get_task_type(self) -> TaskType:
+        """获取任务类型枚举"""
+        try:
+            return TaskType(self.task_type)
+        except ValueError:
+            # 默认返回关键词搜索模式
+            return TaskType.SEARCH_KEYWORD
+
+    def is_search_keyword_mode(self) -> bool:
+        """判断是否为关键词搜索模式"""
+        return self.get_task_type() == TaskType.SEARCH_KEYWORD
+
+    def is_crawl_website_mode(self) -> bool:
+        """判断是否为网站爬取模式"""
+        return self.get_task_type() == TaskType.CRAWL_WEBSITE
+
+    def is_scrape_url_mode(self) -> bool:
+        """判断是否为单页面爬取模式"""
+        return self.get_task_type() == TaskType.SCRAPE_URL
+
     def get_schedule_interval(self) -> ScheduleInterval:
         """获取调度间隔枚举"""
         return ScheduleInterval.from_value(self.schedule_interval)
-    
+
     def update_status(self, new_status: TaskStatus) -> None:
         """更新任务状态"""
         self.status = new_status
         self.updated_at = datetime.utcnow()
     
-    def record_execution(self, success: bool, results_count: int = 0, credits_used: int = 0) -> None:
-        """记录执行结果"""
+    def record_execution(self, success: bool, results_count: int = 0, credits_used: int = 0, error_message: Optional[str] = None) -> None:
+        """记录执行结果
+
+        Args:
+            success: 是否执行成功
+            results_count: 结果数量
+            credits_used: 消耗的积分
+            error_message: 错误信息（仅在失败时提供）
+        """
         self.execution_count += 1
         if success:
             self.success_count += 1
+            # 成功时清除错误信息
+            self.last_error = None
+            self.last_error_time = None
         else:
             self.failure_count += 1
+            # 失败时记录错误信息
+            if error_message:
+                self.last_error = error_message
+                self.last_error_time = datetime.utcnow()
         self.total_results += results_count
         self.total_credits_used += credits_used
         self.last_executed_at = datetime.utcnow()
@@ -141,6 +199,10 @@ class SearchTask:
         Returns:
             主要目标网站域名，如果没有配置则返回 None
         """
+        # 防御性编程：确保 search_config 是字典类型
+        if not isinstance(self.search_config, dict):
+            return None
+
         include_domains = self.search_config.get('include_domains', [])
         if include_domains and len(include_domains) > 0:
             # 返回第一个域名作为主要目标
@@ -196,10 +258,12 @@ class SearchTask:
             id=_generate_secure_id(),
             name=task.name,
             description=task.description,
+            task_type=getattr(task, 'task_type', 'search_keyword'),  # 兼容旧数据
             query=task.query,
-            target_website=task.target_website,
             crawl_url=task.crawl_url,
+            target_website=task.target_website,
             search_config=task.search_config.copy(),
+            crawl_config=getattr(task, 'crawl_config', {}).copy() if hasattr(task, 'crawl_config') else {},
             schedule_interval=task.schedule_interval,
             is_active=task.is_active,
             status=task.status,

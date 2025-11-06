@@ -1,6 +1,6 @@
 # 关山智能搜索系统 - 文档中心
 
-**版本**: v1.5.2 | **最后更新**: 2025-10-31
+**版本**: v2.0.2 | **最后更新**: 2025-11-05
 
 ---
 
@@ -11,7 +11,7 @@
 | 文档 | 说明 | 适用对象 |
 |------|------|---------|
 | [完整启动指南](../STARTUP_GUIDE.md) | 统一的项目启动和配置指南 | 所有用户 |
-| [API使用指南](API_GUIDE.md) | RESTful API完整参考 | 前端/集成 |
+| [API使用指南 V2](API_USAGE_GUIDE_V2.md) | RESTful API完整参考（最新版本）| 前端/集成 |
 | [系统架构](SYSTEM_ARCHITECTURE.md) | 技术架构和设计模式 | 架构师/后端 |
 
 ### 核心功能
@@ -41,10 +41,10 @@ curl http://localhost:8000/api/v1/scheduler/status
 
 #### 搜索结果处理系统 (v2.0.0) 🎯 最新
 
-**文档**: [职责分离架构设计](../claudedocs/SEARCH_RESULTS_SEPARATION_ARCHITECTURE.md)
+**文档**: [职责分离架构设计](SEARCH_RESULTS_SEPARATION_ARCHITECTURE.md)
 
 **核心特性**:
-- **双表架构**: `search_results`（原始数据）+ `processed_results`（AI处理结果）
+- **双表架构**: `search_results`（原始数据）+ `news_results`（AI处理结果）
 - **职责分离**: 原始存储与AI处理完全解耦
 - **异步处理**: AI服务独立处理，不阻塞定时任务
 - **智能增强**: AI翻译、总结、分类、情感分析
@@ -52,27 +52,27 @@ curl http://localhost:8000/api/v1/scheduler/status
 - **用户操作**: 留存、删除、评分、备注功能
 
 **查询优先级**:
-1. **主要查询**: `/api/v1/search-tasks/{id}/results` → 返回 `processed_results`（AI增强数据）
+1. **主要查询**: `/api/v1/search-tasks/{id}/results` → 返回 `news_results`（AI增强数据）
 2. **备用查询**: `/api/v1/search-results/tasks/{id}` → 返回 `search_results`（原始数据）
 
 **数据流程**:
 ```
 定时任务 → Firecrawl → search_results（只写一次）
-                    → create pending in processed_results
+                    → create pending in news_results
                     → AI异步处理
-                    → processed_results（完成）
+                    → news_results（完成）
                     → 前端展示
 ```
 
 **详细文档**:
-- [完整架构设计](../claudedocs/SEARCH_RESULTS_SEPARATION_ARCHITECTURE.md) - 54KB完整方案
-- [UML图表和数据流](../claudedocs/diagrams/) - 4个mermaid图表
-- [实施指南](../claudedocs/SEARCH_RESULTS_IMPLEMENTATION_GUIDE.md) - 9天实施计划
-- [数据库集合指南](../claudedocs/DATABASE_COLLECTIONS_GUIDE.md) - v2.1.0更新
+- [完整架构设计](SEARCH_RESULTS_SEPARATION_ARCHITECTURE.md) - 54KB完整方案
+- [UML图表和数据流](diagrams/) - 4个mermaid图表
+- [实施指南](SEARCH_RESULTS_IMPLEMENTATION_GUIDE.md) - 9天实施计划
+- [数据库集合指南](DATABASE_COLLECTIONS_GUIDE.md) - v2.1.0更新
 
 #### 搜索API
 
-**文档**: [API_GUIDE.md](API_GUIDE.md)
+**文档**: [API_USAGE_GUIDE_V2.md](API_USAGE_GUIDE.md)
 
 **内容**:
 - 搜索任务管理
@@ -147,24 +147,38 @@ python scripts/run_migrations.py status
 mongodump --uri="mongodb://localhost:27017/intelligent_system"
 ```
 
-#### Firecrawl集成
+#### Firecrawl集成 🎯 最新
 
-**文档**: [FIRECRAWL_GUIDE.md](FIRECRAWL_GUIDE.md)
+**核心文档**:
+- [Firecrawl架构 V2](FIRECRAWL_ARCHITECTURE_V2.md) - 模块化架构设计（完整指南）
+- [搜索质量优化](SEARCH_QUALITY_OPTIMIZATION.md) - 首页过滤和内容验证（最新）
+- [Firecrawl增强功能](FIRECRAWL_ENHANCED_FEATURES.md) - 高级功能和配置
+- [Firecrawl基础指南](FIRECRAWL_GUIDE.md) - 快速入门
 
-**内容**:
-- API密钥获取和配置
-- Search API (关键词搜索)
-- Scrape API (URL爬取)
-- 搜索配置参数
-- 测试模式使用
+**v2.0 新特性**:
+- ✅ 模块化执行器架构（SearchExecutor / CrawlExecutor / ScrapeExecutor）
+- ✅ 四层首页内容防护（URL过滤 + 配置优化 + 内容验证 + 智能重试）
+- ✅ 关键词搜索质量大幅提升（首页内容比例从40-60%降至5-15%）
+- ✅ 支持三种任务类型（search_keyword / crawl_website / scrape_url）
 
 **配置示例**:
 ```python
+# 关键词搜索（带质量优化）
 search_config = {
     "limit": 10,
-    "time_range": "month",
     "language": "zh",
-    "include_domains": ["nytimes.com"]
+    "enable_detail_scrape": true,
+    "max_concurrent_scrapes": 2,
+    "wait_for": 3000,
+    "scrape_delay": 2.0
+}
+
+# 网站爬取
+crawl_config = {
+    "limit": 100,
+    "max_depth": 3,
+    "include_paths": ["/article/", "/news/"],
+    "only_main_content": true
 }
 ```
 
@@ -210,7 +224,7 @@ src/
 ├── api/v1/endpoints/         # API端点
 │   ├── search_task_management.py
 │   ├── scheduler_management.py
-│   └── processed_results.py  # v2.0.0新增：AI处理结果API
+│   └── news_results.py  # v2.0.0新增：AI处理结果API
 ├── core/domain/entities/     # 领域实体
 │   ├── search_task.py
 │   ├── search_result.py      # v2.0.0简化：移除状态管理
@@ -233,7 +247,7 @@ src/
 **最近更新**:
 - v2.0.0 (2025-11-03): 🎯 **搜索结果职责分离架构** - 双表设计（设计完成，待实施）
   - search_results: 纯原始数据存储（不可变）
-  - processed_results: AI处理结果（主查询源）
+  - news_results: AI处理结果（主查询源）
   - 完整架构文档、UML图表、实施指南
 - v1.5.2 (2025-10-31): 状态系统简化（5状态→3状态）
 - v1.5.0 (2025-10-31): ID系统统一（UUID→雪花ID）+ 历史数据迁移
@@ -314,35 +328,61 @@ curl "http://localhost:8000/api/v1/search-tasks/{id}/results?page=1&page_size=10
 
 ```
 docs/
-├── README.md                              # 本文档(索引)
-├── SYSTEM_ARCHITECTURE.md                 # 系统架构
-├── DATA_SOURCE_CURATION_BACKEND.md        # 数据源管理后端（完整实现指南）
-├── ARCHIVED_DATA_GUIDE.md                 # 数据源存档系统（完整技术方案）
-├── ID_SYSTEM_V1.5.0.md                    # ID系统统一（v1.5.0完整报告）
-├── DOCUMENTATION_CONSOLIDATION_PLAN.md    # 文档整理计划
-├── API_GUIDE.md                           # API完整参考
-├── SCHEDULER_GUIDE.md                     # 调度器指南
-├── MONGODB_GUIDE.md                       # MongoDB配置
-├── FIRECRAWL_GUIDE.md                     # Firecrawl集成
-├── RETRY_MECHANISM.md                     # 重试机制
-├── VPN_DATABASE_GUIDE.md                  # VPN数据库连接
-├── BACKEND_DEVELOPMENT.md                 # 后端开发
-├── FEATURE_TRACKER.md                     # 功能追踪
-├── FUTURE_ROADMAP.md                      # 发展路线
-├── VERSION_MANAGEMENT.md                  # 版本管理
-├── SUMMARY_REPORT_SYSTEM_PRD.md           # 总结报告系统PRD
-├── diagrams/                              # 架构图目录
-├── reports/                               # 报告目录
-│   ├── fixes/                             # 问题修复报告
-│   └── tests/                             # 测试报告
-└── archive/                               # 历史文档归档
-    ├── v1.4.1/                            # v1.4.1版本历史文档
-    │   └── BUG_FIX_EMPTY_DATASOURCE_CONFIRM.md
-    ├── v1.4.2/                            # v1.4.2版本历史文档
-    │   └── BUG_FIX_RAW_DATA_TYPE_DETECTION.md
-    ├── analysis/                          # 一次性分析报告
-    │   └── MODULAR_DEVELOPMENT_COMPLIANCE.md
-    └── startup/                           # 旧版启动文档
+├── README.md                                      # 本文档(索引)
+├── SYSTEM_ARCHITECTURE.md                         # 系统架构
+│
+├── Firecrawl集成 (v2.0) 🎯
+│   ├── FIRECRAWL_ARCHITECTURE_V2.md               # 模块化架构设计
+│   ├── SEARCH_QUALITY_OPTIMIZATION.md             # 首页过滤和质量优化
+│   ├── FIRECRAWL_ENHANCED_FEATURES.md             # 高级功能配置
+│   └── FIRECRAWL_GUIDE.md                         # 快速入门指南
+│
+├── API文档
+│   └── API_USAGE_GUIDE_V2.md                      # API完整参考（最新）
+│
+├── 搜索结果处理系统 (v2.0)
+│   ├── SEARCH_RESULTS_SEPARATION_ARCHITECTURE.md  # 职责分离架构
+│   ├── SEARCH_RESULTS_IMPLEMENTATION_GUIDE.md     # 实施指南
+│   └── INSTANT_SEARCH_MIGRATION_PLAN.md           # 即时搜索迁移
+│
+├── 数据源管理
+│   ├── DATA_SOURCE_CURATION_BACKEND.md            # 数据源管理后端
+│   ├── DATA_SOURCE_STATUS_MANAGEMENT.md           # 状态管理系统
+│   └── ARCHIVED_DATA_GUIDE.md                     # 数据源存档系统
+│
+├── 数据库与基础设施
+│   ├── DATABASE_COLLECTIONS_GUIDE.md              # 数据库集合指南
+│   ├── MONGODB_GUIDE.md                           # MongoDB配置
+│   ├── DATABASE_MIGRATION_GUIDE.md                # 数据库迁移
+│   ├── PRODUCTION_DATABASE_SETUP.md               # 生产环境配置
+│   └── VPN_DATABASE_GUIDE.md                      # VPN数据库连接
+│
+├── 开发指南
+│   ├── BACKEND_DEVELOPMENT.md                     # 后端开发
+│   ├── SCHEDULER_GUIDE.md                         # 调度器指南
+│   ├── RETRY_MECHANISM.md                         # 重试机制
+│   ├── TEST_SUITE_DESIGN.md                       # 测试套件设计
+│   └── EXECUTION_HISTORY_DESIGN.md                # 执行历史设计
+│
+├── 项目管理
+│   ├── VERSION_MANAGEMENT.md                      # 版本管理
+│   ├── FEATURE_TRACKER.md                         # 功能追踪
+│   ├── FUTURE_ROADMAP.md                          # 发展路线
+│   ├── ID_SYSTEM_V1.5.0.md                        # ID系统统一
+│   ├── FILE_UPLOAD_SYSTEM_DESIGN.md               # 文件上传系统
+│   ├── SUMMARY_REPORT_SYSTEM_PRD.md               # 总结报告PRD
+│   ├── MILESTONES.md                              # 里程碑
+│   └── DOCUMENTATION_CONSOLIDATION_PLAN.md        # 文档整理计划
+│
+├── diagrams/                                      # 架构图目录
+├── reports/                                       # 报告目录
+│   ├── fixes/                                     # 问题修复报告
+│   ├── tests/                                     # 测试报告
+│   └── weekly/                                    # 周报
+└── archive/                                       # 历史文档归档
+    ├── v1.4.1/                                    # v1.4.1历史文档
+    ├── v1.4.2/                                    # v1.4.2历史文档
+    └── analysis/                                  # 一次性分析报告
 ```
 
 ### 文档组织说明
@@ -405,10 +445,32 @@ docs/
 ---
 
 **文档维护**: Backend Team
-**最后审核**: 2025-10-31
-**下次审核**: 2025-11-30
+**最后审核**: 2025-11-05
+**下次审核**: 2025-12-05
 
 ## 📋 文档整理记录
+
+**v2.0.2 文档清理 (2025-11-05)**:
+- ✅ **清理过时文档**：删除 18 个过时的实现日志和临时文件
+  - claudedocs/: 29 → 6 文件（-79%，仅保留最新实现记录）
+  - 删除类别：服务日志、bug调查、API更新日志、超时修复、版本测试报告
+- ✅ **整合架构文档**：移动 6 个重要设计文档从 claudedocs 到 docs
+  - DATABASE_COLLECTIONS_GUIDE.md（27K）
+  - EXECUTION_HISTORY_DESIGN.md（17K）
+  - TEST_SUITE_DESIGN.md（11K）
+  - SEARCH_RESULTS_IMPLEMENTATION_GUIDE.md（41K）
+  - SEARCH_RESULTS_SEPARATION_ARCHITECTURE.md（19K）
+  - INSTANT_SEARCH_MIGRATION_PLAN.md（25K）
+- ✅ **更新API文档**：删除旧版 API_GUIDE.md，统一使用 API_USAGE_GUIDE_V2.md
+- ✅ **重组文档结构**：按功能模块分类（Firecrawl / API / 搜索结果 / 数据源 / 数据库 / 开发 / 项目管理）
+- ✅ **更新所有引用**：修正 README.md 中所有文档链接
+- ✅ **备份创建**：所有更改前完整备份到 `.backup/docs_cleanup_20251105/`
+
+**效果**:
+- 文档总数减少：63 → 37 文件（-41%）
+- claudedocs 精简：仅保留最新6个实现摘要
+- docs 集中管理：所有永久文档统一在 docs/
+- 清晰的功能分类：7大模块，易于导航
 
 **v1.5.2 文档整理 (2025-10-31)**:
 - ✅ 合并ID系统文档：`ID_SYSTEM_MIGRATION_REPORT.md` + `ID_SYSTEM_UNIFICATION_v1.5.0_SUMMARY.md` → `ID_SYSTEM_V1.5.0.md`

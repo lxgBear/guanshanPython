@@ -463,6 +463,7 @@ class SmartSearchService:
                             "id": result.id,
                             "title": result.title,
                             "url": result.url,
+                            # v2.1.2: AggregatedSearchResult 仍保留 content 字段用于API响应
                             "content": result.content,
                             "snippet": result.snippet,
                             "result_type": result.result_type,
@@ -599,7 +600,8 @@ class SmartSearchService:
                 # 基础搜索结果字段（从 InstantSearchResult 复制）
                 title=result_data.title,
                 url=result_data.url,
-                content=result_data.content,
+                # v2.1.2: 使用 markdown_content（InstantSearchResult 已移除 content 字段）
+                content=result_data.markdown_content or result_data.html_content or "",
                 snippet=result_data.snippet,
 
                 # 聚合评分
@@ -615,7 +617,8 @@ class SmartSearchService:
                 multi_source_bonus=item["multi_source"],
 
                 # 元数据（从 InstantSearchResult 复制）
-                result_type=result_data.result_type,
+                # v2.1.2: result_type 映射自 source（InstantSearchResult 使用 source 字段）
+                result_type=result_data.source or "web",
                 language=result_data.language,
                 published_date=result_data.published_date,
 

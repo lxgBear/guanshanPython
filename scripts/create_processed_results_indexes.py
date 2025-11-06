@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-为 processed_results 集合创建性能优化索引
+为 processed_results_new 集合创建性能优化索引
 
 v2.0.1 索引策略：
 1. task_id - 单字段索引（查询某任务的所有结果）
@@ -25,15 +25,15 @@ logger = get_logger(__name__)
 
 
 async def create_indexes():
-    """创建 processed_results 集合的性能索引"""
+    """创建 processed_results_new 集合的性能索引"""
     print("\n" + "="*60)
-    print("processed_results 集合索引创建")
+    print("processed_results_new 集合索引创建")
     print("="*60)
     print(f"执行时间: {datetime.now().isoformat()}\n")
 
     try:
         db = await get_mongodb_database()
-        collection = db['processed_results']
+        collection = db['processed_results_new']
 
         # 检查现有索引
         print("📊 步骤 1: 检查现有索引...")
@@ -132,7 +132,7 @@ async def verify_index_performance():
 
     try:
         db = await get_mongodb_database()
-        collection = db['processed_results']
+        collection = db['processed_results_new']
 
         # 测试查询性能
         test_queries = [

@@ -39,7 +39,7 @@ httpx==0.25.2
 beautifulsoup4==4.12.2
 lxml==5.0.0
 playwright==1.40.0
-firecrawl-py==0.0.16        # Firecrawl SDK
+firecrawl-py==4.6.0         # Firecrawl SDK (v2 API support)
 
 # Utilities
 pyyaml==6.0.1

@@ -36,7 +36,6 @@ class SearchResult:
     # 搜索结果核心数据
     title: str = ""
     url: str = ""
-    content: str = ""  # 提取的主要内容
     snippet: Optional[str] = None  # 搜索结果摘要
     
     # 元数据
@@ -90,7 +89,7 @@ class SearchResult:
             "id": self.id,  # 直接返回字符串ID
             "title": self.title,
             "url": self.url,
-            "snippet": self.snippet or self.content[:200],
+            "snippet": self.snippet or (self.markdown_content[:200] if self.markdown_content else ""),
             "source": self.source,
             "relevance_score": self.relevance_score,
             "published_date": self.published_date.isoformat() if self.published_date else None,

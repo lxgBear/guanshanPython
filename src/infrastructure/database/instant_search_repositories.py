@@ -204,7 +204,7 @@ class InstantSearchResultRepository:
             "search_type": search_type,  # v2.1.0 统一架构
             "title": result.title,
             "url": result.url,
-            "content": result.content,
+            # v2.1.1: 移除 'content' 字段（InstantSearchResult 已改用 markdown_content 和 html_content）
             "snippet": result.snippet,
             "content_hash": result.content_hash,  # v1.3.0 去重键
             "url_normalized": result.url_normalized,  # v1.3.0 规范化URL
@@ -233,7 +233,7 @@ class InstantSearchResultRepository:
             task_id=data["task_id"],
             title=data.get("title", ""),
             url=data.get("url", ""),
-            content=data.get("content", ""),
+            # v2.1.1: 移除 content 参数（InstantSearchResult 构造函数不接受此参数）
             snippet=data.get("snippet"),
             content_hash=data.get("content_hash", ""),
             url_normalized=data.get("url_normalized", ""),
@@ -454,7 +454,13 @@ class InstantSearchResultMappingRepository:
             raise
 
     async def batch_create(self, mappings: List[InstantSearchResultMapping]) -> None:
-        """批量创建映射记录"""
+        """批量创建映射记录（v2.1.2 重复键容错）
+
+        v2.1.2 修复逻辑：
+        - 使用 ordered=False 允许部分插入成功
+        - 捕获重复键异常，只记录警告而不抛出错误
+        - 返回成功插入的数量
+        """
         if not mappings:
             return
 
@@ -462,12 +468,45 @@ class InstantSearchResultMappingRepository:
             collection = await self._get_collection()
             mapping_dicts = [self._mapping_to_dict(m) for m in mappings]
 
-            await collection.insert_many(mapping_dicts)
-            logger.info(f"批量创建结果映射成功: {len(mappings)}条")
+            # v2.1.2: 使用 ordered=False 允许跳过重复键继续插入
+            result = await collection.insert_many(mapping_dicts, ordered=False)
+
+            inserted_count = len(result.inserted_ids)
+            total_count = len(mappings)
+
+            if inserted_count == total_count:
+                logger.info(f"批量创建结果映射成功: {inserted_count}条")
+            else:
+                skipped = total_count - inserted_count
+                logger.warning(
+                    f"批量创建结果映射部分成功: 成功{inserted_count}条, "
+                    f"跳过{skipped}条（重复键）, 总计{total_count}条"
+                )
 
         except Exception as e:
-            logger.error(f"批量创建结果映射失败: {e}")
-            raise
+            # v2.1.2: 捕获 BulkWriteError（包含重复键错误）
+            from pymongo.errors import BulkWriteError
+
+            if isinstance(e, BulkWriteError):
+                # 提取成功插入的数量
+                inserted_count = e.details.get('nInserted', 0)
+                total_count = len(mappings)
+
+                # 提取重复键错误数量
+                write_errors = e.details.get('writeErrors', [])
+                duplicate_count = sum(1 for err in write_errors if err.get('code') == 11000)
+
+                logger.warning(
+                    f"批量创建结果映射部分成功: 成功{inserted_count}条, "
+                    f"重复键跳过{duplicate_count}条, 总计{total_count}条"
+                )
+
+                # v2.1.2: 重复键不视为致命错误，不抛出异常
+                # 这是正常的去重行为：同一次搜索中同一个结果只保留一条映射
+            else:
+                # 其他错误仍然抛出
+                logger.error(f"批量创建结果映射失败: {e}")
+                raise
 
     async def get_results_by_search_execution(
         self,

@@ -115,7 +115,7 @@ class SearchConfigTemplate:
     block_ads: bool = True                   # 屏蔽广告
     scrape_formats: List[str] = field(default_factory=lambda: ['markdown', 'html', 'links'])  # 抓取格式
     include_tags: Optional[List[str]] = None  # 包含的HTML标签
-    exclude_tags: Optional[List[str]] = None  # 排除的HTML标签
+    exclude_tags: Optional[List[str]] = field(default_factory=lambda: ["nav", "header", "footer", "aside", "form"])  # 排除的HTML标签（默认排除导航、页眉、页脚）
     wait_for: Optional[int] = None           # 等待时间(毫秒), 用于动态内容加载
 
     # 语言过滤

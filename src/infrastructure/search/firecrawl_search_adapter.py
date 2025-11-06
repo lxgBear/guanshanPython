@@ -12,6 +12,8 @@ from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_t
 
 from src.core.domain.entities.search_result import SearchResult, SearchResultBatch, ResultStatus
 from src.core.domain.entities.search_config import SearchConfigManager, UserSearchConfig
+from src.core.domain.entities.firecrawl_raw_response import create_firecrawl_raw_response
+from src.infrastructure.database.firecrawl_raw_repositories import get_firecrawl_raw_repository
 from src.config import settings
 from src.utils.logger import get_logger
 
@@ -104,12 +106,15 @@ Firecrawl 搜索API适配器
             # 配置httpx客户端 - 显式禁用代理但保留DNS解析
             # Firecrawl API不需要代理，直接连接
             # 注意: trust_env=False会导致DNS解析问题,因此只显式设置proxies={}来禁用代理
+            # Search API 通常需要更长的超时时间（90秒），因为需要爬取多个搜索结果
+            # 增加超时以应对网络波动和慢速响应
+            search_timeout = config.get('timeout', 90)
             client_config = {
                 "proxies": {},  # 空字典禁用代理,但不影响DNS
-                "timeout": config.get('timeout', 30)
+                "timeout": search_timeout
             }
 
-            logger.info(f"🔍 正在调用 Firecrawl API: {self.base_url}/v2/search")
+            logger.info(f"🔍 正在调用 Firecrawl API: {self.base_url}/v2/search (超时: {search_timeout}s)")
             logger.info(f"📝 请求参数: {request_body}")
 
             # 发送请求
@@ -118,7 +123,7 @@ Firecrawl 搜索API适配器
                     f"{self.base_url}/v2/search",
                     headers=self.headers,
                     json=request_body,
-                    timeout=config.get('timeout', 30)
+                    timeout=search_timeout
                 )
 
                 logger.info(f"📡 API 响应状态码: {response.status_code}")
@@ -128,6 +133,12 @@ Firecrawl 搜索API适配器
                 # 解析响应
                 data = response.json()
                 logger.info(f"📦 响应数据结构: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+
+                # ⭐ 保存原始API响应（用于后续字段分析）
+                try:
+                    await self._save_raw_responses(data, task_id, int((datetime.utcnow() - start_time).total_seconds() * 1000))
+                except Exception as e:
+                    logger.warning(f"⚠️ 保存原始响应失败（不影响主流程）: {e}")
 
                 # 处理结果
                 results = self._parse_search_results(data, task_id)
@@ -316,9 +327,6 @@ Firecrawl 搜索API适配器
             # 提取HTML内容
             html_content = item.get('html', '')
 
-            # 使用截断后的markdown作为content,或使用description
-            content = markdown_content if markdown_content else description
-
             # 3. 提取metadata字段
             item_metadata = item.get('metadata', {})
 
@@ -348,12 +356,11 @@ Firecrawl 搜索API适配器
             # 7. 解析发布日期
             published_date = self._parse_date(item.get('publishedDate'))
 
-            # 8. 创建搜索结果实体(已移除raw_data,保留html_content)
+            # 8. 创建搜索结果实体(已移除raw_data和content字段,保留html_content)
             result = SearchResult(
                 task_id=task_id if task_id else "",
                 title=title,
                 url=url,
-                content=content,
                 snippet=description,
                 source=item.get('source', 'web'),
                 published_date=published_date,
@@ -367,13 +374,13 @@ Firecrawl 搜索API适配器
                 source_url=source_url,
                 http_status_code=http_status_code,
                 search_position=search_position,
-                metadata=filtered_metadata,  # 精简版元数据(~200字节 vs 原来的2-5KB)
-                # 不再存储: raw_data (~850KB)
+                metadata={},  # v2.1.0: 不再存储metadata，所有有用字段已提取为独立字段
+                # 不再存储: raw_data (~850KB), content (使用markdown_content替代), metadata (2-5KB)
                 relevance_score=item.get('score', 0.0),
                 status=ResultStatus.PENDING
             )
 
-            logger.debug(f"✅ 解析结果: {title[:50]}... (content: {len(content)}字符, metadata: {len(str(filtered_metadata))}字节)")
+            logger.debug(f"✅ 解析结果: {title[:50]}... (markdown: {len(markdown_content)}字符, metadata: {len(str(filtered_metadata))}字节)")
             results.append(result)
 
         return results
@@ -387,6 +394,62 @@ Firecrawl 搜索API适配器
             return datetime.fromisoformat(date_str)
         except:
             return None
+
+    async def _save_raw_responses(
+        self,
+        api_response: Dict[str, Any],
+        task_id: Optional[str],
+        response_time_ms: int
+    ) -> None:
+        """保存原始API响应到临时表
+
+        Args:
+            api_response: Firecrawl API 完整响应
+            task_id: 任务ID
+            response_time_ms: API响应时间（毫秒）
+        """
+        try:
+            repo = await get_firecrawl_raw_repository()
+
+            # 提取结果列表
+            data_content = api_response.get('data', {})
+            if isinstance(data_content, dict) and 'web' in data_content:
+                items = data_content.get('web', [])
+            elif isinstance(data_content, list):
+                items = data_content
+            else:
+                items = []
+
+            if not items:
+                logger.debug("📭 无搜索结果，跳过原始响应保存")
+                return
+
+            # 为每个结果创建原始响应记录
+            raw_responses = []
+            for item in items:
+                url = item.get('url', '')
+                if not url:
+                    continue
+
+                raw_response = create_firecrawl_raw_response(
+                    task_id=task_id or "",
+                    result_url=url,
+                    raw_data=item,  # 保存单个结果的完整数据
+                    api_endpoint="search",
+                    response_time_ms=response_time_ms
+                )
+                raw_responses.append(raw_response)
+
+            # 批量保存
+            if raw_responses:
+                saved_count = await repo.batch_create(raw_responses)
+                logger.info(f"💾 已保存 {saved_count} 条原始API响应（临时表）")
+
+        except Exception as e:
+            # 不抛出异常，避免影响主流程
+            logger.error(f"❌ 保存原始响应异常: {e}")
+            import traceback
+            logger.debug(f"堆栈信息:\n{traceback.format_exc()}")
 
     def _post_filter_by_language(self, results: List[SearchResult], target_language: str) -> List[SearchResult]:
         """后置语言过滤 - 根据URL、语言元数据和标题字符进行过滤
@@ -446,12 +509,13 @@ Firecrawl 搜索API适配器
 
         # 生成10条模拟结果
         for i in range(10):
+            test_content = f"这是关于'{query}'的测试内容 {i+1}。" * 10
             result = SearchResult(
                 task_id=task_id if task_id else "",
                 title=f"测试结果 {i+1}: {query}",
                 url=f"https://example.com/test/{i+1}",
-                content=f"这是关于'{query}'的测试内容 {i+1}。" * 10,
                 snippet=f"测试摘要: {query} - 结果 {i+1}",
+                markdown_content=test_content,  # 使用markdown_content替代content
                 source="test",
                 published_date=datetime.utcnow(),
                 relevance_score=0.9 - (i * 0.05),

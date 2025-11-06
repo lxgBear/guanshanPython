@@ -1,7 +1,7 @@
 """AI处理后的搜索结果实体模型
 
 v2.0.0 职责分离架构：
-- processed_results 表存储AI处理、翻译、总结后的增强数据
+- news_results 表存储AI处理、翻译、总结后的增强数据
 - 作为前端主查询数据源
 - 支持用户操作（留存、删除、评分、备注）
 - 与 search_results（原始数据表）职责分离
@@ -9,14 +9,43 @@ v2.0.0 职责分离架构：
 v2.0.1 字段扩展：
 - 添加原始字段（title, url, content等）以支持前端直接查询
 - 添加AI服务新增字段（content_zh, cls_results等）
+
+v2.0.2 字段更新（基于 news_results 表实际结构）：
+- 添加 news_results 嵌套字段（title, published_at, source, content, category）
+- 添加 content_cleaned 字段（清理后的内容）
+- 保留所有原始字段以确保向后兼容
+
+v2.0.3 字段更新（AI服务扩展）：
+- news_results 新增 media_urls 字段（媒体资源URL列表）
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TypedDict
 
 from src.infrastructure.id_generator import generate_string_id
+
+
+class NewsResultsDict(TypedDict, total=False):
+    """news_results 嵌套字段的类型定义（v2.0.3）
+
+    AI服务处理后返回的新闻结果数据结构
+
+    字段说明:
+        title: 翻译后的新闻标题（中文）
+        published_at: 新闻发布时间（datetime或None）
+        source: 来源域名（如 gov.cn, aljazeera.net）
+        content: 翻译后的新闻内容（中文，可能截断）
+        category: 分类信息（大类、类别、地域）
+        media_urls: 媒体资源URL列表（图片、视频等）- v2.0.3 新增
+    """
+    title: str
+    published_at: Optional[datetime]
+    source: str
+    content: str
+    category: Dict[str, str]  # {"大类": "...", "类别": "...", "地域": "..."}
+    media_urls: List[str]  # 媒体资源URL列表（图片、视频、HTML等）- v2.0.3 新增
 
 
 class ProcessedStatus(Enum):
@@ -114,6 +143,29 @@ class ProcessedResult:
     # ==================== 错误处理 ====================
     processing_error: Optional[str] = None
     retry_count: int = 0
+
+    # ==================== news_results 嵌套字段（v2.0.2 新增，v2.0.3 扩展）====================
+    news_results: Optional[NewsResultsDict] = None  # AI处理后的新闻结果
+    # news_results 结构示例（v2.0.3）：
+    # {
+    #     "title": "新闻标题（翻译后）",
+    #     "published_at": datetime(2023, 10, 23) or None,
+    #     "source": "来源域名（如 gov.cn, aljazeera.net）",
+    #     "content": "新闻内容（翻译后，中文）",
+    #     "category": {
+    #         "大类": "安全情报",
+    #         "类别": "维稳",
+    #         "地域": "东亚"
+    #     },
+    #     "media_urls": [  # v2.0.3 新增
+    #         "https://example.com/image1.jpg",
+    #         "https://example.com/image2.png",
+    #         ...
+    #     ]
+    # }
+
+    # ==================== 内容清理字段（v2.0.2 新增）====================
+    content_cleaned: Optional[str] = None  # 清理后的英文原文内容
 
     def mark_as_processing(self) -> None:
         """标记为AI处理中"""

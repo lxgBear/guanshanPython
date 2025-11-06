@@ -59,11 +59,10 @@ class InstantSearchResult:
     # 核心内容字段
     title: str = ""
     url: str = ""
-    content: str = ""  # 提取的主要内容
     snippet: Optional[str] = None  # 搜索结果摘要
 
     # v1.3.0 去重和规范化字段
-    content_hash: str = ""  # MD5(title + url + content)，全局去重键
+    content_hash: str = ""  # MD5(title + url + markdown_content)，全局去重键
     url_normalized: str = ""  # 规范化URL（去除查询参数、锚点等）
 
     # Firecrawl 特定字段
@@ -106,10 +105,10 @@ class InstantSearchResult:
         """
         计算内容哈希值
 
-        哈希算法：MD5(title + url + content)
+        哈希算法：MD5(title + url + markdown_content)
         用于去重判断，相同内容生成相同哈希
         """
-        content_str = f"{self.title}||{self.url}||{self.content}"
+        content_str = f"{self.title}||{self.url}||{self.markdown_content or ''}"
         return hashlib.md5(content_str.encode('utf-8')).hexdigest()
 
     @staticmethod
@@ -187,7 +186,6 @@ class InstantSearchResult:
             "task_id": self.task_id,
             "title": self.title,
             "url": self.url,
-            "content": self.content,
             "snippet": self.snippet,
             "content_hash": self.content_hash,
             "url_normalized": self.url_normalized,
@@ -214,7 +212,7 @@ class InstantSearchResult:
             "id": self.id,
             "title": self.title,
             "url": self.url,
-            "snippet": self.snippet or self.content[:200],
+            "snippet": self.snippet or (self.markdown_content[:200] if self.markdown_content else ""),
             "source": self.source,
             "relevance_score": self.relevance_score,
             "published_date": self.published_date.isoformat() if self.published_date else None,
@@ -245,9 +243,6 @@ def create_instant_search_result_from_firecrawl(
     markdown_content = firecrawl_data.get("markdown", "")
     html_content = firecrawl_data.get("html", "")
 
-    # 从markdown或html提取content（截取前5000字符）
-    content = markdown_content[:5000] if markdown_content else ""
-
     # 提取元数据
     metadata = firecrawl_data.get("metadata", {})
 
@@ -256,8 +251,7 @@ def create_instant_search_result_from_firecrawl(
         task_id=task_id,
         title=title,
         url=url,
-        content=content,
-        snippet=content[:200] if content else title,
+        snippet=markdown_content[:200] if markdown_content else title,
         markdown_content=markdown_content,
         html_content=html_content,
         source=metadata.get("sourceURL", "web"),
