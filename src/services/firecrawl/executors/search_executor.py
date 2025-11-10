@@ -174,7 +174,7 @@ class SearchExecutor(TaskExecutor):
         results: List[SearchResult],
         config: SearchConfig
     ) -> List[SearchResult]:
-        """过滤明显的首页URL，只保留详情页URL
+        """过滤首页URL和黑名单域名，只保留详情页URL
 
         Args:
             results: 搜索结果列表
@@ -183,61 +183,88 @@ class SearchExecutor(TaskExecutor):
         Returns:
             过滤后的结果列表
         """
-        # 检查是否启用URL过滤
-        enable_url_filter = config.__dict__.get('enable_url_filter', True)
-        if not enable_url_filter:
-            return results
-
         filtered_results = []
+        filter_stats = {
+            'homepage': 0,
+            'excluded_domain': 0,
+            'total': len(results)
+        }
 
         for result in results:
-            url = result.url.lower()
+            url = result.url
+            url_lower = url.lower()
 
-            # 首页URL特征
-            homepage_patterns = [
-                r'/$',  # 以/结尾
-                r'/index\.(html|php|htm|aspx|jsp)$',
-                r'/home$',
-                r'/default\.(html|aspx)$',
-                r'^https?://[^/]+/?$',  # 只有域名，没有路径
-            ]
+            # 1. 检查域名黑名单（优先级最高）
+            if config.exclude_domains:
+                is_excluded_domain = False
+                for excluded_domain in config.exclude_domains:
+                    if excluded_domain.lower() in url_lower:
+                        is_excluded_domain = True
+                        filter_stats['excluded_domain'] += 1
+                        self.logger.debug(
+                            f"🚫 过滤黑名单域名: {result.url} (匹配: {excluded_domain})"
+                        )
+                        break
 
-            # 检查是否匹配首页模式
-            is_homepage = False
-            import re
-            for pattern in homepage_patterns:
-                if re.search(pattern, url):
-                    is_homepage = True
-                    self.logger.debug(
-                        f"🚫 过滤首页URL: {result.url} (匹配模式: {pattern})"
-                    )
-                    break
+                if is_excluded_domain:
+                    continue  # 跳过黑名单域名
 
-            # 详情页URL特征（至少包含一个）
-            detail_page_indicators = [
-                r'/\d{4}/\d{2}/',  # 日期路径 /2025/01/
-                r'/article/\d+',    # 文章ID
-                r'/post/\d+',       # 帖子ID
-                r'/news/\d+',       # 新闻ID
-                r'/p/\d+',          # 页面ID
-                r'[^/]+/[^/]+/',    # 至少2层路径
-            ]
+            # 2. 检查是否过滤首页（如果启用）
+            if config.filter_homepage:
+                # 首页URL特征
+                homepage_patterns = [
+                    r'/$',  # 以/结尾
+                    r'/index\.(html|php|htm|aspx|jsp)$',
+                    r'/home$',
+                    r'/default\.(html|aspx)$',
+                    r'^https?://[^/]+/?$',  # 只有域名，没有路径
+                ]
 
-            has_detail_indicator = False
-            for pattern in detail_page_indicators:
-                if re.search(pattern, url):
-                    has_detail_indicator = True
-                    break
+                # 检查是否匹配首页模式
+                is_homepage = False
+                for pattern in homepage_patterns:
+                    if re.search(pattern, url_lower):
+                        is_homepage = True
+                        filter_stats['homepage'] += 1
+                        self.logger.debug(
+                            f"🚫 过滤首页URL: {result.url} (匹配模式: {pattern})"
+                        )
+                        break
 
-            # 如果不是首页，或者有明显的详情页特征，则保留
-            if not is_homepage or has_detail_indicator:
-                filtered_results.append(result)
+                if is_homepage:
+                    # 检查是否有详情页特征（可以覆盖首页判断）
+                    detail_page_indicators = [
+                        r'/\d{4}/\d{2}/',  # 日期路径 /2025/01/
+                        r'/article/\d+',    # 文章ID
+                        r'/post/\d+',       # 帖子ID
+                        r'/news/\d+',       # 新闻ID
+                        r'/p/\d+',          # 页面ID
+                        r'[^/]+/[^/]+/[^/]+',  # 至少3层路径
+                    ]
 
-        filtered_count = len(results) - len(filtered_results)
-        if filtered_count > 0:
+                    has_detail_indicator = False
+                    for pattern in detail_page_indicators:
+                        if re.search(pattern, url_lower):
+                            has_detail_indicator = True
+                            self.logger.debug(
+                                f"✅ 保留（虽匹配首页但有详情页特征）: {result.url}"
+                            )
+                            break
+
+                    if not has_detail_indicator:
+                        continue  # 跳过首页URL
+
+            # 3. 通过所有过滤器，保留该结果
+            filtered_results.append(result)
+
+        # 输出过滤统计
+        total_filtered = filter_stats['homepage'] + filter_stats['excluded_domain']
+        if total_filtered > 0:
             self.logger.info(
-                f"🔍 URL质量过滤: 过滤了 {filtered_count} 个首页URL, "
-                f"保留 {len(filtered_results)} 个详情页URL"
+                f"🔍 URL过滤统计: 总计 {filter_stats['total']} 个 → "
+                f"过滤首页 {filter_stats['homepage']} 个, "
+                f"过滤黑名单域名 {filter_stats['excluded_domain']} 个, "
+                f"保留 {len(filtered_results)} 个"
             )
 
         return filtered_results

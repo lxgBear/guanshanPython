@@ -45,6 +45,7 @@ class FirecrawlCreditsCalculator:
     CREDIT_PER_CRAWL_PAGE = 1  # Crawl API: 1积分/页面
     CREDIT_SEARCH_BASE = 2  # Search API 基础: 2积分/10条结果
     CREDIT_PER_SCRAPED_RESULT = 1  # 搜索结果爬取: 1积分/条
+    CREDIT_MAP_API = 1  # Map API: 固定1积分（无论返回多少URL）
 
     # 附加功能积分消耗
     CREDIT_PDF_PER_PAGE = 1  # PDF解析: +1积分/PDF页
@@ -252,6 +253,70 @@ class FirecrawlCreditsCalculator:
             raise ValueError(f"未知操作类型: {operation}")
 
     @classmethod
+    def estimate_map_scrape_credits(
+        cls,
+        estimated_urls: int = 100,
+        estimated_scraped: int = 50
+    ) -> CreditEstimate:
+        """估算 Map + Scrape 组合任务的积分消耗
+
+        Args:
+            estimated_urls: 预估 Map API 返回的URL数量
+            estimated_scraped: 预估实际 Scrape 的页面数量
+
+        Returns:
+            CreditEstimate: 积分估算结果
+        """
+        breakdown = {}
+
+        # 1. Map API 固定消耗
+        map_credits = cls.CREDIT_MAP_API
+        breakdown["map_api"] = map_credits
+
+        # 2. Scrape API 消耗
+        scrape_credits = estimated_scraped * cls.CREDIT_PER_SCRAPE
+        breakdown["scrape_api"] = scrape_credits
+
+        total_credits = map_credits + scrape_credits
+
+        # 生成说明
+        description = (
+            f"Map API: {map_credits} 积分 + "
+            f"Scrape {estimated_scraped} 页: {scrape_credits} 积分 = "
+            f"{total_credits} 积分 "
+            f"(发现 {estimated_urls} 个URL)"
+        )
+
+        return CreditEstimate(
+            total_credits=total_credits,
+            breakdown=breakdown,
+            description=description
+        )
+
+    @classmethod
+    def calculate_map_scrape_credits(
+        cls,
+        urls_discovered: int,
+        pages_scraped: int
+    ) -> int:
+        """计算 Map + Scrape 实际消耗的积分
+
+        Args:
+            urls_discovered: Map API 发现的URL数量
+            pages_scraped: 实际 Scrape 的页面数量
+
+        Returns:
+            int: 实际消耗积分
+        """
+        # Map API: 固定1积分
+        map_credits = cls.CREDIT_MAP_API
+
+        # Scrape API: 1积分/页面
+        scrape_credits = pages_scraped * cls.CREDIT_PER_SCRAPE
+
+        return map_credits + scrape_credits
+
+    @classmethod
     def get_pricing_info(cls) -> Dict[str, Any]:
         """获取积分定价信息
 
@@ -263,12 +328,16 @@ class FirecrawlCreditsCalculator:
                 "scrape_api": f"{cls.CREDIT_PER_SCRAPE} 积分/页面",
                 "crawl_api": f"{cls.CREDIT_PER_CRAWL_PAGE} 积分/页面",
                 "search_api_base": f"{cls.CREDIT_SEARCH_BASE} 积分/10条结果",
-                "search_result_scrape": f"{cls.CREDIT_PER_SCRAPED_RESULT} 积分/条"
+                "search_result_scrape": f"{cls.CREDIT_PER_SCRAPED_RESULT} 积分/条",
+                "map_api": f"{cls.CREDIT_MAP_API} 积分/次（固定）"
             },
             "附加功能": {
                 "pdf_parsing": f"+{cls.CREDIT_PDF_PER_PAGE} 积分/PDF页",
                 "stealth_mode": f"+{cls.CREDIT_STEALTH_MODE} 积分/结果",
                 "json_mode": f"+{cls.CREDIT_JSON_MODE} 积分/结果"
+            },
+            "组合模式": {
+                "map_scrape": "Map API (1积分) + Scrape API (N积分)"
             },
             "说明": "基于 Firecrawl v2 API 官方定价（2025年）",
             "参考链接": "https://www.firecrawl.dev/pricing"
