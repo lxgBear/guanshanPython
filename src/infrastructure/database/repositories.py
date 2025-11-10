@@ -288,6 +288,8 @@ class SearchResultRepository:
             "source_url": result.source_url,
             "http_status_code": result.http_status_code,
             "search_position": result.search_position,
+            # v2.1.1: 去重字段
+            "content_hash": result.content_hash,
             # v2.1.0: 不再存储 metadata 字段以减少数据量（2-5KB/记录）
             # 所有有用字段已提取为独立字段：author, language, article_tag, http_status_code等
             # "metadata": result.metadata,  # 已废弃 - 不再存储
@@ -344,6 +346,8 @@ class SearchResultRepository:
             source_url=data.get("source_url"),
             http_status_code=data.get("http_status_code"),
             search_position=data.get("search_position"),
+            # v2.1.1: 去重字段
+            content_hash=data.get("content_hash"),
             metadata=data.get("metadata", {}),
             # 已移除字段: raw_data, content (不再从数据库读取)
             relevance_score=data.get("relevance_score", 0.0),
@@ -354,22 +358,103 @@ class SearchResultRepository:
             is_test_data=data.get("is_test_data", False)
         )
     
-    async def save_results(self, results: List[SearchResult]) -> None:
-        """批量保存搜索结果"""
+    async def save_results(self, results: List[SearchResult], enable_dedup: bool = True) -> Dict[str, int]:
+        """批量保存搜索结果（v2.1.1: 支持去重）
+
+        Args:
+            results: 搜索结果列表
+            enable_dedup: 是否启用去重（默认True）
+
+        Returns:
+            保存统计信息: {"saved": 10, "duplicates": 2, "total": 12}
+        """
         if not results:
-            return
-        
+            return {"saved": 0, "duplicates": 0, "total": 0}
+
         try:
             collection = await self._get_collection()
-            result_dicts = [self._result_to_dict(result) for result in results]
-            
-            await collection.insert_many(result_dicts)
-            logger.info(f"保存搜索结果成功: {len(results)}条")
-            
+
+            # 如果不启用去重，直接批量插入
+            if not enable_dedup:
+                result_dicts = [self._result_to_dict(result) for result in results]
+                await collection.insert_many(result_dicts)
+                logger.info(f"保存搜索结果成功（未去重）: {len(results)}条")
+                return {"saved": len(results), "duplicates": 0, "total": len(results)}
+
+            # 启用去重逻辑
+            # 1. 确保所有结果都有content_hash
+            for result in results:
+                result.ensure_content_hash()
+
+            # 2. 获取所有content_hash
+            content_hashes = [result.content_hash for result in results]
+
+            # 3. 查询数据库中已存在的content_hash
+            existing_hashes = set()
+            async for doc in collection.find(
+                {"content_hash": {"$in": content_hashes}},
+                {"content_hash": 1}
+            ):
+                existing_hashes.add(doc.get("content_hash"))
+
+            # 4. 过滤出新结果
+            new_results = []
+            duplicate_count = 0
+
+            for result in results:
+                if result.content_hash not in existing_hashes:
+                    new_results.append(result)
+                else:
+                    duplicate_count += 1
+                    logger.debug(f"跳过重复内容: {result.url} (hash: {result.content_hash})")
+
+            # 5. 保存新结果
+            if new_results:
+                result_dicts = [self._result_to_dict(result) for result in new_results]
+                await collection.insert_many(result_dicts)
+                logger.info(f"保存搜索结果成功: 新增{len(new_results)}条, 跳过重复{duplicate_count}条")
+            else:
+                logger.info(f"无新结果保存: 全部{duplicate_count}条均为重复")
+
+            return {
+                "saved": len(new_results),
+                "duplicates": duplicate_count,
+                "total": len(results)
+            }
+
         except Exception as e:
             logger.error(f"保存搜索结果失败: {e}")
             raise
     
+    async def check_existing_urls(self, task_id: str, urls: List[str]) -> set:
+        """检查哪些URL已存在于数据库（v2.1.1: URL去重辅助方法）
+
+        Args:
+            task_id: 任务ID
+            urls: URL列表
+
+        Returns:
+            已存在的URL集合
+        """
+        try:
+            collection = await self._get_collection()
+
+            existing_urls = set()
+            async for doc in collection.find(
+                {"task_id": task_id, "url": {"$in": urls}},
+                {"url": 1}
+            ):
+                existing_urls.add(doc.get("url"))
+
+            if existing_urls:
+                logger.debug(f"发现{len(existing_urls)}个已存在的URL (任务: {task_id})")
+
+            return existing_urls
+
+        except Exception as e:
+            logger.error(f"检查已存在URL失败: {e}")
+            raise
+
     async def get_results_by_task(
         self,
         task_id: str,

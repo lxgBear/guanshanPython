@@ -55,6 +55,9 @@ class SearchResult:
     http_status_code: Optional[int] = None  # HTTP状态码
     search_position: Optional[int] = None  # 搜索结果排名
 
+    # v2.1.1: 去重字段
+    content_hash: Optional[str] = None  # 内容哈希（用于去重，基于URL+标题+markdown前500字符）
+
     # 保留原metadata字段以支持扩展元数据(但应过滤冗余字段)
     metadata: Dict[str, Any] = field(default_factory=dict)  # 精简的扩展元数据
 
@@ -72,7 +75,31 @@ class SearchResult:
     
     # 测试模式标记
     is_test_data: bool = False  # 是否为测试数据
-    
+
+    def generate_content_hash(self) -> str:
+        """生成内容哈希用于去重
+
+        基于 URL + 标题 + markdown前500字符
+
+        Returns:
+            str: SHA256 哈希值（前16位）
+        """
+        import hashlib
+
+        # 构建去重字符串
+        dedup_str = f"{self.url}|{self.title}|{(self.markdown_content or '')[:500]}"
+
+        # 计算SHA256哈希
+        hash_obj = hashlib.sha256(dedup_str.encode('utf-8'))
+
+        # 返回前16位作为content_hash
+        return hash_obj.hexdigest()[:16]
+
+    def ensure_content_hash(self) -> None:
+        """确保 content_hash 已生成"""
+        if not self.content_hash:
+            self.content_hash = self.generate_content_hash()
+
     def mark_as_archived(self) -> None:
         """标记为已留存"""
         self.status = ResultStatus.ARCHIVED
