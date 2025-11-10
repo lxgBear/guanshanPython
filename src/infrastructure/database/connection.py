@@ -176,6 +176,10 @@ async def create_indexes():
         await search_results.create_index("execution_time")
         await search_results.create_index([("task_id", 1), ("execution_time", -1)])
         await search_results.create_index("status")  # v2.1.0: 状态查询优化
+        # v2.1.1: 去重索引
+        await search_results.create_index("content_hash")  # 内容去重查询
+        await search_results.create_index([("task_id", 1), ("url", 1)])  # URL去重查询
+        logger.info("✅ 定时搜索结果索引创建完成（含v2.1.1去重索引）")
 
         # ==================== v1.3.0 即时搜索索引 ====================
 

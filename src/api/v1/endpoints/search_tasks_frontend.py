@@ -54,11 +54,11 @@ class SearchTaskCreate(BaseModel):
     target_website: Optional[str] = Field(None, description="主要目标网站（例如：www.gnlm.com.mm）", max_length=200)
     crawl_url: Optional[str] = Field(None, description="爬取的URL（CRAWL_WEBSITE和SCRAPE_URL模式必填）", max_length=500)
 
-    # v2.0.0 新增：任务类型
+    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website
     task_type: Optional[str] = Field(
         None,
-        description="任务类型：search_keyword（关键词搜索）、crawl_website（网站爬取）、scrape_url（单页面爬取）",
-        pattern="^(search_keyword|crawl_website|scrape_url)$"
+        description="任务类型：search_keyword（关键词搜索）、crawl_website（网站爬取）、scrape_url（单页面爬取）、map_scrape_website（Map+Scrape组合）",
+        pattern="^(search_keyword|crawl_website|scrape_url|map_scrape_website)$"
     )
 
     # 配置字段
@@ -146,11 +146,11 @@ class SearchTaskUpdate(BaseModel):
     target_website: Optional[str] = Field(None, max_length=200)
     crawl_url: Optional[str] = Field(None, max_length=500)
 
-    # v2.0.0 新增：任务类型
+    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website
     task_type: Optional[str] = Field(
         None,
-        description="任务类型：search_keyword、crawl_website、scrape_url",
-        pattern="^(search_keyword|crawl_website|scrape_url)$"
+        description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website",
+        pattern="^(search_keyword|crawl_website|scrape_url|map_scrape_website)$"
     )
 
     search_config: Optional[Dict[str, Any]] = None
@@ -173,8 +173,8 @@ class SearchTaskResponse(BaseModel):
     target_website: Optional[str] = Field(None, description="主要目标网站")
     crawl_url: Optional[str] = Field(None, description="爬取的URL")
 
-    # v2.0.0 新增：任务类型
-    task_type: str = Field(..., description="任务类型：search_keyword、crawl_website、scrape_url")
+    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website
+    task_type: str = Field(..., description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website")
     task_mode: str = Field(..., description="任务模式描述（用于前端显示）")
 
     search_config: Dict[str, Any] = Field(..., description="搜索配置")
@@ -224,11 +224,12 @@ def task_to_response(task: SearchTask) -> SearchTaskResponse:
     interval = task.get_schedule_interval()
     task_type = task.get_task_type()
 
-    # 获取任务模式描述
+    # 获取任务模式描述（v2.1.1: 新增 map_scrape_website）
     task_mode_map = {
         "search_keyword": "关键词搜索 + 详情页爬取",
         "crawl_website": "网站递归爬取",
-        "scrape_url": "单页面爬取"
+        "scrape_url": "单页面爬取",
+        "map_scrape_website": "Map + Scrape 组合模式"
     }
     task_mode = task_mode_map.get(task_type.value, task_type.value)
 

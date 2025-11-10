@@ -17,9 +17,10 @@ from src.infrastructure.id_generator import generate_string_id
 
 class TaskType(Enum):
     """任务类型枚举"""
-    SEARCH_KEYWORD = "search_keyword"  # 关键词搜索模式（Search API + Scrape API 详情页）
-    CRAWL_WEBSITE = "crawl_website"    # 网站爬取模式（Crawl API 递归爬取整个网站）
-    SCRAPE_URL = "scrape_url"          # 单页面爬取模式（Scrape API 爬取单个页面）
+    SEARCH_KEYWORD = "search_keyword"        # 关键词搜索模式（Search API + Scrape API 详情页）
+    CRAWL_WEBSITE = "crawl_website"          # 网站爬取模式（Crawl API 递归爬取整个网站）
+    SCRAPE_URL = "scrape_url"                # 单页面爬取模式（Scrape API 爬取单个页面）
+    MAP_SCRAPE_WEBSITE = "map_scrape_website"  # Map + Scrape 组合模式（Map API 发现 + 批量Scrape + 时间过滤）
 
 
 class TaskStatus(Enum):
@@ -91,9 +92,9 @@ class SearchTask:
     description: Optional[str] = None
 
     # 任务类型和目标
-    task_type: str = "search_keyword"  # 任务类型：search_keyword, crawl_website, scrape_url
+    task_type: str = "search_keyword"  # 任务类型：search_keyword, crawl_website, scrape_url, map_scrape_website
     query: str = ""  # 搜索关键词（SEARCH_KEYWORD 模式）
-    crawl_url: Optional[str] = None  # 爬取URL（CRAWL_WEBSITE 和 SCRAPE_URL 模式）
+    crawl_url: Optional[str] = None  # 爬取URL（CRAWL_WEBSITE、SCRAPE_URL、MAP_SCRAPE_WEBSITE 模式）
     target_website: Optional[str] = None  # 主要目标网站（用于前端展示，例如：www.gnlm.com.mm）
 
     # 配置
@@ -142,6 +143,10 @@ class SearchTask:
     def is_scrape_url_mode(self) -> bool:
         """判断是否为单页面爬取模式"""
         return self.get_task_type() == TaskType.SCRAPE_URL
+
+    def is_map_scrape_mode(self) -> bool:
+        """判断是否为 Map + Scrape 组合模式"""
+        return self.get_task_type() == TaskType.MAP_SCRAPE_WEBSITE
 
     def get_schedule_interval(self) -> ScheduleInterval:
         """获取调度间隔枚举"""

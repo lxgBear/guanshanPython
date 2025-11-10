@@ -397,6 +397,7 @@ class ProcessedResultRepository:
         self,
         task_id: str,
         status: Optional[ProcessedStatus] = None,
+        processing_status: Optional[str] = None,
         page: int = 1,
         page_size: int = 20
     ) -> tuple[List[ProcessedResult], int]:
@@ -405,7 +406,8 @@ class ProcessedResultRepository:
 
         Args:
             task_id: 任务ID
-            status: 状态筛选（可选）
+            status: 用户操作状态筛选（可选）
+            processing_status: AI处理状态筛选（可选，如 'success', 'failed', 'pending'）
             page: 页码
             page_size: 每页数量
 
@@ -419,6 +421,8 @@ class ProcessedResultRepository:
             query = {"task_id": task_id}
             if status is not None:
                 query["status"] = status.value
+            if processing_status is not None:
+                query["processing_status"] = processing_status
 
             # 总数
             total = await collection.count_documents(query)

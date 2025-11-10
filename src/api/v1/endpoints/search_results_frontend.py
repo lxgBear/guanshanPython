@@ -181,7 +181,10 @@ class SearchResultSummary(BaseModel):
 # ==========================================
 
 def processed_result_to_response(result: ProcessedResult) -> SearchResultResponse:
-    """将AI处理结果实体转换为响应模型（v2.0.1: 仅映射实际使用的字段）"""
+    """将AI处理结果实体转换为响应模型（v2.0.1: 仅映射实际使用的字段）
+
+    v2.1.1: 添加 None 值处理，避免 Pydantic 验证错误
+    """
     # 处理 language 字段（数据库中可能是数组，需要转换为字符串）
     language_value = result.language
     if isinstance(language_value, list):
@@ -195,7 +198,7 @@ def processed_result_to_response(result: ProcessedResult) -> SearchResultRespons
         title=result.title,
         url=result.url,
         source_url=result.source_url,
-        content=result.content,
+        content=result.content or "",  # v2.1.1: 如果为 None，使用空字符串
         snippet=result.snippet,
         markdown_content=result.markdown_content,
         html_content=result.html_content,
@@ -203,7 +206,7 @@ def processed_result_to_response(result: ProcessedResult) -> SearchResultRespons
         published_date=result.published_date,
         language=language_value,
         source=result.source,
-        metadata=result.metadata,
+        metadata=result.metadata or {},  # v2.1.1: 如果为 None，使用空字典
         quality_score=result.quality_score,
         relevance_score=result.relevance_score,
         search_position=result.search_position,
@@ -226,7 +229,7 @@ def processed_result_to_response(result: ProcessedResult) -> SearchResultRespons
         # 时间戳
         created_at=result.created_at,
         processed_at=result.processed_at,
-        updated_at=result.updated_at
+        updated_at=result.updated_at or result.created_at  # v2.1.1: 如果为 None，使用 created_at
     )
 
 
@@ -266,17 +269,21 @@ def calculate_result_stats(task_id: str, task_name: str, status_counts: Dict[str
     "/{task_id}/results",
     response_model=SearchResultListResponse,
     summary="获取任务搜索结果列表",
-    description="获取指定搜索任务的所有历史搜索结果，支持分页、过滤和排序功能。"
+    description="获取指定搜索任务的所有历史搜索结果，支持分页、过滤和排序功能。默认只返回AI处理成功的结果。"
 )
 async def get_task_results(
     task_id: str,
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页大小"),
     status: Optional[str] = Query(None, description="状态过滤: pending, processing, completed, failed, archived, deleted"),
+    processing_status: Optional[str] = Query("success", description="AI处理状态过滤: success, failed, pending（默认只返回success）"),
     sort_by: str = Query("created_at", description="排序字段: created_at, processed_at"),
     order: str = Query("desc", description="排序方向: asc, desc")
 ):
-    """获取指定任务的历史搜索结果 - v2.0.0: 从 processed_results_new 读取AI增强数据"""
+    """获取指定任务的历史搜索结果 - v2.0.0: 从 processed_results_new 读取AI增强数据
+
+    v2.1.1: 默认只返回 processing_status=success 的结果
+    """
 
     # 验证任务存在
     task_name = await validate_task_exists(task_id)
@@ -293,9 +300,11 @@ async def get_task_results(
             raise HTTPException(400, f"无效的状态值: {status}")
 
     # 从 processed_results_new 查询（带分页和状态筛选）
+    # v2.1.1: 添加 processing_status 过滤
     processed_results, total = await processed_repo.get_by_task(
         task_id=task_id,
         status=status_filter,
+        processing_status=processing_status,  # v2.1.1: 默认 'success'
         page=page,
         page_size=page_size
     )
