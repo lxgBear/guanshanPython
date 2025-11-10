@@ -8,10 +8,12 @@ from .task_config import (
     ScrapeConfig,
     ConfigFactory
 )
+from .map_scrape_config import MapScrapeConfig
 
 __all__ = [
     'CrawlConfig',
     'SearchConfig',
     'ScrapeConfig',
+    'MapScrapeConfig',
     'ConfigFactory'
 ]

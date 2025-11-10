@@ -22,9 +22,9 @@ class CrawlConfig:
     allow_backward_links: bool = False  # 是否允许向后链接
 
     # Scrape 选项（用于每个爬取的页面）
-    only_main_content: bool = True  # 只提取主要内容
+    only_main_content: bool = False  # v2.1.1: 获取完整HTML
     wait_for: int = 1000  # 等待页面加载时间（毫秒）
-    exclude_tags: List[str] = field(default_factory=lambda: ["nav", "footer", "header"])
+    exclude_tags: List[str] = field(default_factory=lambda: [])  # v2.1.1: 不排除任何标签
 
     # 超时设置
     timeout: int = 300  # 整体爬取超时（秒）
@@ -39,9 +39,9 @@ class CrawlConfig:
             include_paths=data.get('include_paths', []),
             exclude_paths=data.get('exclude_paths', ['/$']),  # 默认排除首页
             allow_backward_links=data.get('allow_backward_links', False),
-            only_main_content=data.get('only_main_content', True),
+            only_main_content=data.get('only_main_content', False),  # v2.1.1: 默认 False 获取完整HTML
             wait_for=data.get('wait_for', 1000),
-            exclude_tags=data.get('exclude_tags', ["nav", "footer", "header"]),
+            exclude_tags=data.get('exclude_tags', []),  # v2.1.1: 默认空列表
             timeout=data.get('timeout', 300),
             poll_interval=data.get('poll_interval', 10)
         )
@@ -61,29 +61,44 @@ class SearchConfig:
     scrape_delay: float = 2.0  # 爬取间隔（秒，增加避免被限流）
 
     # Scrape 选项（用于详情页爬取）
-    only_main_content: bool = True
+    only_main_content: bool = False  # v2.1.1: 获取完整HTML
     wait_for: int = 3000  # 等待页面加载时间（毫秒，增加确保JS渲染完成）
-    exclude_tags: List[str] = field(default_factory=lambda: ["nav", "footer", "header", "aside"])
+    exclude_tags: List[str] = field(default_factory=lambda: [])  # v2.1.1: 不排除任何标签
     timeout: int = 120  # 单个页面爬取超时（秒，增加处理慢速页面）
 
+    # 域名过滤
+    include_domains: Optional[List[str]] = None  # 白名单：只爬取这些域名
+    exclude_domains: List[str] = field(default_factory=lambda: [
+        "wikipedia.org",
+        "youtube.com",
+        "youtu.be"
+    ])  # 黑名单：排除这些域名（默认排除维基百科和YouTube）
+
+    # URL过滤选项
+    filter_homepage: bool = True  # 是否过滤首页URL
+
     # 其他选项
-    include_domains: Optional[List[str]] = None
     strict_language_filter: bool = True
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> 'SearchConfig':
         """从字典创建配置"""
+        # 默认的排除域名列表
+        default_exclude_domains = ["wikipedia.org", "youtube.com", "youtu.be"]
+
         return SearchConfig(
             limit=data.get('limit', 10),
             language=data.get('language', 'zh'),
             enable_detail_scrape=data.get('enable_detail_scrape', True),
             max_concurrent_scrapes=data.get('max_concurrent_scrapes', 2),
             scrape_delay=data.get('scrape_delay', 2.0),
-            only_main_content=data.get('only_main_content', True),
+            only_main_content=data.get('only_main_content', False),  # v2.1.1: 默认 False 获取完整HTML
             wait_for=data.get('wait_for', 3000),
-            exclude_tags=data.get('exclude_tags', ["nav", "footer", "header", "aside"]),
+            exclude_tags=data.get('exclude_tags', []),  # v2.1.1: 默认空列表
             timeout=data.get('timeout', 120),
             include_domains=data.get('include_domains'),
+            exclude_domains=data.get('exclude_domains', default_exclude_domains),
+            filter_homepage=data.get('filter_homepage', True),
             strict_language_filter=data.get('strict_language_filter', True)
         )
 
@@ -93,12 +108,12 @@ class ScrapeConfig:
     """单页面爬取配置（Scrape API）"""
 
     # 内容提取
-    only_main_content: bool = True
+    only_main_content: bool = False  # v2.1.1: 获取完整HTML
     wait_for: int = 1000
 
     # 标签过滤
     include_tags: Optional[List[str]] = None
-    exclude_tags: List[str] = field(default_factory=lambda: ["nav", "footer", "header"])
+    exclude_tags: List[str] = field(default_factory=lambda: [])  # v2.1.1: 不排除任何标签
 
     # 超时设置
     timeout: int = 90
@@ -107,10 +122,10 @@ class ScrapeConfig:
     def from_dict(data: Dict[str, Any]) -> 'ScrapeConfig':
         """从字典创建配置"""
         return ScrapeConfig(
-            only_main_content=data.get('only_main_content', True),
+            only_main_content=data.get('only_main_content', False),  # v2.1.1: 默认 False 获取完整HTML
             wait_for=data.get('wait_for', 1000),
             include_tags=data.get('include_tags'),
-            exclude_tags=data.get('exclude_tags', ["nav", "footer", "header"]),
+            exclude_tags=data.get('exclude_tags', []),  # v2.1.1: 默认空列表
             timeout=data.get('timeout', 90)
         )
 
@@ -156,3 +171,16 @@ class ConfigFactory:
             ScrapeConfig: 爬取配置对象
         """
         return ScrapeConfig.from_dict(task_config)
+
+    @staticmethod
+    def create_map_scrape_config(task_config: Dict[str, Any]) -> 'MapScrapeConfig':
+        """创建 Map + Scrape 配置
+
+        Args:
+            task_config: 任务的配置字典（支持 crawl_config 或 search_config）
+
+        Returns:
+            MapScrapeConfig: Map + Scrape 配置对象
+        """
+        from .map_scrape_config import MapScrapeConfig
+        return MapScrapeConfig.from_dict(task_config)

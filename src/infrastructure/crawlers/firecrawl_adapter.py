@@ -21,6 +21,11 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class MapAPIError(CrawlException):
+    """Map API调用错误"""
+    pass
+
+
 class FirecrawlAdapter(CrawlerInterface):
     """
     Firecrawl爬虫适配器
@@ -72,12 +77,13 @@ class FirecrawlAdapter(CrawlerInterface):
             # Firecrawl v2 API: 使用命名参数
             formats = options.get('formats', ['markdown', 'html'])
             only_main_content = options.get('only_main_content', False)  # 默认 False 获取完整 HTML
-            wait_for = options.get('wait_for', 1000)
+            wait_for = options.get('wait_for', 500)  # v2.1.1: 改为 500ms 避免 timeout 冲突
             include_tags = options.get('include_tags')
             exclude_tags = options.get('exclude_tags')
-            timeout = options.get('timeout', self.timeout)
+            timeout_seconds = options.get('timeout', 30)  # v2.1.1: 单个 Scrape 请求 30秒超时
+            timeout = timeout_seconds * 1000  # v2.1.1 Hotfix: 转换为毫秒，Firecrawl API 期望毫秒单位
 
-            logger.info(f"爬取参数: formats={formats}, onlyMainContent={only_main_content}, waitFor={wait_for}ms")
+            logger.info(f"爬取参数: formats={formats}, onlyMainContent={only_main_content}, waitFor={wait_for}ms, timeout={timeout}ms ({timeout_seconds}s)")
 
             # v4.6.0: 使用 v2 API 的 scrape() 方法（同步）
             result = await asyncio.to_thread(
@@ -143,7 +149,7 @@ class FirecrawlAdapter(CrawlerInterface):
             scrape_options = ScrapeOptions(
                 formats=['markdown', 'html'],  # 格式列表
                 only_main_content=options.get('only_main_content', False),  # 默认 False 获取完整 HTML
-                wait_for=options.get('wait_for', 1000),
+                wait_for=options.get('wait_for', 500),  # v2.1.1: 改为 500ms 避免 timeout 冲突
                 exclude_tags=options.get('exclude_tags')  # 默认 None，不排除任何标签
             )
 
@@ -195,29 +201,77 @@ class FirecrawlAdapter(CrawlerInterface):
             logger.error(f"网站爬取失败: {url}, 错误: {str(e)}")
             raise CrawlException(f"网站爬取失败: {str(e)}", url=url)
     
-    async def map(self, url: str, limit: int = 100) -> List[str]:
+    async def map(
+        self,
+        url: str,
+        search: Optional[str] = None,
+        limit: int = 5000
+    ) -> List[Dict[str, Any]]:
         """
-        生成站点地图
-        
+        调用Firecrawl Map API发现网站URL结构
+
+        Map API快速发现网站的所有可访问URL，结合sitemap和智能爬取算法。
+        固定成本1 credit，通常<5秒完成。
+
         Args:
-            url: 目标网站URL
-            limit: 最大URL数量
-        
+            url: 起始URL（网站根URL）
+            search: 搜索关键词（可选），过滤URL或标题包含该关键词的页面
+            limit: 返回URL数量限制，默认5000（API最大值）
+
         Returns:
-            List[str]: URL列表
+            List[Dict]: URL列表，每个元素包含:
+                - url: 完整URL
+                - title: 页面标题
+                - description: 页面描述
+
+        Raises:
+            MapAPIError: Map API调用失败
+
+        Example:
+            >>> adapter = FirecrawlAdapter()
+            >>> links = await adapter.map("https://example.com", search="blog", limit=1000)
+            >>> print(f"发现 {len(links)} 个博客页面")
         """
         try:
-            logger.info(f"生成站点地图: {url}, 限制: {limit}")
-            
-            result = await self.client.map(url, limit=limit)
-            urls = result.get('urls', [])
-            
-            logger.info(f"成功生成站点地图: {url}, 发现 {len(urls)} 个URL")
-            return urls
-            
+            logger.info(f"📍 调用Map API: url={url}, search={search}, limit={limit}")
+
+            # v2 API: 使用 Firecrawl.map() 同步方法
+            map_params = {"url": url, "limit": limit}
+            if search:
+                map_params["search"] = search
+                logger.info(f"🔍 使用搜索过滤: '{search}'")
+
+            # 调用Map API（同步方法，使用asyncio.to_thread）
+            result = await asyncio.to_thread(
+                self.client.map,
+                **map_params
+            )
+
+            # 处理结果（v2 API直接返回包含links的对象）
+            if not result:
+                raise MapAPIError(f"Map API返回空结果", url=url)
+
+            # 提取links数据
+            links = []
+            if hasattr(result, 'links') and result.links:
+                for link in result.links:
+                    link_data = {
+                        'url': getattr(link, 'url', ''),
+                        'title': getattr(link, 'title', '') or '',
+                        'description': getattr(link, 'description', '') or ''
+                    }
+                    links.append(link_data)
+            else:
+                logger.warning(f"⚠️  Map API未返回links字段或links为空")
+
+            logger.info(f"✅ Map API成功: 发现 {len(links)} 个URL")
+            return links
+
+        except MapAPIError:
+            raise
         except Exception as e:
-            logger.error(f"站点地图生成失败: {url}, 错误: {str(e)}")
-            raise CrawlException(f"站点地图生成失败: {str(e)}", url=url)
+            logger.error(f"❌ Map API调用失败: {url}, 错误: {str(e)}")
+            raise MapAPIError(f"Map API调用失败: {str(e)}", url=url)
     
     async def extract(self, url: str, schema: Dict) -> Dict:
         """
@@ -320,7 +374,7 @@ class FirecrawlAdapter(CrawlerInterface):
         """
         scrape_options = {
             'formats': ['markdown', 'html'],
-            'waitFor': options.get('wait_for', 1000)
+            'waitFor': options.get('wait_for', 500)  # v2.1.1: 改为 500ms 避免 timeout 冲突
         }
         
         # 添加包含/排除标签

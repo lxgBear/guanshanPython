@@ -9,7 +9,7 @@ from typing import Optional
 
 from src.core.domain.entities.search_task import TaskType
 from .base import TaskExecutor
-from .executors import CrawlExecutor, SearchExecutor, ScrapeExecutor
+from .executors import CrawlExecutor, SearchExecutor, ScrapeExecutor, MapScrapeExecutor
 
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,8 @@ class ExecutorFactory:
     _executor_map = {
         TaskType.CRAWL_WEBSITE: CrawlExecutor,
         TaskType.SEARCH_KEYWORD: SearchExecutor,
-        TaskType.SCRAPE_URL: ScrapeExecutor
+        TaskType.SCRAPE_URL: ScrapeExecutor,
+        TaskType.MAP_SCRAPE_WEBSITE: MapScrapeExecutor
     }
 
     @classmethod
