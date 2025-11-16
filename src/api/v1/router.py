@@ -12,6 +12,7 @@ from src.api.v1.endpoints import smart_search
 from src.api.v1.endpoints import summary_report_management
 from src.api.v1.endpoints import data_source_management
 from src.api.v1.endpoints import firecrawl_utils
+from src.api.v1.endpoints import nl_search
 
 # 创建主路由器
 api_router = APIRouter()
@@ -73,6 +74,13 @@ api_router.include_router(
 api_router.include_router(
     firecrawl_utils.router,
     tags=["💰 Firecrawl 工具"]
+)
+
+# 自然语言搜索（v1.0.0-beta 🚧 开发中）
+api_router.include_router(
+    nl_search.router,
+    prefix="/nl-search",
+    tags=["🤖 自然语言搜索 (Beta)"]
 )
 
 # ==========================================
