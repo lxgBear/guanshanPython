@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.infrastructure.database.connection import get_mariadb_session
 from src.utils.logger import get_logger
+from sqlalchemy import text
 
 logger = get_logger(__name__)
 
@@ -54,7 +55,7 @@ async def create_nl_search_tables():
                 continue
 
             try:
-                await session.execute(statement)
+                await session.execute(text(statement))
                 await session.commit()
                 success_count += 1
 
@@ -74,7 +75,7 @@ async def create_nl_search_tables():
 
         # 验证表是否创建成功
         result = await session.execute(
-            "SHOW TABLES LIKE 'nl_search_logs'"
+            text("SHOW TABLES LIKE 'nl_search_logs'")
         )
         table_exists = result.fetchone() is not None
 
@@ -88,7 +89,7 @@ async def create_nl_search_tables():
             logger.info("="*60)
 
             # 显示表结构
-            result = await session.execute("DESC nl_search_logs")
+            result = await session.execute(text("DESC nl_search_logs"))
             rows = result.fetchall()
 
             logger.info("\n📋 表结构:")
