@@ -23,6 +23,7 @@ import logging
 
 # 导入服务层
 from src.services.nl_search.nl_search_service import nl_search_service
+from src.services.nl_search.mongo_archive_service import mongo_archive_service  # 使用 MongoDB 版本
 from src.services.nl_search.config import nl_search_config
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class NLSearchRequest(BaseModel):
 
 class NLSearchResponse(BaseModel):
     """自然语言搜索响应（完整版）"""
-    log_id: Optional[int] = Field(None, description="搜索记录ID")
+    log_id: Optional[str] = Field(None, description="搜索记录ID（雪花算法ID字符串）")
     status: str = Field(..., description="搜索状态")
     message: str = Field(..., description="响应消息")
     results: Optional[List[Dict[str, Any]]] = Field(None, description="搜索结果列表")
@@ -87,7 +88,7 @@ class NLSearchResponse(BaseModel):
 
 class NLSearchLog(BaseModel):
     """自然语言搜索记录（完整版）"""
-    id: int = Field(..., description="记录ID")
+    id: str = Field(..., description="记录ID（雪花算法ID字符串）")
     query_text: str = Field(..., description="用户查询")
     created_at: str = Field(..., description="创建时间（ISO格式）")
     status: str = Field(..., description="搜索状态")
@@ -132,6 +133,186 @@ class NLSearchListResponse(BaseModel):
     """搜索历史列表响应"""
     total: int = Field(..., description="总记录数")
     items: List[NLSearchLog] = Field(..., description="搜索记录列表")
+    page: int = Field(..., description="当前页码")
+    page_size: int = Field(..., description="每页数量")
+
+
+class SearchResultItem(BaseModel):
+    """搜索结果条目"""
+    title: str = Field(..., description="结果标题")
+    url: str = Field(..., description="结果URL")
+    snippet: str = Field(..., description="结果摘要")
+    position: int = Field(..., description="结果位置")
+    score: float = Field(..., description="相关性评分")
+    source: str = Field(..., description="来源（serpapi/web/cache）")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "title": "GPT-5发布：AI技术新突破",
+                "url": "https://example.com/gpt5",
+                "snippet": "OpenAI发布最新GPT-5模型...",
+                "position": 1,
+                "score": 0.95,
+                "source": "serpapi"
+            }
+        }
+
+
+class SearchResultsResponse(BaseModel):
+    """搜索结果响应"""
+    log_id: str = Field(..., description="搜索记录ID（雪花算法ID字符串）")
+    query_text: str = Field(..., description="用户查询")
+    total_count: int = Field(..., description="结果总数")
+    results: List[SearchResultItem] = Field(..., description="搜索结果列表")
+    llm_analysis: Optional[Dict[str, Any]] = Field(None, description="LLM分析结果")
+    status: str = Field(..., description="搜索状态")
+    created_at: str = Field(..., description="创建时间（ISO格式）")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "log_id": "248728141926559744",
+                "query_text": "最近有哪些AI技术突破",
+                "total_count": 10,
+                "results": [
+                    {
+                        "title": "GPT-5发布",
+                        "url": "https://example.com/gpt5",
+                        "snippet": "OpenAI发布最新GPT-5模型...",
+                        "position": 1,
+                        "score": 0.95,
+                        "source": "serpapi"
+                    }
+                ],
+                "llm_analysis": {
+                    "intent": "technology_news",
+                    "keywords": ["AI", "技术突破"]
+                },
+                "status": "completed",
+                "created_at": "2025-11-17T08:00:00Z"
+            }
+        }
+
+
+class UserSelectionRequest(BaseModel):
+    """用户选择请求"""
+    result_url: str = Field(..., description="选中的结果URL")
+    action_type: str = Field(..., description="操作类型（click/bookmark/archive）")
+    user_id: Optional[str] = Field(None, description="用户ID（可选）")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "result_url": "https://example.com/gpt5",
+                "action_type": "click",
+                "user_id": "user_123"
+            }
+        }
+
+
+class UserSelectionResponse(BaseModel):
+    """用户选择响应"""
+    event_id: str = Field(..., description="事件ID（雪花算法ID字符串）")
+    log_id: str = Field(..., description="搜索记录ID")
+    result_url: str = Field(..., description="选中的结果URL")
+    action_type: str = Field(..., description="操作类型")
+    recorded_at: str = Field(..., description="记录时间（ISO格式）")
+    message: str = Field(..., description="响应消息")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "event_id": "248728141926559745",
+                "log_id": "248728141926559744",
+                "result_url": "https://example.com/gpt5",
+                "action_type": "click",
+                "recorded_at": "2025-11-17T08:00:00Z",
+                "message": "用户选择已记录"
+            }
+        }
+
+
+# ==================== 档案管理数据模型 ====================
+
+class ArchiveItemRequest(BaseModel):
+    """档案条目请求"""
+    news_result_id: str = Field(..., description="新闻结果ID（MongoDB ObjectId）")
+    edited_title: Optional[str] = Field(None, description="编辑后的标题")
+    edited_summary: Optional[str] = Field(None, description="编辑后的摘要")
+    user_notes: Optional[str] = Field(None, description="用户备注")
+    user_rating: Optional[int] = Field(None, ge=1, le=5, description="用户评分 1-5")
+
+
+class CreateArchiveRequest(BaseModel):
+    """创建档案请求"""
+    user_id: int = Field(..., description="用户ID", gt=0)
+    archive_name: str = Field(..., description="档案名称", min_length=1, max_length=255)
+    description: Optional[str] = Field(None, description="档案描述", max_length=2000)
+    tags: Optional[List[str]] = Field(None, description="档案标签列表")
+    search_log_id: Optional[str] = Field(None, description="关联的搜索记录ID（雪花算法ID字符串）")
+    items: List[ArchiveItemRequest] = Field(..., description="档案条目列表", min_length=1)
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_id": 1001,
+                "archive_name": "2024年AI技术突破汇总",
+                "description": "整理2024年重要的AI技术突破新闻",
+                "tags": ["AI", "技术", "2024"],
+                "search_log_id": 123456,
+                "items": [
+                    {
+                        "news_result_id": "507f1f77bcf86cd799439011",
+                        "edited_title": "GPT-5重磅发布",
+                        "edited_summary": "OpenAI发布最新GPT-5模型...",
+                        "user_rating": 5
+                    }
+                ]
+            }
+        }
+
+
+class UpdateArchiveRequest(BaseModel):
+    """更新档案请求"""
+    archive_name: Optional[str] = Field(None, description="新的档案名称", min_length=1, max_length=255)
+    description: Optional[str] = Field(None, description="新的描述", max_length=2000)
+    tags: Optional[List[str]] = Field(None, description="新的标签列表")
+
+
+class ArchiveItemResponse(BaseModel):
+    """档案条目响应"""
+    id: int = Field(..., description="条目ID")
+    news_result_id: str = Field(..., description="新闻结果ID")
+    title: str = Field(..., description="显示标题（优先显示编辑标题）")
+    content: Optional[str] = Field(None, description="显示内容（优先显示编辑摘要）")
+    edited_title: Optional[str] = Field(None, description="用户编辑的标题")
+    edited_summary: Optional[str] = Field(None, description="用户编辑的摘要")
+    user_notes: Optional[str] = Field(None, description="用户备注")
+    user_rating: Optional[int] = Field(None, description="用户评分")
+    category: Optional[Dict[str, str]] = Field(None, description="分类信息")
+    source: Optional[str] = Field(None, description="新闻来源")
+    created_at: Optional[str] = Field(None, description="添加时间")
+
+
+class ArchiveResponse(BaseModel):
+    """档案响应"""
+    archive_id: str = Field(..., description="档案ID（MongoDB ObjectId）")
+    user_id: int = Field(..., description="用户ID")
+    archive_name: str = Field(..., description="档案名称")
+    description: Optional[str] = Field(None, description="档案描述")
+    tags: List[str] = Field(..., description="档案标签")
+    search_log_id: Optional[str] = Field(None, description="关联的搜索记录ID（雪花算法ID字符串）")
+    items_count: int = Field(..., description="档案条目数量")
+    items: Optional[List[ArchiveItemResponse]] = Field(None, description="档案条目列表（仅详情接口返回）")
+    created_at: Optional[str] = Field(None, description="创建时间")
+    updated_at: Optional[str] = Field(None, description="更新时间")
+
+
+class ArchiveListResponse(BaseModel):
+    """档案列表响应"""
+    total: int = Field(..., description="总记录数")
+    items: List[ArchiveResponse] = Field(..., description="档案列表")
     page: int = Field(..., description="当前页码")
     page_size: int = Field(..., description="每页数量")
 
@@ -284,7 +465,7 @@ async def create_nl_search(request: NLSearchRequest):
     summary="获取搜索记录",
     description="根据ID获取自然语言搜索记录"
 )
-async def get_nl_search_log(log_id: int):
+async def get_nl_search_log(log_id: str):
     """
     获取自然语言搜索记录
 
@@ -296,7 +477,7 @@ async def get_nl_search_log(log_id: int):
     - 包含创建时间和状态
 
     Args:
-        log_id (int): 搜索记录ID
+        log_id (str): 搜索记录ID（雪花算法ID字符串）
 
     Returns:
         NLSearchLog: 搜索记录详情
@@ -455,62 +636,712 @@ async def list_nl_search_logs(
 
 @router.post(
     "/{log_id}/select",
-    summary="用户选择结果 (预留)",
-    description="记录用户对搜索结果的选择（功能开发中）",
-    status_code=503
+    response_model=UserSelectionResponse,
+    summary="记录用户选择",
+    description="记录用户对搜索结果的选择行为"
 )
 async def select_search_result(
-    log_id: int,
-    result_id: int = Query(..., description="选中的结果ID")
+    log_id: str,
+    request: UserSelectionRequest
 ):
     """
     记录用户对搜索结果的选择
 
-    **状态**: 🚧 功能开发中
+    **功能**: ✅ 完整实现
 
     **用途**:
-    - 收集用户反馈
-    - 优化LLM理解
-    - 个性化推荐
+    - 收集用户反馈和行为数据
+    - 优化LLM理解和搜索质量
+    - 支持个性化推荐
+    - A/B测试和分析
+
+    **支持的操作类型**:
+    - click: 用户点击结果
+    - bookmark: 用户收藏结果
+    - archive: 用户归档结果
 
     Args:
-        log_id (int): 搜索记录ID
-        result_id (int): 用户选择的结果ID
+        log_id (str): 搜索记录ID（雪花算法ID字符串）
+        request (UserSelectionRequest): 用户选择请求
+
+    Returns:
+        UserSelectionResponse: 选择记录确认
 
     Raises:
-        HTTPException: 503 - 功能未启用
+        HTTPException:
+            - 503: 功能未启用
+            - 400: 输入验证失败
+            - 404: 搜索记录不存在
+            - 500: 内部错误
+
+    Example:
+        ```bash
+        curl -X POST "http://localhost:8000/api/v1/nl-search/248728141926559744/select" \\
+          -H "Content-Type: application/json" \\
+          -d '{
+            "result_url": "https://example.com/gpt5",
+            "action_type": "click",
+            "user_id": "user_123"
+          }'
+        ```
     """
-    raise HTTPException(
-        status_code=503,
-        detail="功能开发中"
-    )
+    # 检查功能开关
+    if not nl_search_config.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "功能未启用",
+                "message": "自然语言搜索功能已关闭。设置环境变量 NL_SEARCH_ENABLED=true 启用此功能。",
+                "alternative_endpoint": "/api/v1/smart-search",
+                "status": "disabled"
+            }
+        )
+
+    try:
+        logger.info(
+            f"记录用户选择: log_id={log_id}, "
+            f"url={request.result_url}, action={request.action_type}"
+        )
+
+        # 验证操作类型
+        valid_actions = ["click", "bookmark", "archive"]
+        if request.action_type not in valid_actions:
+            raise ValueError(
+                f"无效的操作类型: {request.action_type}。"
+                f"有效值: {', '.join(valid_actions)}"
+            )
+
+        # 调用服务层记录选择
+        event_id = await nl_search_service.record_user_selection(
+            log_id=log_id,
+            result_url=request.result_url,
+            action_type=request.action_type,
+            user_id=request.user_id
+        )
+
+        logger.info(f"用户选择已记录: event_id={event_id}")
+
+        return UserSelectionResponse(
+            event_id=event_id,
+            log_id=log_id,
+            result_url=request.result_url,
+            action_type=request.action_type,
+            recorded_at=datetime.utcnow().isoformat(),
+            message="用户选择已成功记录"
+        )
+
+    except ValueError as e:
+        # 输入验证错误或搜索记录不存在
+        logger.warning(f"验证失败: {e}")
+        status_code = 404 if "不存在" in str(e) else 400
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "error": "验证失败" if status_code == 400 else "记录不存在",
+                "message": str(e),
+                "log_id": log_id
+            }
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"记录用户选择失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "记录用户选择失败，请稍后重试",
+                "log_id": log_id
+            }
+        )
 
 
 @router.get(
     "/{log_id}/results",
-    summary="获取搜索结果 (预留)",
-    description="获取自然语言搜索的所有结果（功能开发中）",
-    status_code=503
+    response_model=SearchResultsResponse,
+    summary="获取搜索结果",
+    description="获取自然语言搜索的所有结果（支持分页）"
 )
-async def get_search_results(log_id: int):
+async def get_search_results(
+    log_id: str,
+    limit: Optional[int] = Query(None, ge=1, le=100, description="返回数量限制"),
+    offset: int = Query(0, ge=0, description="分页偏移量")
+):
     """
     获取自然语言搜索的所有结果
 
-    **状态**: 🚧 功能开发中
+    **功能**: ✅ 完整实现
 
-    **计划功能**:
+    **功能**:
     - 返回LLM分析的结构化结果
-    - 包含搜索来源
-    - 包含抓取的内容
-    - 支持结果排序和过滤
+    - 包含搜索来源和评分
+    - 支持结果分页
+    - 包含LLM分析结果
 
     Args:
-        log_id (int): 搜索记录ID
+        log_id (str): 搜索记录ID（雪花算法ID字符串）
+        limit (Optional[int]): 返回数量限制（1-100）
+        offset (int): 分页偏移量
+
+    Returns:
+        SearchResultsResponse: 搜索结果列表
 
     Raises:
-        HTTPException: 503 - 功能未启用
+        HTTPException:
+            - 503: 功能未启用
+            - 404: 搜索记录不存在
+            - 500: 内部错误
+
+    Example:
+        ```bash
+        curl -X GET "http://localhost:8000/api/v1/nl-search/248728141926559744/results?limit=10&offset=0"
+        ```
     """
-    raise HTTPException(
-        status_code=503,
-        detail="功能开发中"
-    )
+    # 检查功能开关
+    if not nl_search_config.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "功能未启用",
+                "message": "自然语言搜索功能已关闭。设置环境变量 NL_SEARCH_ENABLED=true 启用此功能。",
+                "alternative_endpoint": "/api/v1/smart-search",
+                "status": "disabled"
+            }
+        )
+
+    try:
+        logger.info(f"获取搜索结果: log_id={log_id}, limit={limit}, offset={offset}")
+
+        # 调用服务层获取搜索结果
+        result = await nl_search_service.get_search_results(
+            log_id=log_id,
+            limit=limit,
+            offset=offset
+        )
+
+        if not result:
+            logger.warning(f"搜索记录不存在: log_id={log_id}")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "记录不存在",
+                    "message": f"未找到搜索记录: log_id={log_id}",
+                    "log_id": log_id
+                }
+            )
+
+        # 构建搜索结果条目列表
+        result_items = [
+            SearchResultItem(
+                title=item.get("title", ""),
+                url=item.get("url", ""),
+                snippet=item.get("snippet", ""),
+                position=item.get("position", 0),
+                score=item.get("score", 0.0),
+                source=item.get("source", "unknown")
+            )
+            for item in result["results"]
+        ]
+
+        return SearchResultsResponse(
+            log_id=result["log_id"],
+            query_text=result["query_text"],
+            total_count=result["total_count"],
+            results=result_items,
+            llm_analysis=result.get("llm_analysis"),
+            status=result.get("status", "completed"),
+            created_at=result["created_at"]
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"获取搜索结果失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "获取搜索结果失败，请稍后重试",
+                "log_id": log_id
+            }
+        )
+
+
+# ==================== 档案管理API ====================
+
+@router.post(
+    "/archives",
+    response_model=ArchiveResponse,
+    summary="创建档案",
+    description="从搜索结果创建用户档案"
+)
+async def create_archive(request: CreateArchiveRequest):
+    """
+    创建档案
+
+    **功能**: ✅ 完整实现
+
+    **流程**:
+    1. 验证输入数据
+    2. 为每个条目创建快照（从MongoDB news_results）
+    3. 批量创建档案条目
+    4. 返回档案信息
+
+    Args:
+        request (CreateArchiveRequest): 创建档案请求
+
+    Returns:
+        ArchiveResponse: 档案详情
+
+    Raises:
+        HTTPException:
+            - 400: 输入验证失败
+            - 500: 服务错误
+
+    Example:
+        ```bash
+        curl -X POST "http://localhost:8000/api/v1/nl-search/archives" \\
+          -H "Content-Type: application/json" \\
+          -d '{
+            "user_id": 1001,
+            "archive_name": "AI技术突破汇总",
+            "description": "2024年重要AI技术突破",
+            "tags": ["AI", "技术"],
+            "items": [
+              {
+                "news_result_id": "507f1f77bcf86cd799439011",
+                "edited_title": "GPT-5发布",
+                "user_rating": 5
+              }
+            ]
+          }'
+        ```
+    """
+    try:
+        logger.info(f"创建档案请求: user={request.user_id}, name='{request.archive_name}', items={len(request.items)}")
+
+        # 准备条目数据
+        items_data = [
+            {
+                "news_result_id": item.news_result_id,
+                "edited_title": item.edited_title,
+                "edited_summary": item.edited_summary,
+                "user_notes": item.user_notes,
+                "user_rating": item.user_rating
+            }
+            for item in request.items
+        ]
+
+        # 调用服务层创建档案
+        result = await mongo_archive_service.create_archive(
+            user_id=request.user_id,
+            archive_name=request.archive_name,
+            items=items_data,
+            description=request.description,
+            tags=request.tags,
+            search_log_id=request.search_log_id
+        )
+
+        logger.info(f"档案创建成功: archive_id={result['archive_id']}")
+
+        # 返回档案信息
+        return ArchiveResponse(
+            archive_id=result["archive_id"],
+            user_id=request.user_id,
+            archive_name=result["archive_name"],
+            description=request.description,
+            tags=request.tags or [],
+            search_log_id=request.search_log_id,
+            items_count=result["items_count"],
+            items=None,  # 创建接口不返回条目详情
+            created_at=result["created_at"],
+            updated_at=None
+        )
+
+    except ValueError as e:
+        logger.warning(f"档案创建验证失败: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "输入验证失败",
+                "message": str(e)
+            }
+        )
+    except Exception as e:
+        logger.error(f"档案创建失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "创建档案失败，请稍后重试"
+            }
+        )
+
+
+@router.get(
+    "/archives",
+    response_model=ArchiveListResponse,
+    summary="查询档案列表",
+    description="分页查询用户的档案列表"
+)
+async def list_archives(
+    user_id: int = Query(..., gt=0, description="用户ID"),
+    limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
+    offset: int = Query(0, ge=0, description="分页偏移量")
+):
+    """
+    查询档案列表
+
+    **功能**: ✅ 完整实现
+
+    **功能**:
+    - 分页查询用户的档案
+    - 返回档案基本信息（不含条目详情）
+    - 按创建时间倒序排列
+
+    Args:
+        user_id (int): 用户ID
+        limit (int): 返回数量限制 (1-100)
+        offset (int): 分页偏移量
+
+    Returns:
+        ArchiveListResponse: 档案列表
+
+    Raises:
+        HTTPException: 500 - 服务错误
+
+    Example:
+        ```bash
+        curl -X GET "http://localhost:8000/api/v1/nl-search/archives?user_id=1001&limit=10&offset=0"
+        ```
+    """
+    try:
+        logger.info(f"查询档案列表: user_id={user_id}, limit={limit}, offset={offset}")
+
+        # 调用服务层查询
+        archives = await mongo_archive_service.list_archives(
+            user_id=user_id,
+            limit=limit,
+            offset=offset
+        )
+
+        # 构建响应
+        items = [
+            ArchiveResponse(
+                archive_id=archive["archive_id"],
+                user_id=user_id,
+                archive_name=archive["archive_name"],
+                description=archive["description"],
+                tags=archive["tags"],
+                search_log_id=archive["search_log_id"],
+                items_count=archive["items_count"],
+                items=None,  # 列表接口不返回条目详情
+                created_at=archive["created_at"],
+                updated_at=archive["updated_at"]
+            )
+            for archive in archives
+        ]
+
+        return ArchiveListResponse(
+            total=len(items),
+            items=items,
+            page=offset // limit + 1 if limit > 0 else 1,
+            page_size=limit
+        )
+
+    except Exception as e:
+        logger.error(f"查询档案列表失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "查询档案列表失败，请稍后重试"
+            }
+        )
+
+
+@router.get(
+    "/archives/{archive_id}",
+    response_model=ArchiveResponse,
+    summary="获取档案详情",
+    description="获取档案的完整信息（包含所有条目）"
+)
+async def get_archive(
+    archive_id: str,
+    user_id: Optional[int] = Query(None, description="用户ID（可选，用于权限验证）")
+):
+    """
+    获取档案详情
+
+    **功能**: ✅ 完整实现
+
+    **功能**:
+    - 获取档案完整信息
+    - 包含所有档案条目
+    - 支持权限验证
+
+    Args:
+        archive_id (int): 档案ID
+        user_id (Optional[int]): 用户ID（可选，用于权限验证）
+
+    Returns:
+        ArchiveResponse: 档案详情（包含条目）
+
+    Raises:
+        HTTPException:
+            - 404: 档案不存在或无权访问
+            - 500: 服务错误
+
+    Example:
+        ```bash
+        curl -X GET "http://localhost:8000/api/v1/nl-search/archives/1?user_id=1001"
+        ```
+    """
+    try:
+        logger.info(f"获取档案详情: archive_id={archive_id}, user_id={user_id}")
+
+        # 调用服务层获取档案
+        archive = await mongo_archive_service.get_archive(
+            archive_id=archive_id,
+            user_id=user_id
+        )
+
+        if not archive:
+            logger.warning(f"档案不存在或无权访问: archive_id={archive_id}, user_id={user_id}")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "档案不存在",
+                    "message": f"未找到档案或您无权访问: archive_id={archive_id}"
+                }
+            )
+
+        # 构建条目响应
+        items = [
+            ArchiveItemResponse(
+                id=item["id"],
+                news_result_id=item["news_result_id"],
+                title=item["title"],
+                content=item["content"],
+                edited_title=item["edited_title"],
+                edited_summary=item["edited_summary"],
+                user_notes=item["user_notes"],
+                user_rating=item["user_rating"],
+                category=item["category"],
+                source=item["source"],
+                created_at=item["created_at"]
+            )
+            for item in archive["items"]
+        ]
+
+        return ArchiveResponse(
+            archive_id=archive["archive_id"],
+            user_id=archive["user_id"],
+            archive_name=archive["archive_name"],
+            description=archive["description"],
+            tags=archive["tags"],
+            search_log_id=archive["search_log_id"],
+            items_count=archive["items_count"],
+            items=items,
+            created_at=archive["created_at"],
+            updated_at=archive["updated_at"]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取档案详情失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "获取档案详情失败，请稍后重试"
+            }
+        )
+
+
+@router.put(
+    "/archives/{archive_id}",
+    response_model=ArchiveResponse,
+    summary="更新档案",
+    description="更新档案的基本信息（名称、描述、标签）"
+)
+async def update_archive(
+    archive_id: str,
+    user_id: int = Query(..., gt=0, description="用户ID（用于权限验证）"),
+    request: UpdateArchiveRequest = None
+):
+    """
+    更新档案
+
+    **功能**: ✅ 完整实现
+
+    **功能**:
+    - 更新档案名称、描述、标签
+    - 权限验证（仅允许档案所有者修改）
+    - 自动更新 updated_at 字段
+
+    Args:
+        archive_id (int): 档案ID
+        user_id (int): 用户ID（权限验证）
+        request (UpdateArchiveRequest): 更新内容
+
+    Returns:
+        ArchiveResponse: 更新后的档案信息
+
+    Raises:
+        HTTPException:
+            - 400: 输入验证失败
+            - 404: 档案不存在或无权修改
+            - 500: 服务错误
+
+    Example:
+        ```bash
+        curl -X PUT "http://localhost:8000/api/v1/nl-search/archives/1?user_id=1001" \\
+          -H "Content-Type: application/json" \\
+          -d '{
+            "archive_name": "新档案名称",
+            "description": "更新的描述",
+            "tags": ["更新", "标签"]
+          }'
+        ```
+    """
+    try:
+        logger.info(f"更新档案: archive_id={archive_id}, user_id={user_id}")
+
+        # 调用服务层更新
+        success = await mongo_archive_service.update_archive(
+            archive_id=archive_id,
+            user_id=user_id,
+            archive_name=request.archive_name if request else None,
+            description=request.description if request else None,
+            tags=request.tags if request else None
+        )
+
+        if not success:
+            logger.warning(f"档案更新失败: archive_id={archive_id}, user_id={user_id}")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "档案不存在",
+                    "message": f"未找到档案或您无权修改: archive_id={archive_id}"
+                }
+            )
+
+        # 获取更新后的档案
+        archive = await mongo_archive_service.get_archive(
+            archive_id=archive_id,
+            user_id=user_id
+        )
+
+        return ArchiveResponse(
+            archive_id=archive["archive_id"],
+            user_id=archive["user_id"],
+            archive_name=archive["archive_name"],
+            description=archive["description"],
+            tags=archive["tags"],
+            search_log_id=archive["search_log_id"],
+            items_count=archive["items_count"],
+            items=None,  # 更新接口不返回条目详情
+            created_at=archive["created_at"],
+            updated_at=archive["updated_at"]
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.warning(f"档案更新验证失败: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "输入验证失败",
+                "message": str(e)
+            }
+        )
+    except Exception as e:
+        logger.error(f"档案更新失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "更新档案失败，请稍后重试"
+            }
+        )
+
+
+@router.delete(
+    "/archives/{archive_id}",
+    summary="删除档案",
+    description="删除档案及其所有条目"
+)
+async def delete_archive(
+    archive_id: str,
+    user_id: int = Query(..., gt=0, description="用户ID（用于权限验证）")
+):
+    """
+    删除档案
+
+    **功能**: ✅ 完整实现
+
+    **功能**:
+    - 删除档案及所有条目（级联删除）
+    - 权限验证（仅允许档案所有者删除）
+
+    Args:
+        archive_id (int): 档案ID
+        user_id (int): 用户ID（权限验证）
+
+    Returns:
+        dict: 删除结果
+
+    Raises:
+        HTTPException:
+            - 404: 档案不存在或无权删除
+            - 500: 服务错误
+
+    Example:
+        ```bash
+        curl -X DELETE "http://localhost:8000/api/v1/nl-search/archives/1?user_id=1001"
+        ```
+    """
+    try:
+        logger.info(f"删除档案: archive_id={archive_id}, user_id={user_id}")
+
+        # 调用服务层删除
+        success = await mongo_archive_service.delete_archive(
+            archive_id=archive_id,
+            user_id=user_id
+        )
+
+        if not success:
+            logger.warning(f"档案删除失败: archive_id={archive_id}, user_id={user_id}")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "档案不存在",
+                    "message": f"未找到档案或您无权删除: archive_id={archive_id}"
+                }
+            )
+
+        logger.info(f"档案删除成功: archive_id={archive_id}")
+
+        return {
+            "success": True,
+            "message": "档案删除成功",
+            "archive_id": archive_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"档案删除失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "删除档案失败,请稍后重试"
+            }
+        )

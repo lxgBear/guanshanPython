@@ -1,13 +1,15 @@
 """
-GPT-5 搜索适配器
+GPT-5 Search API 适配器 (api.gpt.ge)
 用于执行搜索查询并返回 URL 和标题列表
 
-设计说明:
+架构升级 v2.0:
+- 使用 gpt-5-search-api 模型 (api.gpt.ge)
+- 标准 OpenAI chat/completions 接口
 - 支持测试模式（返回模拟数据）
-- 支持真实搜索 API 集成（SerpAPI、Bing Search API等）
 - 异步 HTTP 客户端
 - 重试机制和错误处理
 - 结果过滤和排序
+- URL annotations 解析
 """
 import json
 import logging
@@ -68,18 +70,20 @@ class SearchResult:
 
 
 class GPT5SearchAdapter:
-    """GPT-5 搜索适配器
+    """GPT-5 Search API 适配器 (api.gpt.ge)
 
     功能:
-    - 执行搜索查询
-    - 返回 URL 和标题列表
+    - 使用 gpt-5-search-api 模型执行搜索查询
+    - 返回 URL、标题和内容摘要
     - 支持测试模式和真实 API
     - 结果过滤和排序
+    - 解析 URL annotations
     """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
         test_mode: bool = False,
         timeout: int = 30
     ):
@@ -87,14 +91,18 @@ class GPT5SearchAdapter:
         初始化搜索适配器
 
         Args:
-            api_key: 搜索 API Key（可选，默认使用配置）
+            api_key: api.gpt.ge API Key（可选，默认使用配置）
+            base_url: API Base URL（可选，默认使用配置）
             test_mode: 是否测试模式（返回模拟数据）
             timeout: 请求超时时间（秒）
         """
-        self.api_key = api_key or nl_search_config.gpt5_search_api_key
+        self.api_key = api_key or nl_search_config.llm_api_key
+        self.base_url = base_url or nl_search_config.llm_base_url
         self.test_mode = test_mode
         self.timeout = timeout
-        self.max_results = nl_search_config.gpt5_max_results
+        self.max_results = nl_search_config.max_search_results
+        self.search_model = nl_search_config.search_model
+        self.max_tokens = nl_search_config.search_max_tokens
 
         # HTTP 客户端
         if httpx is None:
@@ -103,12 +111,19 @@ class GPT5SearchAdapter:
         else:
             self.client = httpx.AsyncClient(
                 timeout=httpx.Timeout(timeout),
-                headers={"User-Agent": "NLSearch/1.0"}
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
             )
 
-        # 搜索 API 配置（这里使用 SerpAPI 作为示例）
-        # 可以根据实际需求替换为其他搜索 API
-        self.search_api_url = "https://serpapi.com/search"
+        # API 端点 (标准 OpenAI chat/completions)
+        self.search_api_url = f"{self.base_url}/chat/completions"
+
+        logger.info(
+            f"GPT5SearchAdapter initialized: model={self.search_model}, "
+            f"url={self.search_api_url}, test_mode={self.test_mode}"
+        )
 
     async def search(
         self,
@@ -206,16 +221,16 @@ class GPT5SearchAdapter:
         language: str
     ) -> List[SearchResult]:
         """
-        执行搜索 API 调用
-
-        这里使用 SerpAPI 作为示例，可以根据实际需求替换为其他搜索 API
+        执行搜索 API 调用 (gpt-5-search-api via chat/completions)
         """
-        # 构建请求参数
-        params = self._build_search_params(query, max_results, language)
+        # 构建请求体 (OpenAI chat/completions format)
+        payload = self._build_search_payload(query, language)
 
         # 发送请求
-        logger.debug(f"发送搜索请求: {self.search_api_url}, params={params}")
-        response = await self.client.get(self.search_api_url, params=params)
+        logger.debug(f"发送搜索请求: {self.search_api_url}")
+        logger.debug(f"Payload: {json.dumps(payload, ensure_ascii=False)}")
+
+        response = await self.client.post(self.search_api_url, json=payload)
 
         # 检查响应状态
         if response.status_code != 200:
@@ -226,78 +241,146 @@ class GPT5SearchAdapter:
         # 解析响应
         try:
             data = response.json()
-            results = self._parse_search_results(data)
+            results = self._parse_gpt5_search_response(data)
 
             # 结果过滤和排序
             results = self._filter_and_sort_results(results, max_results)
+
+            logger.info(f"搜索成功解析: {len(results)} 个结果")
+
+            # 控制台打印搜索结果
+            self._print_search_results(query, results)
 
             return results
 
         except json.JSONDecodeError as e:
             logger.error(f"搜索结果解析失败: {e}")
             raise
+        except Exception as e:
+            logger.error(f"搜索结果处理失败: {e}", exc_info=True)
+            raise
 
-    def _build_search_params(
+    def _build_search_payload(
         self,
         query: str,
-        max_results: int,
         language: str
     ) -> Dict[str, Any]:
         """
-        构建搜索 API 请求参数
+        构建搜索 API 请求体 (OpenAI chat/completions format)
 
-        SerpAPI 参数示例：
-        - q: 搜索查询
-        - api_key: API Key
-        - num: 结果数量
-        - hl: 语言（zh-cn）
-        - gl: 地区（cn）
+        参数:
+        - model: gpt-5-search-api
+        - messages: 用户查询
+        - max_tokens: 最大响应 tokens
         """
+        # 构建搜索提示词
+        search_prompt = f"搜索: {query}"
+        if language and language != "zh-cn":
+            search_prompt = f"Search: {query}"
+
         return {
-            "q": query,
-            "api_key": self.api_key,
-            "num": max_results,
-            "hl": language,
-            "gl": "cn",  # 中国地区
-            "engine": "google"  # 搜索引擎（可选：google, bing, baidu等）
+            "model": self.search_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": search_prompt
+                }
+            ],
+            "max_tokens": self.max_tokens,
+            "temperature": 0.3  # 搜索任务使用较低温度
         }
 
-    def _parse_search_results(self, data: Dict[str, Any]) -> List[SearchResult]:
+    def _parse_gpt5_search_response(self, data: Dict[str, Any]) -> List[SearchResult]:
         """
-        解析搜索 API 响应
+        解析 gpt-5-search-api 响应
 
-        SerpAPI 响应格式示例：
+        OpenAI chat/completions 响应格式:
         {
-            "organic_results": [
-                {
-                    "position": 1,
-                    "title": "标题",
-                    "link": "https://example.com",
-                    "snippet": "摘要"
+            "id": "chatcmpl-...",
+            "object": "chat.completion",
+            "model": "gpt-5-search-api-2025-10-14",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "搜索结果内容...",
+                    "annotations": [{
+                        "type": "url_citation",
+                        "url_citation": {
+                            "url": "https://example.com",
+                            "title": "标题",
+                            "start_index": 0,
+                            "end_index": 100
+                        }
+                    }]
                 }
-            ]
+            }]
         }
         """
         results = []
 
-        # 获取有机搜索结果
-        organic_results = data.get("organic_results", [])
+        try:
+            # 提取 choice
+            choices = data.get("choices", [])
+            if not choices:
+                logger.warning("响应中没有 choices")
+                return results
 
-        for item in organic_results:
-            try:
-                result = SearchResult(
-                    title=item.get("title", ""),
-                    url=item.get("link", ""),
-                    snippet=item.get("snippet", ""),
-                    position=item.get("position", 0),
-                    score=1.0 / (item.get("position", 1) + 1),  # 简单评分：位置越靠前分数越高
-                    source="serpapi"
-                )
-                results.append(result)
+            first_choice = choices[0]
+            message = first_choice.get("message", {})
 
-            except Exception as e:
-                logger.warning(f"解析搜索结果项失败: {e}, item={item}")
-                continue
+            # 提取主要内容
+            content = message.get("content", "")
+
+            # 提取 URL annotations
+            annotations = message.get("annotations", [])
+
+            # 解析每个 annotation
+            for idx, annotation in enumerate(annotations):
+                try:
+                    if annotation.get("type") == "url_citation":
+                        url_citation = annotation.get("url_citation", {})
+
+                        # 提取 URL 和标题
+                        url = url_citation.get("url", "")
+                        title = url_citation.get("title", "")
+                        start_idx = url_citation.get("start_index", 0)
+                        end_idx = url_citation.get("end_index", 0)
+
+                        # 提取内容片段作为 snippet
+                        snippet = content[start_idx:end_idx] if start_idx < end_idx else ""
+
+                        if url:
+                            result = SearchResult(
+                                title=title or url,
+                                url=url,
+                                snippet=snippet[:200],  # 限制摘要长度
+                                position=idx + 1,
+                                score=1.0 - (idx * 0.05),  # 分数递减
+                                source="gpt-5-search-api"
+                            )
+                            results.append(result)
+
+                except Exception as e:
+                    logger.warning(f"解析 annotation 失败: {e}, annotation={annotation}")
+                    continue
+
+            # 如果没有 annotations,尝试从内容中提取
+            if not results:
+                logger.warning("响应中没有 URL annotations,使用内容作为单一结果")
+                if content:
+                    results.append(SearchResult(
+                        title="搜索结果",
+                        url="",
+                        snippet=content[:500],
+                        position=1,
+                        score=1.0,
+                        source="gpt-5-search-api"
+                    ))
+
+        except Exception as e:
+            logger.error(f"解析 GPT-5 搜索响应失败: {e}, data={data}")
+            raise
 
         return results
 
@@ -328,6 +411,30 @@ class GPT5SearchAdapter:
 
         # 3. 限制数量
         return unique_results[:max_results]
+
+    def _print_search_results(self, query: str, results: List[SearchResult]) -> None:
+        """
+        在控制台打印搜索结果
+
+        Args:
+            query: 搜索查询
+            results: 搜索结果列表
+        """
+        print("\n" + "=" * 80)
+        print(f"🔍 搜索查询: {query}")
+        print(f"📊 找到 {len(results)} 个结果 (最多显示5条)")
+        print("=" * 80)
+
+        for idx, result in enumerate(results[:5], 1):
+            print(f"\n[{idx}] {result.title}")
+            print(f"    🔗 URL: {result.url}")
+            if result.snippet:
+                # 限制摘要显示长度
+                snippet = result.snippet[:150] + "..." if len(result.snippet) > 150 else result.snippet
+                print(f"    📝 摘要: {snippet}")
+            print(f"    ⭐ 评分: {result.score:.2f} | 来源: {result.source}")
+
+        print("\n" + "=" * 80 + "\n")
 
     def _generate_test_results(
         self,
