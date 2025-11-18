@@ -87,6 +87,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
+        extra = "ignore"  # 忽略额外的环境变量（如NL_SEARCH_*由独立配置类处理）
         
     @validator("ALLOWED_ORIGINS", pre=True)
     def parse_cors_origins(cls, v):

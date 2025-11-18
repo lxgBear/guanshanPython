@@ -41,6 +41,11 @@ class LLMProcessor:
         """
         self.config = config or nl_search_config
 
+        # 调试日志：打印配置信息
+        logger.info(f"LLM Processor 配置: model={self.config.llm_model}, "
+                   f"base_url={self.config.llm_base_url}, "
+                   f"api_key={'已设置' if self.config.llm_api_key else '未设置'}")
+
         # 验证配置
         if not self.config.llm_api_key:
             logger.warning("LLM API Key 未配置，LLM 功能将不可用")
@@ -50,7 +55,14 @@ class LLMProcessor:
                 logger.error("openai 包未安装，请运行: pip install openai")
                 self.client = None
             else:
-                self.client = AsyncOpenAI(api_key=self.config.llm_api_key)
+                # 支持自定义API端点
+                client_kwargs = {"api_key": self.config.llm_api_key}
+                if self.config.llm_base_url:
+                    client_kwargs["base_url"] = self.config.llm_base_url
+                    logger.info(f"使用自定义API端点: {self.config.llm_base_url}")
+
+                self.client = AsyncOpenAI(**client_kwargs)
+                logger.info("AsyncOpenAI 客户端初始化完成")
 
         # 重试配置
         self.max_retries = 3

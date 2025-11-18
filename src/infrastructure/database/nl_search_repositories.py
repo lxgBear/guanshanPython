@@ -54,7 +54,7 @@ class NLSearchLogRepository:
         self,
         query_text: str,
         llm_analysis: Optional[Dict[str, Any]] = None
-    ) -> int:
+    ) -> Optional[int]:
         """创建搜索记录
 
         Args:
@@ -62,10 +62,7 @@ class NLSearchLogRepository:
             llm_analysis: LLM 分析结果 (可选)
 
         Returns:
-            int: 创建的记录 ID
-
-        Raises:
-            Exception: 数据库操作失败
+            Optional[int]: 创建的记录 ID，数据库不可用时返回 None
 
         Example:
             >>> log_id = await repo.create(
@@ -73,9 +70,9 @@ class NLSearchLogRepository:
             ...     llm_analysis={"intent": "tech_news"}
             ... )
         """
-        session = await self._get_session()
-
         try:
+            session = await self._get_session()
+
             # 准备 JSON 数据
             llm_analysis_json = json.dumps(llm_analysis) if llm_analysis else None
 
@@ -99,9 +96,9 @@ class NLSearchLogRepository:
             return log_id
 
         except Exception as e:
-            await session.rollback()
-            logger.error(f"创建 NL 搜索记录失败: {e}")
-            raise
+            logger.warning(f"创建 NL 搜索记录失败（数据库不可用）: {e}")
+            # 数据库不可用时返回 None，允许 LLM 功能继续工作
+            return None
 
     async def get_by_id(self, log_id: int) -> Optional[NLSearchLog]:
         """根据 ID 获取搜索记录
@@ -148,13 +145,13 @@ class NLSearchLogRepository:
 
     async def update_llm_analysis(
         self,
-        log_id: int,
+        log_id: Optional[int],
         llm_analysis: Dict[str, Any]
     ) -> bool:
         """更新 LLM 解析结果
 
         Args:
-            log_id: 搜索记录 ID
+            log_id: 搜索记录 ID (可选，None 时跳过更新)
             llm_analysis: 新的 LLM 分析结果
 
         Returns:
@@ -166,9 +163,14 @@ class NLSearchLogRepository:
             ...     llm_analysis={"intent": "updated", "confidence": 0.99}
             ... )
         """
-        session = await self._get_session()
+        # 如果 log_id 为 None (数据库不可用)，直接返回 False
+        if log_id is None:
+            logger.debug("跳过更新 LLM 分析（数据库不可用）")
+            return False
 
         try:
+            session = await self._get_session()
+
             query = text("""
                 UPDATE nl_search_logs
                 SET llm_analysis = :llm_analysis
@@ -190,9 +192,8 @@ class NLSearchLogRepository:
             return success
 
         except Exception as e:
-            await session.rollback()
-            logger.error(f"更新 NL 搜索记录失败: {e}")
-            raise
+            logger.warning(f"更新 NL 搜索记录失败（数据库不可用）: {e}")
+            return False
 
     async def get_recent(
         self,

@@ -13,6 +13,7 @@ from src.api.v1.endpoints import summary_report_management
 from src.api.v1.endpoints import data_source_management
 from src.api.v1.endpoints import firecrawl_utils
 from src.api.v1.endpoints import nl_search
+from src.api.v1.endpoints import user_edits
 
 # 创建主路由器
 api_router = APIRouter()
@@ -81,6 +82,12 @@ api_router.include_router(
     nl_search.router,
     prefix="/nl-search",
     tags=["🤖 自然语言搜索 (Beta)"]
+)
+
+# 用户批量编辑（v1.0.0新增）
+api_router.include_router(
+    user_edits.router,
+    tags=["✏️ 用户批量编辑"]
 )
 
 # ==========================================
