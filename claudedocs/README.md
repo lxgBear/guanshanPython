@@ -1,8 +1,8 @@
 # 关山Python项目文档中心
 
 **版本**: v2.1.3
-**最后更新**: 2025-11-18
-**文档总数**: 23 个活动文档 + 7 个归档文档
+**最后更新**: 2025-11-21
+**文档总数**: 27 个活动文档 + 8 个归档文档
 
 ---
 
@@ -34,6 +34,10 @@
 | [MongoDB 迁移指南](features/nl-search/NL_SEARCH_MONGODB_MIGRATION.md) | 数据库迁移步骤 | 2025-11 |
 | [API 测试报告](features/nl-search/NL_SEARCH_API_TEST_REPORT.md) | 功能测试结果 | 2025-11 |
 | [关系图](features/nl-search/nl_search_relations.md) | 数据关系快速参考 | 2025-11 |
+| [**去重分析报告**](features/nl-search/Deduplication_Analysis_Report.md) | URL 和内容去重机制分析 | 2025-11-21 |
+| [**去重实施总结**](features/nl-search/Deduplication_Implementation_Summary.md) | 去重功能实施详情和效果评估 | 2025-11-21 |
+| [GPT-5 API 分析](features/nl-search/gpt5_search_api_analysis.md) | GPT-5 Search API 配置和 response_format | 2025-11-20 |
+| [PDF 过滤验证](features/nl-search/PDF_Filter_Verification_Report.md) | PDF URL 过滤功能验证报告 | 2025-11-21 |
 
 **核心功能**:
 - 5 个 API 端点（查询搜索日志、查看单条日志、提交用户选择等）
@@ -112,7 +116,7 @@ Map+Scrape 执行器和 URL 过滤系统。
 
 历史文档归档（2025-11-18 之前的版本）。
 
-共 7 个归档文档（约 142KB），包括早期的 NL Search 实现路线图、阶段性完成报告和代码清理分析。
+共 8 个归档文档（约 153KB），包括早期的 NL Search 实现路线图、阶段性完成报告、代码清理分析和旧的文档清理计划。
 
 ---
 
@@ -146,20 +150,21 @@ Map+Scrape 执行器和 URL 过滤系统。
 | 类别 | 文档数量 | 主要内容 |
 |------|---------|---------|
 | 核心系统 (`core/`) | 3 | 架构、数据库、重构 |
-| NL Search (`features/nl-search/`) | 6 | 自然语言搜索系统 |
+| NL Search (`features/nl-search/`) | 10 | 自然语言搜索系统 |
 | User Curation (`features/user-curation/`) | 3 | 用户编辑和精选 |
 | Web Crawling (`features/crawling/`) | 3 | 爬虫和过滤 |
 | Cleanup Tools (`features/cleanup/`) | 2 | 数据清理脚本 |
 | Releases (`releases/`) | 3 | 版本发布说明 |
-| Archived (`archived/`) | 7 | 历史归档 |
-| **总计** | **27** | **活动文档: 20** |
+| Archived (`archived/`) | 8 | 历史归档 |
+| **总计** | **32** | **活动文档: 24** |
 
 ### 文档健康度
 
 ✅ **优秀**: 文档结构清晰，内容完整，定期更新
 ✅ **已整合**: 2 个主要整合文档（NL Search、User Curation）
-✅ **已归档**: 7 个历史文档已归档保存
+✅ **已归档**: 8 个历史文档已归档保存
 ✅ **组织良好**: 按功能模块分类，易于导航
+✅ **最近清理**: 2025-11-21 完成根目录整理
 
 ---
 
@@ -223,8 +228,8 @@ Map+Scrape 执行器和 URL 过滤系统。
 ## 📞 联系和贡献
 
 **文档维护**: Claude Code
-**最近清理**: 2025-11-18
-**清理计划**: [DOCUMENTATION_CLEANUP_PLAN_2025-11-18.md](DOCUMENTATION_CLEANUP_PLAN_2025-11-18.md)
+**最近清理**: 2025-11-21
+**清理计划**: [DOCUMENTATION_CONSOLIDATION_PLAN_2025-11-21.md](DOCUMENTATION_CONSOLIDATION_PLAN_2025-11-21.md)
 
 ---
 
