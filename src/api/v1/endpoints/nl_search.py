@@ -48,12 +48,18 @@ class NLSearchRequest(BaseModel):
         None,
         description="用户ID（可选，用于个性化和历史记录）"
     )
+    search_mode: str = Field(
+        default="single",
+        description="搜索模式: single=单次搜索(快速), multi=多问题分解搜索(深度)",
+        pattern="^(single|multi)$"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "query_text": "最近有哪些关于GPT-5的新闻",
-                "user_id": "user_12345"
+                "user_id": "user_12345",
+                "search_mode": "single"
             }
         }
 
@@ -65,7 +71,11 @@ class NLSearchResponse(BaseModel):
     message: str = Field(..., description="响应消息")
     results: Optional[List[Dict[str, Any]]] = Field(None, description="搜索结果列表")
     analysis: Optional[Dict[str, Any]] = Field(None, description="LLM分析结果")
-    refined_query: Optional[str] = Field(None, description="精炼后的查询")
+    refined_query: Optional[str] = Field(None, description="精炼后的查询（single模式）")
+    search_mode: Optional[str] = Field(None, description="搜索模式（single|multi）")
+    sub_queries: Optional[List[str]] = Field(None, description="子问题列表（multi模式）")
+    total_raw_results: Optional[int] = Field(None, description="原始结果总数（multi模式）")
+    total_unique_results: Optional[int] = Field(None, description="去重后结果数（multi模式）")
     alternative_api: Optional[str] = Field(None, description="替代方案API")
 
     class Config:
@@ -81,7 +91,8 @@ class NLSearchResponse(BaseModel):
                     "intent": "technology_news",
                     "keywords": ["AI", "技术突破"]
                 },
-                "refined_query": "AI技术突破 2024"
+                "refined_query": "AI技术突破 2024",
+                "search_mode": "single"
             }
         }
 
@@ -417,23 +428,39 @@ async def create_nl_search(request: NLSearchRequest):
 
     try:
         # 调用服务层
-        logger.info(f"收到自然语言搜索请求: {request.query_text[:50]}...")
+        logger.info(f"收到自然语言搜索请求: {request.query_text[:50]}... (mode={request.search_mode})")
 
         result = await nl_search_service.create_search(
             query_text=request.query_text,
-            user_id=request.user_id
+            user_id=request.user_id,
+            search_mode=request.search_mode
         )
 
-        logger.info(f"搜索成功: log_id={result['log_id']}")
+        logger.info(f"搜索成功: log_id={result['log_id']}, mode={request.search_mode}")
 
-        return NLSearchResponse(
+        # 构建响应（根据搜索模式返回不同字段）
+        response = NLSearchResponse(
             log_id=result["log_id"],
             status="completed",
             message="搜索成功",
             results=result["results"],
             analysis=result["analysis"],
-            refined_query=result["refined_query"]
+            search_mode=result.get("search_mode", request.search_mode)
         )
+
+        # Single模式：返回优化指标和精炼查询
+        if request.search_mode == "single":
+            response.refined_query = result.get("refined_query")  # 已废弃，保持兼容性
+            response.total_raw_results = result.get("total_results")  # GPT返回总数
+            response.total_unique_results = result.get("high_score_results")  # 分数过滤后爬取数
+
+        # Multi模式：返回子问题和统计信息
+        elif request.search_mode == "multi":
+            response.sub_queries = result.get("sub_queries", [])
+            response.total_raw_results = result.get("total_raw_results")
+            response.total_unique_results = result.get("total_unique_results")
+
+        return response
 
     except ValueError as e:
         # 输入验证错误
@@ -761,8 +788,40 @@ async def select_search_result(
 @router.get(
     "/{log_id}/results",
     response_model=SearchResultsResponse,
-    summary="获取搜索结果",
-    description="获取自然语言搜索的所有结果（支持分页）"
+    summary="获取自然语言搜索结果",
+    description="""
+获取自然语言搜索的所有结果（支持分页）
+
+⚠️ **重要提示 - 系统区分**:
+- 此端点用于 **自然语言搜索系统** (NL Search)
+- 数据来源: `nl_search_logs` → `news_results`
+- 如需访问通用搜索结果，请使用: `/api/v1/search-tasks/{task_id}/results`
+
+**两个系统的区别**:
+1. **自然语言搜索** (本端点):
+   - 前缀: `/api/v1/nl-search/`
+   - 数据表: `nl_search_logs` + `news_results`
+   - 用途: LLM理解的自然语言查询
+
+2. **通用搜索**:
+   - 前缀: `/api/v1/search-tasks/`
+   - 数据表: `search_tasks` + `search_results`
+   - 用途: 传统关键词搜索
+    """,
+    responses={
+        404: {
+            "description": "搜索记录不存在",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "error": "记录不存在",
+                        "message": "未找到搜索记录: log_id=xxx",
+                        "hint": "如果这是通用搜索任务，请使用 /api/v1/search-tasks/{task_id}/results"
+                    }
+                }
+            }
+        }
+    }
 )
 async def get_search_results(
     log_id: str,
@@ -774,6 +833,8 @@ async def get_search_results(
 
     **功能**: ✅ 完整实现
 
+    **数据来源**: nl_search_logs → news_results (自然语言搜索系统)
+
     **功能**:
     - 返回LLM分析的结构化结果
     - 包含搜索来源和评分
@@ -781,7 +842,7 @@ async def get_search_results(
     - 包含LLM分析结果
 
     Args:
-        log_id (str): 搜索记录ID（雪花算法ID字符串）
+        log_id (str): 搜索记录ID（雪花算法ID字符串，来自 nl_search_logs）
         limit (Optional[int]): 返回数量限制（1-100）
         offset (int): 分页偏移量
 
@@ -791,12 +852,16 @@ async def get_search_results(
     Raises:
         HTTPException:
             - 503: 功能未启用
-            - 404: 搜索记录不存在
+            - 404: 搜索记录不存在（提示: 检查是否使用了错误的端点）
             - 500: 内部错误
 
     Example:
         ```bash
+        # 正确使用 (自然语言搜索)
         curl -X GET "http://localhost:8000/api/v1/nl-search/248728141926559744/results?limit=10&offset=0"
+
+        # 如果是通用搜索，应使用:
+        # curl -X GET "http://localhost:8000/api/v1/search-tasks/{task_id}/results"
         ```
     """
     # 检查功能开关
@@ -823,12 +888,35 @@ async def get_search_results(
 
         if not result:
             logger.warning(f"搜索记录不存在: log_id={log_id}")
+
+            # ✨ 新增：检查是否为通用搜索任务ID（用户可能用错了端点）
+            from src.infrastructure.database.connection import get_mongodb_database
+            db = await get_mongodb_database()
+            generic_task = await db['search_tasks'].find_one({'_id': log_id})
+
+            if generic_task:
+                # 用户使用了错误的端点 - 提供友好提示
+                logger.info(f"检测到端点使用错误: ID {log_id} 属于通用搜索系统")
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error": "端点使用错误",
+                        "message": f"ID {log_id} 属于通用搜索系统，不是自然语言搜索",
+                        "correct_endpoint": f"/api/v1/search-tasks/{log_id}/results",
+                        "current_endpoint": f"/api/v1/nl-search/{log_id}/results",
+                        "hint": "自然语言搜索使用 /api/v1/nl-search/ 前缀，通用搜索使用 /api/v1/search-tasks/ 前缀",
+                        "documentation": "查看 API 文档了解两个系统的区别: /api/docs"
+                    }
+                )
+
+            # 确实不存在于任何系统
             raise HTTPException(
                 status_code=404,
                 detail={
                     "error": "记录不存在",
                     "message": f"未找到搜索记录: log_id={log_id}",
-                    "log_id": log_id
+                    "log_id": log_id,
+                    "hint": "请检查 ID 是否正确，或该记录可能已被删除"
                 }
             )
 

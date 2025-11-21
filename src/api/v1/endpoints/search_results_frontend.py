@@ -234,11 +234,37 @@ def processed_result_to_response(result: ProcessedResult) -> SearchResultRespons
 
 
 async def validate_task_exists(task_id: str) -> str:
-    """验证任务是否存在，返回任务名称"""
+    """验证任务是否存在，返回任务名称
+
+    增强功能: 检测用户是否错用了 NL Search 的 ID
+    """
     repo = await get_task_repository()
     task = await repo.get_by_id(task_id)
+
     if not task:
+        # ✨ 新增：检查是否为 NL Search 数据（用户可能用错了端点）
+        from src.infrastructure.database.connection import get_mongodb_database
+        db = await get_mongodb_database()
+        nl_log = await db['nl_search_logs'].find_one({'_id': task_id})
+
+        if nl_log:
+            # 用户使用了错误的端点 - 提供友好提示
+            logger.info(f"检测到端点使用错误: ID {task_id} 属于自然语言搜索系统")
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "端点使用错误",
+                    "message": f"ID {task_id} 属于自然语言搜索系统，不是通用搜索",
+                    "correct_endpoint": f"/api/v1/nl-search/{task_id}/results",
+                    "current_endpoint": f"/api/v1/search-tasks/{task_id}/results",
+                    "hint": "通用搜索使用 /api/v1/search-tasks/ 前缀，自然语言搜索使用 /api/v1/nl-search/ 前缀",
+                    "documentation": "查看 API 文档了解两个系统的区别: /api/docs"
+                }
+            )
+
+        # 确实不存在于任何系统
         raise HTTPException(404, f"任务不存在: {task_id}")
+
     return task.name
 
 
@@ -269,21 +295,17 @@ def calculate_result_stats(task_id: str, task_name: str, status_counts: Dict[str
     "/{task_id}/results",
     response_model=SearchResultListResponse,
     summary="获取任务搜索结果列表",
-    description="获取指定搜索任务的所有历史搜索结果，支持分页、过滤和排序功能。默认只返回AI处理成功的结果。"
+    description="获取指定搜索任务的所有历史搜索结果，支持分页、过滤和排序功能。"
 )
 async def get_task_results(
     task_id: str,
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页大小"),
     status: Optional[str] = Query(None, description="状态过滤: pending, processing, completed, failed, archived, deleted"),
-    processing_status: Optional[str] = Query("success", description="AI处理状态过滤: success, failed, pending（默认只返回success）"),
     sort_by: str = Query("created_at", description="排序字段: created_at, processed_at"),
     order: str = Query("desc", description="排序方向: asc, desc")
 ):
-    """获取指定任务的历史搜索结果 - v2.0.0: 从 processed_results_new 读取AI增强数据
-
-    v2.1.1: 默认只返回 processing_status=success 的结果
-    """
+    """获取指定任务的历史搜索结果 - v2.0.0: 从 processed_results_new 读取AI增强数据"""
 
     # 验证任务存在
     task_name = await validate_task_exists(task_id)
@@ -300,11 +322,9 @@ async def get_task_results(
             raise HTTPException(400, f"无效的状态值: {status}")
 
     # 从 processed_results_new 查询（带分页和状态筛选）
-    # v2.1.1: 添加 processing_status 过滤
     processed_results, total = await processed_repo.get_by_task(
         task_id=task_id,
         status=status_filter,
-        processing_status=processing_status,  # v2.1.1: 默认 'success'
         page=page,
         page_size=page_size
     )
