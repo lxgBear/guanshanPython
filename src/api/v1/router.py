@@ -29,16 +29,16 @@ api_router.include_router(
     tags=["🌐 网页爬取服务"]
 )
 
-# 搜索任务管理（前端优化版）
+# 搜索任务管理（前端优化版 - 通用搜索系统）
 api_router.include_router(
     search_tasks_frontend.router,
-    tags=["🔍 搜索任务管理"]
+    tags=["🔍 搜索任务管理 (通用搜索)"]
 )
 
-# 搜索结果查询（前端优化版，作为任务子资源）
+# 搜索结果查询（前端优化版 - 通用搜索系统，数据源: search_tasks → search_results）
 api_router.include_router(
     search_results_frontend.router,
-    tags=["📊 搜索结果查询"]
+    tags=["📊 搜索结果查询 (通用搜索)"]
 )
 
 # 调度器管理
@@ -77,11 +77,11 @@ api_router.include_router(
     tags=["💰 Firecrawl 工具"]
 )
 
-# 自然语言搜索（v1.0.0-beta 🚧 开发中）
+# 自然语言搜索（v1.0.0-beta - 独立系统，数据源: nl_search_logs → news_results）
 api_router.include_router(
     nl_search.router,
     prefix="/nl-search",
-    tags=["🤖 自然语言搜索 (Beta)"]
+    tags=["🤖 自然语言搜索 (NL Search - Beta)"]
 )
 
 # 用户批量编辑（v1.0.0新增）

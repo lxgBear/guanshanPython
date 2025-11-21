@@ -53,7 +53,7 @@ mkdir -p src/core/domain/entities/nl_search
 mkdir -p tests/nl_search
 ```
 
-**目录结构验证**：
+**目录结构验证**： 
 
 ```
 src/
@@ -859,6 +859,7 @@ python scripts/cleanup_nl_search_data.py
 - [Firecrawl 集成文档](FIRECRAWL_MAP_API_GUIDE.md)
 
 ---
+
 
 **文档状态**: ✅ 已完成
 **最后更新**: 2025-11-10
