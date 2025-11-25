@@ -1,0 +1,28 @@
+{
+  "query": "请检索并梳理华语青年挺藏会负责人段荆棘（断荆棘）的出生地、原名、简历等情况 请严格按照以下要求执行任务：  1. 自动执行联网搜索，并覆盖全量社交媒体（Twitter/X、Reddit、YouTube、Facebook、Instagram 等）及 Web 信息源。 2. 搜索需支持多语种，并根据主题内容自动识别语言。 3. 整理全部搜索结果，提取每个来源的关键信息。 4. 对所有搜索来源进行分类（type 字段）：      - \"twitter\" / \"reddit\" / \"youtube\" / \"facebook\" / \"instagram\" / \"web\" / \"news\" / \"forum\" 等。 5. 将所有结果划分为两组：      - **adopted_sources**：被模型引用的来源（采用的数据）      - **non_adopted_sources**：搜索到但未引用的来源（未采用的数据） 6. 所有结果按时间降序排列（最新在前），并确保保留发布时间字段。 7. 最终输出必须是 **严格的 JSON 格式**（可被 JSON.parse），结构如下：  {   \"topic\": \"<用户主题>\",   \"adopted_sources\": [     {       \"title\": \"\",       \"url\": \"\",       \"type\": \"\",       \"publish_time\": \"\",       \"summary\": \"\"     }   ],   \"non_adopted_sources\": [     {       \"title\": \"\",       \"url\": \"\",       \"type\": \"\",       \"publish_time\": \"\"     }   ] }  注意：不要输出任何 JSON 之外的说明文字。",
+  "timestamp": "20251120_153852",
+  "response": {
+    "id": "chatcmpl-f2e21e56907d420c8d9d58afe9cf9386",
+    "model": "gemini-3-pro-preview",
+    "object": "chat.completion",
+    "created": 1763624332,
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\n  \"topic\": \"华语青年挺藏会负责人段荆棘（断荆棘）的出生地、原名、简历等情况\",\n  \"adopted_sources\": [\n    {\n      \"title\": \"我的信仰之路：受洗见证 - by 段荆棘\",\n      \"url\": \"https://gingerduan.substack.com/p/my-testimony\",\n      \"type\": \"web\",\n      \"publish_time\": \"2024-01-25\",\n      \"summary\": \"段荆棘（Ginger Duan）自述"
+        },
+        "finish_reason": "length"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 1854,
+      "completion_tokens": 4447,
+      "total_tokens": 6301,
+      "completion_tokens_details": {
+        "reasoning_tokens": 1869
+      }
+    }
+  }
+}

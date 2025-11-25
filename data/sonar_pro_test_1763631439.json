@@ -1,0 +1,172 @@
+{
+  "id": "ef49d8a6-7540-446c-a711-0997158c8016",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "根据目前公开的网络信息，关于“华语青年挺藏会”负责人段荆棘（Ginger Duan）的简历和背景，可以总结如下：\n\n1.  **身份与角色**：\n    *   段荆棘是“华语青年挺藏会”（Chinese Youth Stand For Tibet）的主要成员和网络平台管理者。该组织是一个由海外中文母语青年组成的行动团体，致力于传播藏文化、发掘和分享西藏地区的历史、人文、生态、政治经济动态及人权现状。\n\n2.  **个人经历**：\n    *   她曾分享过自己在西藏热加寺（Rejia Monastery）教学的经历，这段经历让她有机会与藏人建立直接联系，并加深了对藏文化的理解。她强调，自己致力于用华语向华人社群介绍西藏的真实情况。\n\n3.  **公开活动**：\n    *   段荆棘曾作为“华语青年挺藏会”的代表，受邀参加由驻北美办事处举办的汉藏青年对话会，与藏人青年及学者进行交流，探讨中国民主等议题。\n\n4.  **组织宗旨**：\n    *   在她的介绍和组织的公开声明中，该团体的目标是促进华语社群了解藏民族文化，解构大汉族主义思想，消解民族对立与仇恨，推动民族问题的转型正义与和解。\n\n**总结**：\n段荆棘（Ginger Duan）是一位活跃于海外的华语青年行动者，是“华语青年挺藏会”的核心成员和平台管理者。她因在西藏的亲身经历而投身于藏文化推广和跨民族交流，并通过组织活动和媒体平台，致力于增进华语社群对西藏的了解。目前公开资料中未提及她的具体教育背景或职业履历，其公开信息主要围绕其在“华语青年挺藏会”的活动和理念。",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null
+      },
+      "delta": {
+        "role": "assistant",
+        "content": ""
+      }
+    }
+  ],
+  "created": 1763631438,
+  "model": "sonar-pro",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": null,
+  "usage": {
+    "completion_tokens": 398,
+    "prompt_tokens": 19,
+    "total_tokens": 417,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": null,
+    "search_context_size": "low",
+    "cost": {
+      "input_tokens_cost": 0.0,
+      "output_tokens_cost": 0.006,
+      "request_cost": 0.006,
+      "total_cost": 0.012
+    }
+  },
+  "citations": [
+    "https://chineseyouthstandfortibet.substack.com/p/who-are-we",
+    "https://chineseyouthstandfortibet.substack.com",
+    "https://chinadigitaltimes.net/space/%E5%8D%8E%E8%AF%AD%E9%9D%92%E5%B9%B4%E6%8C%BA%E8%97%8F%E4%BC%9A",
+    "http://complexities.org/docs/resources/PKU-Book-I.pdf",
+    "https://chineseyouthstandfortibet.substack.com/about",
+    "https://www.shhk.com.sg/wp-content/uploads/2025/08/2025-Xin-Lei-Jiang.pdf",
+    "http://beijingspring.com/bj2/2010/240/117202543555.htm",
+    "https://digicoll.lib.berkeley.edu/record/296576/files/Wang_shi_wei_hen_35.pdf",
+    "https://tibet.com/%E9%A9%BB%E5%8C%97%E7%BE%8E%E5%8A%9E%E4%BA%8B%E5%A4%84%E4%B8%BE%E5%8A%9E%E6%B1%89%E8%97%8F%E9%9D%92%E5%B9%B4%E5%AF%B9%E8%AF%9D%E4%BC%9A%E6%8E%A2%E8%AE%A8%E4%B8%AD%E5%9B%BD%E6%B0%91%E4%B8%BB/",
+    "https://www.xdf.cn/zhuanti/teacher/xdfjs/xdfjs33.pdf",
+    "https://chinaspring.org/article/704ec9b2-6ede-4c9b-9e96-4928d51cf966",
+    "https://www.proz.com/translator/2315434",
+    "https://www.youtube.com/watch?v=F4yoULimHnU",
+    "https://epaper.guilinlife.com/glrbh5/glrb/20251117/Page06BC.htm",
+    "https://www-file.huawei.com/-/media/corp2020/pdf/publications/hw-people/hwpeople-349-cn.pdf",
+    "https://www.hljnc.edu.cn/__local/E/F4/EE/724566CDD5F51C6F176A6B81F9E_D727D13B_5B9F57.pdf?e=.pdf"
+  ],
+  "search_results": [
+    {
+      "title": "我们是谁？Who are we? - 华语青年挺藏会",
+      "url": "https://chineseyouthstandfortibet.substack.com/p/who-are-we",
+      "date": "2024-09-19",
+      "last_updated": "2025-11-16",
+      "snippet": "我们是一群热爱藏文化的华语青年行动者，致力于发掘和传播图博大藏区被掩盖的历史和真相。我们用中英文分享藏区人文，生态，历史，政经动态和人权现状，致力于 ...",
+      "source": "web"
+    },
+    {
+      "title": "华语青年挺藏会| Substack",
+      "url": "https://chineseyouthstandfortibet.substack.com",
+      "date": "2024-09-19",
+      "last_updated": "2025-09-23",
+      "snippet": "Chinese Youth Stand For Tibet！我们是一群中文母语使用者，热爱藏文化心系大藏区的一草一木。我们将在这个账号中用汉语和英语分享藏文化和大藏区的历史现状和未来。",
+      "source": "web"
+    },
+    {
+      "title": "华语青年挺藏会- China Digital Space",
+      "url": "https://chinadigitaltimes.net/space/%E5%8D%8E%E8%AF%AD%E9%9D%92%E5%B9%B4%E6%8C%BA%E8%97%8F%E4%BC%9A",
+      "date": "2025-09-22",
+      "last_updated": "2025-09-23",
+      "snippet": "我们是一群热爱藏文化的华语青年行动者，致力于发掘和传播图博大藏区被掩盖的历史和真相。我们用中英文分享藏区人文，生态，历史，政经动态和人权现状，致力于促进华语社群了解 ...",
+      "source": "web"
+    },
+    {
+      "title": "[PDF] Peking University Testimonies I",
+      "url": "http://complexities.org/docs/resources/PKU-Book-I.pdf",
+      "last_updated": "2025-03-20",
+      "snippet": "百余位北大精英述说自己跌宕起伏的故事：从肯定无神的意识形. 态，到拥抱道成肉身的基督。这趟信心之旅，过程绝非一帆风顺。有. 怀疑、困惑，有挣扎、挫败；历经激烈的内在 ...",
+      "source": "web"
+    },
+    {
+      "title": "About - 华语青年挺藏会",
+      "url": "https://chineseyouthstandfortibet.substack.com/about",
+      "snippet": "我们是一群热爱藏文化的华语青年行动者，致力于发掘和传播图博大藏区被掩盖的历史和真相。我们用中英文分享藏区人文，生态，历史，政经动态和人权现状，致力于促进华语社群了解 ...",
+      "source": "web"
+    },
+    {
+      "title": "[PDF] 华文创作比赛作品集第廿三届全国中学生",
+      "url": "https://www.shhk.com.sg/wp-content/uploads/2025/08/2025-Xin-Lei-Jiang.pdf",
+      "snippet": "从事书业工作20余年，曾任新加坡文艺协会. 会长（2013-2022年）、新加坡书业文具商公会会长和新加坡华文出版协. 会副会长。 成君以诗歌为主要创作体裁，著有 ...",
+      "source": "web"
+    },
+    {
+      "title": "北京之春---Tara自由的灵魂与中国的未来/华语青年挺藏会",
+      "url": "http://beijingspring.com/bj2/2010/240/117202543555.htm",
+      "date": "2025-09-30",
+      "last_updated": "2025-11-08",
+      "snippet": "就在那时， 过去式化为现在进行式，政治变为个人，Tara自由的灵魂（Tara Freesoul）由此诞生。 同年稍晚，她抵达法国，并开始为“华语青年挺藏会”（Chinese Youth ...",
+      "source": "web"
+    },
+    {
+      "title": "[PDF] 拒绝遗忘正视历史支持改革促进民主",
+      "url": "https://digicoll.lib.berkeley.edu/record/296576/files/Wang_shi_wei_hen_35.pdf",
+      "last_updated": "2025-10-29",
+      "snippet": "... 中国不能乱，这是绝大多数中国人的共识。 只要绝大多数中国人有这个共识，中国就不会乱。有这个前提，很多事. 可以做，并不象有些人想的那样，稍微松一些，或动点真格的，就会怎.",
+      "source": "web"
+    },
+    {
+      "title": "驻北美办事处举办汉藏青年对话会探讨中国民主 - 西藏",
+      "url": "https://tibet.com/%E9%A9%BB%E5%8C%97%E7%BE%8E%E5%8A%9E%E4%BA%8B%E5%A4%84%E4%B8%BE%E5%8A%9E%E6%B1%89%E8%97%8F%E9%9D%92%E5%B9%B4%E5%AF%B9%E8%AF%9D%E4%BC%9A%E6%8E%A2%E8%AE%A8%E4%B8%AD%E5%9B%BD%E6%B0%91%E4%B8%BB/",
+      "snippet": "管理「华语青年挺藏会」网络平台的Ginger Duan 女士则分享了她在西藏热加寺院教学的经历，这使她有机会与藏人建立联系。她强调了用华语给华人介绍与西藏 ...",
+      "source": "web"
+    },
+    {
+      "title": "[PDF] 微速递 - 新东方教育",
+      "url": "https://www.xdf.cn/zhuanti/teacher/xdfjs/xdfjs33.pdf",
+      "last_updated": "2024-10-11",
+      "snippet": "在这里，. 我们看到“全国状元公益理事会”的学. 霸们脑海中印象最深刻的第一课：安徽. 省理科状元董吉洋说，在新东方的第一. 课，是一次快乐的神经挑逗，是一次彻. 底的“洗礼”；在 ...",
+      "source": "web"
+    },
+    {
+      "title": "华语青年挺藏会：达赖喇嘛二哥嘉乐敦珠其人其事（下） - 中國之春",
+      "url": "https://chinaspring.org/article/704ec9b2-6ede-4c9b-9e96-4928d51cf966",
+      "snippet": "她给这个中心命名为“难民自助中心”，一开始就明确表示藏人不能永远依赖外界的接济或者捐赠。因为当时，许多国际机构都在捐助他们。但朱丹女士早就有了这样的 ...",
+      "source": "web"
+    },
+    {
+      "title": "English to Chinese translator specializing in law and computer ...",
+      "url": "https://www.proz.com/translator/2315434",
+      "last_updated": "2025-07-26",
+      "snippet": "罗伊最后担任了博物馆馆长，厉害呀，一辈子只在一个单位工作，从保安干到书记。 罗伊出版了23本书籍，有些书很受和他小时候一样的调皮蛋欢迎，许多人受到他书籍的鼓舞成为了生物 ...",
+      "source": "web"
+    },
+    {
+      "title": "论藏、议藏：跨越红线的挺藏华语青年们｜ 西郊打边炉28 - YouTube",
+      "url": "https://www.youtube.com/watch?v=F4yoULimHnU",
+      "snippet": "一个普通话母语、成长于大陆的年轻人，为什么会选择支持藏人和藏地？她的“挺藏”到底挺的是什么？文化、信仰、还是某种认同？支持藏人，这件事在某些话语 ...",
+      "source": "web"
+    },
+    {
+      "title": "桂林日报-06版:综合新闻-2025年11月17日",
+      "url": "https://epaper.guilinlife.com/glrbh5/glrb/20251117/Page06BC.htm",
+      "snippet": "... 信息技术股份有限公司等企业相关负责人参加座谈。 领导干部任职前公示市组示字〔2025〕120号根据有关规定，经市委研究决定，对以下同志进行任职前公示 ...",
+      "source": "web"
+    },
+    {
+      "title": "[PDF] 声音点滴·记录 - Huawei",
+      "url": "https://www-file.huawei.com/-/media/corp2020/pdf/publications/hw-people/hwpeople-349-cn.pdf",
+      "last_updated": "2024-04-09",
+      "snippet": "郑尚任：华为有三位轮值董事长，每个. 人出任六个月，外界对轮值机制很不了解，. 每六个月换一个人。您刚才提到，西方CEO. 万一打瞌睡了，公司就不行了。在这个 ...",
+      "source": "web"
+    },
+    {
+      "title": "[PDF] 职业道德修养实践课学生手册 - 黑龙江护理高等专科学校",
+      "url": "https://www.hljnc.edu.cn/__local/E/F4/EE/724566CDD5F51C6F176A6B81F9E_D727D13B_5B9F57.pdf?e=.pdf",
+      "last_updated": "2024-02-01",
+      "snippet": "本教材是马克思主义理论研究和建设工程重点教材《思想道德修养与法律基. 础》的配套教材。按照社会主义核心价值观以及高校思想政治课要求，坚持以人. 为本、德育为先、能力 ...",
+      "source": "web"
+    }
+  ]
+}

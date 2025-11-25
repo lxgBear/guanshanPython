@@ -111,6 +111,10 @@ class MongoArchiveService:
         logger.info(f"开始创建档案: user={user_id}, name='{archive_name}', items={len(items)}")
 
         try:
+            # 获取MongoDB数据库连接
+            if self.db is None:
+                self.db = await get_mongodb_database()
+
             # 为每个条目创建快照并准备数据
             archive_items = []
             for idx, item in enumerate(items):
@@ -119,8 +123,52 @@ class MongoArchiveService:
                     logger.warning(f"条目 {idx} 缺少 news_result_id，跳过")
                     continue
 
-                # 创建快照
-                snapshot = await self._create_snapshot(news_result_id)
+                # 🆕 优先从 user_edited_results 读取完整快照
+                edited_record = await self.db["user_edited_results"].find_one({
+                    "news_result_id": news_result_id,
+                    "user_id": user_id
+                })
+
+                snapshot = None
+                edited_title = item.get("edited_title")
+                edited_summary = item.get("edited_summary")
+
+                if edited_record and "snapshot" in edited_record:
+                    # 🆕 使用 user_edited_results 中的完整快照
+                    user_snapshot = edited_record["snapshot"]
+
+                    # 转换为档案快照格式
+                    snapshot = {
+                        "original_title": user_snapshot.get("title"),
+                        "original_content": user_snapshot.get("preview"),
+                        "category": user_snapshot.get("category"),
+                        "published_at": user_snapshot.get("publish_time"),
+                        "source": user_snapshot.get("source"),
+                        "media_urls": [],
+                        # 🆕 新增字段：保存url和markdown_content
+                        "url": user_snapshot.get("url"),
+                        "markdown_content": user_snapshot.get("markdown_content")
+                    }
+
+                    # 优先使用已保存的编辑内容
+                    edited_title = edited_title or edited_record.get("edited_title")
+                    edited_summary = edited_summary or edited_record.get("edited_summary")
+
+                    logger.info(
+                        f"从 user_edited_results 读取完整数据: "
+                        f"news_result_id={news_result_id}, "
+                        f"has_url={bool(snapshot.get('url'))}, "
+                        f"has_markdown={bool(snapshot.get('markdown_content'))}"
+                    )
+                else:
+                    # 降级: 从 news_results 创建快照
+                    snapshot = await self._create_snapshot(news_result_id)
+
+                    logger.info(
+                        f"从 news_results 创建快照 (未找到编辑记录): "
+                        f"news_result_id={news_result_id}"
+                    )
+
                 if not snapshot:
                     logger.warning(f"为 news_result_id={news_result_id} 创建快照失败，跳过")
                     continue
@@ -129,8 +177,8 @@ class MongoArchiveService:
                 archive_items.append({
                     "id": str(uuid.uuid4()),  # 生成唯一ID
                     "news_result_id": news_result_id,
-                    "edited_title": item.get("edited_title"),
-                    "edited_summary": item.get("edited_summary"),
+                    "edited_title": edited_title,
+                    "edited_summary": edited_summary,
                     "user_notes": item.get("user_notes"),
                     "user_rating": item.get("user_rating"),
                     "snapshot_data": snapshot,
@@ -392,7 +440,7 @@ class MongoArchiveService:
     async def _create_snapshot(self, news_result_id: str) -> Optional[Dict[str, Any]]:
         """创建新闻结果的快照
 
-        从 MongoDB news_results 集合中获取完整数据并创建快照。
+        从 MongoDB search_results 集合中获取完整数据并创建快照。
 
         Args:
             news_result_id: 新闻结果ID（雪花算法ID，在MongoDB中存储为字符串）
@@ -412,32 +460,33 @@ class MongoArchiveService:
         """
         try:
             # 获取MongoDB数据库连接
-            if not self.db:
+            if self.db is None:
                 self.db = await get_mongodb_database()
 
-            # 从 MongoDB 获取处理后的新闻结果（雪花ID在 MongoDB 中存储为字符串）
-            result = await self.db["news_results"].find_one({"_id": news_result_id})
+            # ✅ v2.3.0: 从 search_results 集合查询（而不是 news_results）
+            # 这是 NL Search 服务写入搜索结果的集合
+            result = await self.db["search_results"].find_one({"_id": news_result_id})
 
             if not result:
-                logger.warning(f"未找到新闻结果: news_result_id={news_result_id}")
+                logger.warning(f"未找到搜索结果: news_result_id={news_result_id}")
                 return None
 
-            # 提取快照数据（从news_results嵌套字段）
-            news = result.get("news_results", {})
-            if not news:
-                logger.warning(f"新闻结果缺少news_results字段: news_result_id={news_result_id}")
-                return None
-
+            # ✅ v2.3.0: 从 search_results 扁平结构提取快照数据
+            # search_results 是扁平结构，不像 news_results 有嵌套字段
             snapshot = {
-                "original_title": news.get("title"),
-                "original_content": news.get("content"),
-                "category": news.get("category"),
-                "published_at": news.get("published_at").isoformat() if news.get("published_at") else None,
-                "source": news.get("source"),
-                "media_urls": news.get("media_urls", [])
+                "original_title": result.get("title"),
+                # 优先使用 markdown_content，降级到 snippet
+                "original_content": result.get("markdown_content") or result.get("snippet"),
+                "category": None,  # search_results 没有 category 字段
+                "published_at": result.get("article_published_time"),
+                "source": result.get("source"),
+                "media_urls": [],  # search_results 没有 media_urls 字段
+                # ✅ 新增字段：保存 URL 和 markdown_content
+                "url": result.get("url"),
+                "markdown_content": result.get("markdown_content")
             }
 
-            logger.debug(f"创建快照成功: news_result_id={news_result_id}")
+            logger.debug(f"创建快照成功: news_result_id={news_result_id}, has_url={bool(snapshot.get('url'))}")
             return snapshot
 
         except Exception as e:

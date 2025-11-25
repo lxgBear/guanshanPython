@@ -415,7 +415,10 @@ class MongoNLSearchLogRepository:
         self,
         log_id: str,
         search_results: List[Dict[str, Any]],
-        results_count: int
+        results_count: int,
+        total_results: Optional[int] = None,
+        high_score_results: Optional[int] = None,
+        score_threshold: Optional[float] = None
     ) -> bool:
         """
         更新搜索结果
@@ -426,6 +429,9 @@ class MongoNLSearchLogRepository:
             log_id: 日志ID
             search_results: 搜索结果列表（字典格式）
             results_count: 结果数量
+            total_results: GPT搜索返回的总结果数（可选，v2优化指标）
+            high_score_results: 分数过滤后的高分结果数（可选，v2优化指标）
+            score_threshold: 分数过滤阈值（可选，v2优化指标）
 
         Returns:
             bool: 更新是否成功
@@ -433,32 +439,35 @@ class MongoNLSearchLogRepository:
         Example:
             >>> await repo.update_search_results(
             ...     log_id="244879702695698432",
-            ...     search_results=[
-            ...         {
-            ...             "title": "GPT-5发布",
-            ...             "url": "https://example.com/gpt5",
-            ...             "snippet": "...",
-            ...             "position": 1,
-            ...             "score": 0.95,
-            ...             "source": "serpapi"
-            ...         }
-            ...     ],
-            ...     results_count=10
+            ...     search_results=[...],
+            ...     results_count=3,
+            ...     total_results=10,
+            ...     high_score_results=3,
+            ...     score_threshold=0.6
             ... )
         """
         collection = await self._get_collection()
 
+        # 准备更新数据
+        update_data = {
+            "search_results": search_results,
+            "results_count": results_count,
+            "status": "completed",
+            "updated_at": datetime.utcnow()
+        }
+
+        # 添加优化指标（如果提供）
+        if total_results is not None:
+            update_data["total_results"] = total_results
+        if high_score_results is not None:
+            update_data["high_score_results"] = high_score_results
+        if score_threshold is not None:
+            update_data["score_threshold"] = score_threshold
+
         # 更新文档
         result = await collection.update_one(
             {"_id": log_id},
-            {
-                "$set": {
-                    "search_results": search_results,
-                    "results_count": results_count,
-                    "status": "completed",
-                    "updated_at": datetime.utcnow()
-                }
-            }
+            {"$set": update_data}
         )
 
         success = result.modified_count > 0

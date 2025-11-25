@@ -74,8 +74,8 @@ class FirecrawlAdapter(CrawlerInterface):
         try:
             logger.info(f"开始爬取URL: {url}")
 
-            # Firecrawl v2 API: 使用命名参数
-            formats = options.get('formats', ['markdown', 'html'])
+            # Firecrawl v2 API: 使用命名参数（使用rawHtml获取完整HTML供AI分析）
+            formats = options.get('formats', ['markdown', 'rawHtml'])
             only_main_content = options.get('only_main_content', False)  # 默认 False 获取完整 HTML
             wait_for = options.get('wait_for', 500)  # v2.1.1: 改为 500ms 避免 timeout 冲突
             include_tags = options.get('include_tags')
@@ -103,6 +103,7 @@ class FirecrawlAdapter(CrawlerInterface):
                 content=getattr(result, 'content', '') or '',
                 markdown=getattr(result, 'markdown', None),
                 html=getattr(result, 'html', None),
+                raw_html=getattr(result, 'raw_html', None),  # Python SDK uses snake_case
                 metadata=getattr(result, 'metadata', {}),
                 screenshot=getattr(result, 'screenshot', None)
             )
@@ -145,9 +146,9 @@ class FirecrawlAdapter(CrawlerInterface):
             exclude_paths = options.get('exclude_paths', [])
             prompt = options.get('prompt')  # v2 API 新增: 自然语言描述
 
-            # v2 API: 构建 scrape_options
+            # v2 API: 构建 scrape_options（使用rawHtml获取完整HTML供AI分析）
             scrape_options = ScrapeOptions(
-                formats=['markdown', 'html'],  # 格式列表
+                formats=['markdown', 'rawHtml'],  # 格式列表
                 only_main_content=options.get('only_main_content', False),  # 默认 False 获取完整 HTML
                 wait_for=options.get('wait_for', 500),  # v2.1.1: 改为 500ms 避免 timeout 冲突
                 exclude_tags=options.get('exclude_tags')  # 默认 None，不排除任何标签
@@ -190,6 +191,7 @@ class FirecrawlAdapter(CrawlerInterface):
                         content=getattr(document, 'content', '') or '',
                         markdown=getattr(document, 'markdown', None),
                         html=getattr(document, 'html', None),
+                        raw_html=getattr(document, 'raw_html', None),  # Python SDK uses snake_case
                         metadata=getattr(document, 'metadata', {})
                     )
                     results.append(result)
@@ -321,9 +323,9 @@ class FirecrawlAdapter(CrawlerInterface):
         try:
             logger.info(f"搜索查询: {query}, 期望限制: {limit}")
 
-            # v2 API: 构建 scrape_options
+            # v2 API: 构建 scrape_options（使用rawHtml获取完整HTML供AI分析）
             scrape_options = ScrapeOptions(
-                formats=['markdown', 'html']
+                formats=['markdown', 'rawHtml']
             )
 
             logger.info(f"Firecrawl v2 搜索参数: limit={limit}")
@@ -346,6 +348,7 @@ class FirecrawlAdapter(CrawlerInterface):
                         content=getattr(document, 'content', '') or getattr(document, 'markdown', '') or '',
                         markdown=getattr(document, 'markdown', None),
                         html=getattr(document, 'html', None),
+                        raw_html=getattr(document, 'raw_html', None),  # Python SDK uses snake_case
                         metadata=getattr(document, 'metadata', {})
                     )
                     results.append(crawl_result)

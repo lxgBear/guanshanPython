@@ -6,6 +6,7 @@ NL Search 核心服务
 日期: 2025-11-17
 """
 import logging
+import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -14,6 +15,10 @@ from src.services.nl_search.llm_processor import LLMProcessor
 from src.services.nl_search.gpt5_search_adapter import GPT5SearchAdapter
 from src.infrastructure.database.mongo_nl_search_repository import MongoNLSearchLogRepository
 from src.infrastructure.database.user_selection_repository import user_selection_repository
+from src.infrastructure.crawlers.firecrawl_adapter import FirecrawlAdapter
+from src.services.nl_search.search_result_adapter import nl_search_result_adapter
+from src.infrastructure.persistence.repositories.mongo.result_repository import MongoResultRepository
+from src.services.nl_search.url_normalizer import normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +52,19 @@ class NLSearchService:
         self.repository = MongoNLSearchLogRepository()
         self.selection_repository = user_selection_repository
 
-        logger.info("NLSearchService 初始化完成 (MongoDB)")
+        # 初始化 Firecrawl 适配器
+        self.firecrawl_adapter = FirecrawlAdapter()
+
+        # 初始化 SearchResult 仓储（用于双写到独立集合）
+        self.result_repository = MongoResultRepository()
+
+        logger.info("NLSearchService 初始化完成 (MongoDB + Firecrawl + SearchResult双写)")
 
     async def create_search(
         self,
         query_text: str,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        search_mode: str = "single"
     ) -> Dict[str, Any]:
         """
         创建自然语言搜索
@@ -62,23 +74,29 @@ class NLSearchService:
         2. 创建搜索记录
         3. LLM解析查询
         4. 更新分析结果
-        5. 精炼查询
-        6. 执行搜索
-        7. 返回结果
+        5. 根据search_mode选择执行模式:
+           - single: 精炼查询 → 单次搜索
+           - multi: 分解查询 → 循环搜索4个子问题
+        6. 返回结果
 
         Args:
             query_text: 用户输入的自然语言查询
             user_id: 用户ID（可选）
+            search_mode: 搜索模式 ("single" | "multi")
+                - single: 单次搜索（默认，快速高效）
+                - multi: 多问题分解搜索（深度研究，循环搜索4个子问题）
 
         Returns:
             包含搜索结果的字典:
             {
-                "log_id": int,
+                "log_id": str,
                 "query_text": str,
+                "search_mode": str,
                 "analysis": dict,
-                "refined_query": str,
+                "refined_query": str (single模式),
+                "sub_queries": list (multi模式),
                 "results": list,
-                "created_at": datetime
+                "created_at": str
             }
 
         Raises:
@@ -89,16 +107,28 @@ class NLSearchService:
         if not query_text or not query_text.strip():
             raise ValueError("查询文本不能为空")
 
-        query_text = query_text.strip()
-        logger.info(f"开始处理自然语言搜索: {query_text[:50]}...")
+        if search_mode not in ["single", "multi"]:
+            raise ValueError(f"无效的搜索模式: {search_mode}，必须是 'single' 或 'multi'")
 
+        query_text = query_text.strip()
+        logger.info(f"开始处理自然语言搜索: {query_text[:50]}... (模式: {search_mode})")
+
+        # 2. 创建搜索记录（允许失败，不影响搜索功能）
+        log_id = None
         try:
-            # 2. 创建搜索记录
             log_id = await self.repository.create(
                 query_text=query_text,
                 llm_analysis=None
             )
             logger.info(f"创建搜索记录: log_id={log_id}")
+        except Exception as e:
+            logger.warning(f"创建搜索记录失败（MongoDB可能离线），继续执行搜索: {e}")
+            # ✅ v1.5.0: 使用雪花算法生成临时ID（保持ID系统一致性）
+            from src.infrastructure.id_generator import generate_string_id
+            log_id = generate_string_id()
+            logger.info(f"使用临时log_id（雪花算法）: {log_id}")
+
+        try:
 
             # 3. LLM解析查询
             logger.info("调用LLM解析查询...")
@@ -106,51 +136,584 @@ class NLSearchService:
             logger.info(f"LLM解析完成: intent={analysis.get('intent')}, "
                        f"keywords={analysis.get('keywords')}")
 
-            # 4. 更新分析结果
-            await self.repository.update_llm_analysis(
-                log_id=log_id,
-                llm_analysis=analysis
-            )
-            logger.info("分析结果已保存")
+            # 4. 更新分析结果（允许失败）
+            try:
+                await self.repository.update_llm_analysis(
+                    log_id=log_id,
+                    llm_analysis=analysis
+                )
+                logger.info("分析结果已保存")
+            except Exception as e:
+                logger.warning(f"保存分析结果失败（MongoDB可能离线），继续执行: {e}")
 
-            # 5. 精炼查询
-            refined_query = await self.llm_processor.refine_query(query_text)
-            logger.info(f"精炼后的查询: {refined_query}")
-
-            # 6. 执行搜索
-            logger.info("开始执行搜索...")
-            search_results = await self.gpt5_adapter.search(
-                query=refined_query,
-                max_results=nl_search_config.max_results_per_query
-            )
-            logger.info(f"搜索完成: 获得{len(search_results)}个结果")
-
-            # 🆕 7. 保存搜索结果到数据库
-            results_dict = [r.to_dict() for r in search_results]
-            await self.repository.update_search_results(
-                log_id=log_id,
-                search_results=results_dict,
-                results_count=len(search_results)
-            )
-            logger.info(f"搜索结果已保存: log_id={log_id}")
-
-            # 8. 构建返回结果
-            result = {
-                "log_id": log_id,
-                "query_text": query_text,
-                "analysis": analysis,
-                "refined_query": refined_query,
-                "results": results_dict,
-                "created_at": datetime.now().isoformat()
-            }
-
-            logger.info(f"搜索流程完成: log_id={log_id}")
-            return result
+            # 5. 根据search_mode选择执行模式
+            if search_mode == "multi":
+                # 多问题分解搜索模式
+                return await self._create_search_multi(
+                    log_id=log_id,
+                    query_text=query_text,
+                    analysis=analysis
+                )
+            else:
+                # 单次搜索模式（默认）
+                return await self._create_search_single(
+                    log_id=log_id,
+                    query_text=query_text,
+                    analysis=analysis
+                )
 
         except Exception as e:
             logger.error(f"搜索失败: {e}", exc_info=True)
-            # 不重新抛出，让API层处理
             raise
+
+    async def _create_search_single(
+        self,
+        log_id: str,
+        query_text: str,
+        analysis: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        单次搜索模式（优化版：直接GPT搜索+分数过滤）
+
+        流程：直接GPT搜索（10条） → 分数过滤 → 只爬取高分结果
+        """
+        # 直接使用原始查询搜索（跳过LLM refine，节省成本）
+        logger.info(f"直接GPT搜索: {query_text}")
+
+        # 执行搜索（获取10条结果）
+        logger.info("开始执行单次搜索...")
+        search_results = await self.gpt5_adapter.search(
+            query=query_text,  # 直接用原始查询
+            max_results=nl_search_config.max_search_results  # 使用10条配置
+        )
+        logger.info(f"搜索完成: 获得{len(search_results)}个结果")
+
+        # 分数过滤：只保留高质量结果
+        results_dict = [r.to_dict() for r in search_results]
+        high_score_results = [
+            r for r in results_dict
+            if r.get("score", 0.0) >= nl_search_config.score_threshold
+        ]
+        logger.info(
+            f"分数过滤: {len(results_dict)}个结果 → {len(high_score_results)}个高分结果 "
+            f"(阈值: {nl_search_config.score_threshold})"
+        )
+
+        # 并发抓取内容（只爬取高分结果，节省Firecrawl成本）
+        enriched_results = await self._scrape_search_results_concurrent(
+            search_results=high_score_results,
+            max_concurrent=nl_search_config.scrape_max_concurrent,
+            log_id=log_id  # 传递log_id用于URL去重
+        )
+        logger.info(f"内容抓取完成: {len(enriched_results)}个结果")
+
+        # 保存搜索结果（包含优化指标，允许失败）
+        try:
+            await self.repository.update_search_results(
+                log_id=log_id,
+                search_results=enriched_results,
+                results_count=len(enriched_results),
+                total_results=len(results_dict),
+                high_score_results=len(high_score_results),
+                score_threshold=nl_search_config.score_threshold
+            )
+            logger.info(f"搜索结果已保存: log_id={log_id} (优化指标: {len(results_dict)}→{len(high_score_results)})")
+        except Exception as e:
+            logger.warning(f"保存搜索结果失败（MongoDB可能离线），继续执行: {e}")
+
+        # 双写到独立 search_results 集合（供 AI 服务使用）
+        url_to_id = await self._write_to_search_results_collection(log_id, enriched_results)
+
+        # ✅ v2.2: 将 mongo_id 添加回结果，只保留有效结果
+        valid_results = []
+        filtered_count = 0
+
+        for result in enriched_results:
+            url = result.get("url")
+            if url:
+                normalized_url = normalize_url(url)
+                mongo_id = url_to_id.get(normalized_url)
+
+                if mongo_id:
+                    result["mongo_id"] = mongo_id
+                    valid_results.append(result)
+                    logger.debug(f"添加 mongo_id: {url} → {mongo_id}")
+                else:
+                    filtered_count += 1
+                    logger.debug(f"过滤无效结果（无mongo_id）: {url}")
+
+        if filtered_count > 0:
+            logger.info(
+                f"✅ 结果过滤: {len(enriched_results)} 个原始结果 → {len(valid_results)} 个有效结果 "
+                f"(过滤: {filtered_count})"
+            )
+
+        # 构建返回结果
+        return {
+            "log_id": log_id,
+            "query_text": query_text,
+            "search_mode": "single",
+            "analysis": analysis,
+            "total_results": len(results_dict),
+            "high_score_results": len(high_score_results),
+            "score_threshold": nl_search_config.score_threshold,
+            "results": valid_results,  # ← 只返回有 mongo_id 的有效结果
+            "created_at": datetime.now().isoformat()
+        }
+
+    async def _create_search_multi(
+        self,
+        log_id: str,
+        query_text: str,
+        analysis: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        多问题分解搜索模式（新功能）
+
+        流程：
+        1. LLM分解为4个子问题
+        2. 循环搜索每个子问题
+        3. 聚合和去重结果
+        4. 并发抓取内容
+        5. 保存结果
+        """
+        # 步骤1: 分解为4个子问题
+        logger.info("开始分解查询为多个子问题...")
+        sub_queries = await self.llm_processor.decompose_query(query_text, analysis)
+        logger.info(f"查询分解完成: 获得 {len(sub_queries)} 个子问题")
+        for idx, sq in enumerate(sub_queries, 1):
+            logger.info(f"  子问题{idx}: {sq}")
+
+        # 步骤2: 循环搜索每个子问题
+        logger.info(f"开始循环搜索 {len(sub_queries)} 个子问题...")
+        all_search_results = []
+
+        for idx, sub_query in enumerate(sub_queries, 1):
+            logger.info(f"[{idx}/{len(sub_queries)}] 搜索子问题: {sub_query}")
+            try:
+                results = await self.gpt5_adapter.search(
+                    query=sub_query,
+                    max_results=nl_search_config.max_results_per_query
+                )
+                logger.info(f"[{idx}/{len(sub_queries)}] 获得 {len(results)} 个结果")
+
+                # 标记来源子问题
+                for result in results:
+                    result_dict = result.to_dict()
+                    result_dict["sub_query"] = sub_query
+                    result_dict["sub_query_index"] = idx
+                    all_search_results.append(result_dict)
+
+            except Exception as e:
+                logger.error(f"[{idx}/{len(sub_queries)}] 搜索失败: {e}", exc_info=True)
+                continue
+
+        logger.info(f"循环搜索完成: 总共获得 {len(all_search_results)} 个原始结果")
+
+        # 步骤3: 聚合和去重结果
+        logger.info("开始聚合和去重结果...")
+        aggregated_results = self._aggregate_and_deduplicate_results(all_search_results)
+        logger.info(f"聚合去重完成: 保留 {len(aggregated_results)} 个唯一结果")
+
+        # 步骤4: 并发抓取内容
+        enriched_results = await self._scrape_search_results_concurrent(
+            search_results=aggregated_results,
+            max_concurrent=nl_search_config.multi_search_max_concurrent,  # 使用配置的并发数
+            log_id=log_id  # 传递log_id用于URL去重
+        )
+        logger.info(f"内容抓取完成: {len(enriched_results)} 个结果")
+
+        # 步骤5: 保存结果（允许失败）
+        try:
+            await self.repository.update_search_results(
+                log_id=log_id,
+                search_results=enriched_results,
+                results_count=len(enriched_results)
+            )
+            logger.info(f"多问题搜索结果已保存: log_id={log_id}")
+        except Exception as e:
+            logger.warning(f"保存搜索结果失败（MongoDB可能离线），继续执行: {e}")
+
+        # 双写到独立 search_results 集合（供 AI 服务使用）
+        url_to_id = await self._write_to_search_results_collection(log_id, enriched_results)
+
+        # ✅ v2.2: 将 mongo_id 添加回结果，只保留有效结果
+        valid_results = []
+        filtered_count = 0
+
+        for result in enriched_results:
+            url = result.get("url")
+            if url:
+                normalized_url = normalize_url(url)
+                mongo_id = url_to_id.get(normalized_url)
+
+                if mongo_id:
+                    result["mongo_id"] = mongo_id
+                    valid_results.append(result)
+                    logger.debug(f"添加 mongo_id: {url} → {mongo_id}")
+                else:
+                    filtered_count += 1
+                    logger.debug(f"过滤无效结果（无mongo_id）: {url}")
+
+        if filtered_count > 0:
+            logger.info(
+                f"✅ 结果过滤: {len(enriched_results)} 个原始结果 → {len(valid_results)} 个有效结果 "
+                f"(过滤: {filtered_count})"
+            )
+
+        # 构建返回结果
+        return {
+            "log_id": log_id,
+            "query_text": query_text,
+            "search_mode": "multi",
+            "analysis": analysis,
+            "sub_queries": sub_queries,
+            "results": valid_results,  # ← 只返回有 mongo_id 的有效结果
+            "total_raw_results": len(all_search_results),
+            "total_unique_results": len(aggregated_results),
+            "created_at": datetime.now().isoformat()
+        }
+
+    def _aggregate_and_deduplicate_results(
+        self,
+        all_results: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        聚合和去重搜索结果
+
+        策略:
+        1. 基于URL去重
+        2. 对于重复URL，保留最高分数的结果
+        3. 记录URL出现在哪些子问题中（用于评分加权）
+        4. 重新评分：基础分数 + 出现频率加成（可配置）
+        5. 排序：按最终分数降序
+        6. 限制数量：最多N个结果（由配置决定，默认20）
+
+        Args:
+            all_results: 所有原始搜索结果列表
+
+        Returns:
+            去重后的结果列表（数量由配置决定）
+        """
+        if not all_results:
+            return []
+
+        # 1. URL去重和统计
+        url_data = {}
+
+        for result in all_results:
+            url = result.get("url", "")
+            if not url:
+                continue
+
+            # ✅ URL规范化：统一格式提高去重准确性
+            normalized_url = normalize_url(url)
+
+            if normalized_url not in url_data:
+                # 首次遇到该URL
+                url_data[normalized_url] = {
+                    "result": result.copy(),
+                    "appearances": 1,
+                    "sub_queries": [result.get("sub_query", "")],
+                    "max_score": result.get("score", 0.0)
+                }
+            else:
+                # URL重复，更新统计
+                url_data[normalized_url]["appearances"] += 1
+                url_data[normalized_url]["sub_queries"].append(result.get("sub_query", ""))
+
+                # 保留更高的分数
+                current_score = result.get("score", 0.0)
+                if current_score > url_data[normalized_url]["max_score"]:
+                    url_data[normalized_url]["max_score"] = current_score
+                    # 更新为分数更高的结果
+                    url_data[normalized_url]["result"] = result.copy()
+
+        # ✅ 去重统计日志
+        original_count = len(all_results)
+        unique_count = len(url_data)
+        duplicate_count = original_count - unique_count
+        dedup_rate = (duplicate_count / original_count * 100) if original_count > 0 else 0
+
+        logger.info(
+            f"✅ URL去重统计: "
+            f"原始结果={original_count}, "
+            f"唯一URL={unique_count}, "
+            f"去重数={duplicate_count}, "
+            f"去重率={dedup_rate:.1f}%"
+        )
+
+        # 2. 重新评分和排序
+        scored_results = []
+
+        for url, data in url_data.items():
+            result = data["result"]
+
+            # 基础分数
+            base_score = data["max_score"]
+
+            # 频率加成（出现在多个子问题中 → 更相关）
+            # 使用配置的频率加分参数
+            frequency_bonus = min(
+                (data["appearances"] - 1) * nl_search_config.multi_search_frequency_bonus,
+                nl_search_config.multi_search_frequency_bonus_max
+            )
+
+            # 最终分数
+            final_score = min(base_score + frequency_bonus, 1.0)
+
+            # 更新结果
+            result["score"] = final_score
+            result["appearances_in_sub_queries"] = data["appearances"]
+            result["related_sub_queries"] = data["sub_queries"]
+
+            scored_results.append(result)
+
+        # 3. 排序：按分数降序，再按position升序
+        scored_results.sort(key=lambda r: (-r.get("score", 0.0), r.get("position", 999)))
+
+        # 4. 限制数量（使用配置的聚合结果限制）
+        final_results = scored_results[:nl_search_config.multi_search_aggregation_limit]
+
+        logger.info(f"聚合完成: 保留前 {len(final_results)} 个结果")
+
+        return final_results
+
+    async def _scrape_search_results_concurrent(
+        self,
+        search_results: List[Dict[str, Any]],
+        max_concurrent: int = 3,
+        log_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        并发抓取搜索结果内容（v2.1: 支持URL去重）
+
+        Args:
+            search_results: 搜索结果列表（字典格式）
+            max_concurrent: 最大并发数（默认3）
+            log_id: 搜索日志ID（用于URL去重检查，可选）
+
+        Returns:
+            List[Dict]: 包含抓取内容的结果列表
+        """
+        if not nl_search_config.enable_auto_scrape:
+            logger.info("自动抓取已禁用，跳过内容抓取")
+            return search_results
+
+        # ✅ URL去重检查：查询数据库中已存在的URL
+        existing_urls = set()
+        existing_url_data = {}
+
+        if log_id:
+            try:
+                # 提取所有URL并规范化
+                all_urls = [normalize_url(r.get("url")) for r in search_results if r.get("url")]
+
+                if all_urls:
+                    # 检查哪些URL已存在（使用log_id作为task_id）
+                    existing_urls = await self.result_repository.check_existing_urls(
+                        task_id=log_id,
+                        urls=all_urls
+                    )
+
+                    if existing_urls:
+                        cache_hit_rate = (len(existing_urls) / len(all_urls) * 100) if all_urls else 0
+                        logger.info(
+                            f"✅ URL缓存命中统计: "
+                            f"总URL={len(all_urls)}, "
+                            f"缓存命中={len(existing_urls)}, "
+                            f"命中率={cache_hit_rate:.1f}%"
+                        )
+
+                        # 从数据库加载已存在URL的内容
+                        for url in existing_urls:
+                            try:
+                                existing_result = await self.result_repository.find_by_url(url)
+                                if existing_result:
+                                    existing_url_data[url] = {
+                                        "markdown_content": existing_result.markdown_content,
+                                        "html_content": existing_result.html_content,
+                                        "metadata": existing_result.metadata or {},
+                                        "scrape_success": True,
+                                        "from_cache": True
+                                    }
+                                    logger.debug(f"从数据库加载内容: {url}")
+                            except Exception as e:
+                                logger.warning(f"加载已存在URL内容失败: {url}, {e}")
+
+            except Exception as e:
+                logger.warning(f"URL去重检查失败，将继续正常抓取: {e}")
+
+        # 创建信号量控制并发数
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def scrape_single(result: Dict[str, Any]) -> Dict[str, Any]:
+            """抓取单个结果"""
+            url = result.get("url", "")
+            if not url:
+                logger.warning(f"结果缺少 URL，跳过抓取: {result}")
+                return result
+
+            # ✅ URL规范化
+            normalized_url = normalize_url(url)
+
+            # ✅ 如果URL已存在，直接使用缓存内容
+            if normalized_url in existing_urls and normalized_url in existing_url_data:
+                cached_data = existing_url_data[normalized_url]
+                result.update(cached_data)
+                logger.info(f"✅ 使用缓存内容: {normalized_url}")
+                return result
+
+            async with semaphore:
+                try:
+                    logger.info(f"开始抓取: {url}")
+
+                    # 调用 Firecrawl scrape
+                    crawl_result = await self.firecrawl_adapter.scrape(
+                        url=url,
+                        only_main_content=True,
+                        wait_for=500,
+                        timeout=nl_search_config.scrape_timeout
+                    )
+
+                    # 将抓取内容添加到结果中
+                    result["markdown_content"] = crawl_result.markdown[:5000] if crawl_result.markdown else None
+                    # 使用 raw_html 提供完整HTML供AI分析
+                    result["html_content"] = crawl_result.raw_html[:20000] if crawl_result.raw_html else None
+                    # 转换 metadata 为 dict (Pydantic model -> dict)
+                    result["metadata"] = crawl_result.metadata.dict() if crawl_result.metadata else {}
+                    result["scrape_success"] = True
+
+                    logger.info(f"抓取成功: {url} (markdown: {len(crawl_result.markdown or '')} chars)")
+
+                except Exception as e:
+                    logger.error(f"抓取失败: {url}, 错误: {e}", exc_info=True)
+                    result["scrape_success"] = False
+                    result["scrape_error"] = str(e)
+
+                return result
+
+        # 并发抓取所有结果
+        urls_to_scrape = len([r for r in search_results if r.get("url") not in existing_urls])
+        urls_cached = len(existing_urls)
+        logger.info(
+            f"开始并发抓取: {urls_to_scrape} 个新URL (并发数: {max_concurrent}), "
+            f"{urls_cached} 个URL使用缓存"
+        )
+
+        enriched_results = await asyncio.gather(
+            *[scrape_single(result.copy()) for result in search_results],
+            return_exceptions=False
+        )
+
+        # ✅ 抓取统计日志
+        success_count = sum(1 for r in enriched_results if r.get("scrape_success", False))
+        cached_count = sum(1 for r in enriched_results if r.get("from_cache", False))
+        new_scrape_count = success_count - cached_count
+        failed_count = len(search_results) - success_count
+        cache_benefit_rate = (cached_count / len(search_results) * 100) if search_results else 0
+
+        logger.info(
+            f"✅ 抓取完成统计: "
+            f"总数={len(search_results)}, "
+            f"成功={success_count}, "
+            f"新抓取={new_scrape_count}, "
+            f"缓存={cached_count}({cache_benefit_rate:.1f}%), "
+            f"失败={failed_count}"
+        )
+
+        return list(enriched_results)
+
+    async def _write_to_search_results_collection(
+        self,
+        log_id: str,
+        nl_search_results: List[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """
+        双写到独立 search_results 集合供 AI 服务使用（v2.2: 返回URL→ID映射）
+
+        将 NL Search 的结果转换为 SearchResult 实体，
+        并写入 search_results 集合，供 AI 服务统一读取。
+
+        Args:
+            log_id: NL Search 日志ID（将作为 task_id）
+            nl_search_results: NL Search 的搜索结果列表（字典格式）
+
+        Returns:
+            Dict[str, str]: URL（规范化后）→ MongoDB _id 的映射字典
+
+        Note:
+            此方法不抛出异常，以避免影响主搜索流程。
+            双写失败只记录错误日志，不影响用户体验。
+        """
+        try:
+            logger.info(f"开始双写到 search_results 集合: log_id={log_id}, 结果数={len(nl_search_results)}")
+
+            # ✅ 过滤空内容：移除 html_content 为空的结果
+            filtered_results = []
+            empty_content_count = 0
+
+            for result in nl_search_results:
+                html_content = result.get("html_content")
+
+                # 检查 html_content 是否为空
+                if not html_content or (isinstance(html_content, str) and not html_content.strip()):
+                    empty_content_count += 1
+                    logger.debug(f"跳过空内容结果: {result.get('url', 'N/A')}")
+                    continue
+
+                filtered_results.append(result)
+
+            if empty_content_count > 0:
+                logger.info(
+                    f"✅ 过滤空内容: {len(nl_search_results)} 个结果 → {len(filtered_results)} 个有效结果 "
+                    f"(过滤: {empty_content_count})"
+                )
+
+            if not filtered_results:
+                logger.warning(f"过滤后无有效结果，跳过双写: log_id={log_id}")
+                return {}
+
+            # 转换为 SearchResult 实体
+            search_results = nl_search_result_adapter.convert_to_search_results(
+                log_id=log_id,
+                nl_search_results=filtered_results
+            )
+
+            if not search_results:
+                logger.warning(f"转换后无有效结果，跳过双写: log_id={log_id}")
+                return {}
+
+            # 批量写入 search_results 集合
+            result_ids = await self.result_repository.bulk_create(search_results)
+            logger.info(
+                f"双写成功: {len(result_ids)} 条结果已写入 search_results 集合 "
+                f"(log_id={log_id})"
+            )
+
+            # ✅ v2.2: 创建 URL → mongo_id 映射
+            url_to_id = {}
+            for idx, search_result in enumerate(search_results):
+                if idx < len(result_ids):
+                    url_to_id[search_result.url] = result_ids[idx]
+                    logger.debug(f"映射: {search_result.url} → {result_ids[idx]}")
+
+            logger.info(f"创建URL映射: {len(url_to_id)} 个URL → mongo_id")
+
+            # ✅ v2.2: 调试日志 - 打印映射的键
+            if url_to_id:
+                sample_urls = list(url_to_id.keys())[:3]
+                logger.info(f"映射示例: {sample_urls}")
+
+            return url_to_id
+
+        except Exception as e:
+            logger.error(
+                f"双写 search_results 集合失败: {e} (log_id={log_id})",
+                exc_info=True
+            )
+            # 不抛出异常，避免影响主流程
+            return {}
 
     async def get_search_log(self, log_id: str) -> Optional[Dict[str, Any]]:
         """

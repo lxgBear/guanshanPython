@@ -14,6 +14,7 @@ class CrawlResult:
     content: str
     markdown: Optional[str] = None
     html: Optional[str] = None
+    raw_html: Optional[str] = None
     metadata: Dict[str, Any] = None
     extracted_data: Optional[Dict] = None
     screenshot: Optional[bytes] = None

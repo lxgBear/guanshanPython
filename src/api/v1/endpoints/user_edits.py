@@ -78,6 +78,56 @@ class CopyFromOriginalRequest(BaseModel):
     editor_id: str = Field(..., description="编辑人ID")
 
 
+# ========== 增强批量编辑（带快照）模型 ==========
+
+class NewsResultSnapshot(BaseModel):
+    """新闻结果快照"""
+    title: str = Field(..., description="原始标题")
+    url: str = Field(..., description="原始URL")
+    markdown_content: Optional[str] = Field(None, description="Markdown格式内容")
+    source: str = Field(..., description="来源网站")
+    category: Dict[str, str] = Field(..., description="分类信息")
+    publish_time: str = Field(..., description="发布时间")
+    preview: str = Field(..., description="内容预览")
+
+
+class BatchEditItemRequest(BaseModel):
+    """批量编辑单个条目请求"""
+    record_id: str = Field(..., description="记录ID (mongo_id)")
+
+    # 原始数据快照
+    snapshot: NewsResultSnapshot = Field(..., description="原始数据快照")
+
+    # 用户编辑内容
+    edited_title: Optional[str] = Field(None, description="编辑后的标题")
+    edited_summary: Optional[str] = Field(None, description="编辑后的摘要")
+    edited_category: Optional[Dict[str, str]] = Field(None, description="编辑后的分类")
+
+
+class EnhancedBatchUpdateRequest(BaseModel):
+    """增强的批量更新请求"""
+    user_id: str = Field(..., description="用户ID")
+    items: List[BatchEditItemRequest] = Field(..., description="编辑条目列表")
+
+
+class UserEditedResultResponse(BaseModel):
+    """用户编辑结果响应"""
+    id: str = Field(..., description="编辑记录ID")
+    news_result_id: str = Field(..., description="关联的news_result_id")
+
+    # 原始数据
+    snapshot: NewsResultSnapshot = Field(..., description="原始数据快照")
+
+    # 编辑数据
+    edited_title: Optional[str] = Field(None, description="编辑后的标题")
+    edited_summary: Optional[str] = Field(None, description="编辑后的摘要")
+    edited_category: Optional[Dict[str, str]] = Field(None, description="编辑后的分类")
+
+    # 元数据
+    edited_at: str = Field(..., description="编辑时间")
+    created_at: str = Field(..., description="创建时间")
+
+
 # ========== 响应模型 ==========
 
 class BatchUpdateResponse(BaseModel):
@@ -417,6 +467,130 @@ async def copy_from_original(request: CopyFromOriginalRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"复制记录失败: {str(e)}")
+
+
+@router.post(
+    "/batch-with-snapshot",
+    response_model=List[UserEditedResultResponse],
+    summary="批量编辑（带完整快照）",
+    description="保存编辑内容的同时保存完整的原始数据快照（包括url和markdown_content）"
+)
+async def batch_update_with_snapshot(request: EnhancedBatchUpdateRequest):
+    """
+    批量编辑（增强版）
+
+    **功能**: 🆕 新增
+
+    **特点**:
+    - 保存完整的原始数据快照（url, markdown_content, title, source, category等）
+    - 保存用户的编辑内容（edited_title, edited_summary, edited_category）
+    - 数据独立存储，不依赖 news_results 的存在
+
+    **使用场景**:
+    - RAG查询 → 用户批量编辑 → 保存（包含原始数据）
+    - 后续创建档案时，可以直接从 user_edited_results 读取完整数据
+
+    **示例**:
+    ```json
+    {
+      "user_id": "user_123",
+      "items": [
+        {
+          "record_id": "249832360786370562",
+          "snapshot": {
+            "title": "本会编辑留学生张雅笛回国探亲遭\\"文字狱\\"！",
+            "url": "https://chineseyouthstandfortibet.substack.com/...",
+            "markdown_content": "# 完整内容...",
+            "source": "chineseyouthstandfortibet.substack.com",
+            "category": {"大类": "安全情报", "类别": "涉藏", "地域": "东亚"},
+            "publish_time": "未知时间",
+            "preview": "计划赴英国..."
+          },
+          "edited_title": "留学生因支持藏人被捕",
+          "edited_summary": "张雅笛原定到英国伦敦大学..."
+        }
+      ]
+    }
+    ```
+    """
+    try:
+        from datetime import datetime
+        from src.infrastructure.database.connection import get_mongodb_database
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        logger.info(
+            f"批量编辑（带快照）: user_id={request.user_id}, "
+            f"items_count={len(request.items)}"
+        )
+
+        db = await get_mongodb_database()
+
+        results = []
+
+        for item in request.items:
+            # 构建编辑记录
+            edit_doc = {
+                "news_result_id": item.record_id,
+                "user_id": request.user_id,
+
+                # 原始数据快照
+                "snapshot": item.snapshot.dict(),
+
+                # 用户编辑
+                "edited_title": item.edited_title,
+                "edited_summary": item.edited_summary,
+                "edited_category": item.edited_category,
+
+                # 元数据
+                "edited_at": datetime.utcnow(),
+                "created_at": datetime.utcnow()
+            }
+
+            # Upsert: 如果存在则更新，不存在则插入
+            result = await db["user_edited_results"].update_one(
+                {
+                    "news_result_id": item.record_id,
+                    "user_id": request.user_id
+                },
+                {"$set": edit_doc},
+                upsert=True
+            )
+
+            # 读取保存的记录
+            saved = await db["user_edited_results"].find_one({
+                "news_result_id": item.record_id,
+                "user_id": request.user_id
+            })
+
+            if saved:
+                results.append(UserEditedResultResponse(
+                    id=str(saved["_id"]),
+                    news_result_id=saved["news_result_id"],
+                    snapshot=NewsResultSnapshot(**saved["snapshot"]),
+                    edited_title=saved.get("edited_title"),
+                    edited_summary=saved.get("edited_summary"),
+                    edited_category=saved.get("edited_category"),
+                    edited_at=saved["edited_at"].isoformat() if isinstance(saved["edited_at"], datetime) else saved["edited_at"],
+                    created_at=saved["created_at"].isoformat() if isinstance(saved["created_at"], datetime) else saved["created_at"]
+                ))
+
+        logger.info(f"批量编辑完成: 成功保存 {len(results)} 条记录")
+
+        return results
+
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"批量编辑失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "批量编辑失败",
+                "message": str(e)
+            }
+        )
 
 
 @router.delete(

@@ -112,6 +112,64 @@ QUERY_PARSE_FALLBACK_PROMPT = """之前的分析返回了无效的 JSON 格式�
 请确保返回的是**纯 JSON 对象**，不要包含任何 Markdown 代码块标记或解释文字。
 """
 
+# 查询分解 Prompt（多问题分解模式）
+QUERY_DECOMPOSE_PROMPT = """你是一个专业的查询分解助手，擅长将复杂的自然语言查询分解为多个具体的子问题。
+
+用户原始查询：{query_text}
+
+查询意图分析：{llm_analysis}
+
+请将这个查询分解为 **4个** 更具体的子问题，每个子问题都可以独立搜索并从不同角度回答原始查询。
+
+**分解要求**：
+1. 必须生成恰好4个子问题
+2. 每个子问题都应该明确、具体且可独立搜索
+3. 子问题应该覆盖原查询的不同维度和角度
+4. 避免子问题之间的重复和重叠
+5. 每个子问题长度控制在 10-30 个字符
+6. 保持原查询的语言（中文或英文）
+7. 子问题应该比原查询更具体和细化
+
+**分解策略**：
+- 如果是技术查询：可以分解为不同技术方向、应用场景、实现方案等
+- 如果是产品查询：可以分解为功能特性、用户评价、价格对比、使用场景等
+- 如果是新闻查询：可以分解为不同事件、不同时间段、不同来源等
+- 如果是教程查询：可以分解为基础概念、实战案例、最佳实践、常见问题等
+
+**返回格式**：
+仅返回 JSON 数组，包含4个子问题字符串，不要添加任何解释。
+
+```json
+["子问题1", "子问题2", "子问题3", "子问题4"]
+```
+
+**示例1**：
+输入："最近AI技术突破"
+意图：{{"intent": "technology_news", "keywords": ["AI", "技术突破"], "category": "tech"}}
+输出：
+```json
+["GPT-5最新发布和特性", "AI图像生成技术进展", "自动驾驶AI突破", "AI医疗诊断新应用"]
+```
+
+**示例2**：
+输入："Python数据分析怎么做"
+意图：{{"intent": "tutorial", "keywords": ["Python", "数据分析"], "category": "education"}}
+输出：
+```json
+["Python数据分析基础库Pandas教程", "Python数据可视化Matplotlib入门", "Python数据清洗最佳实践", "Python数据分析实战案例"]
+```
+
+**示例3**：
+输入："区块链技术应用前景"
+意图：{{"intent": "research", "keywords": ["区块链", "技术应用"], "category": "tech"}}
+输出：
+```json
+["区块链金融领域应用", "区块链供应链管理应用", "区块链数字身份验证", "区块链智能合约发展"]
+```
+
+现在请分解用户的查询，记住必须返回恰好4个子问题。
+"""
+
 
 def get_query_parse_prompt(query_text: str) -> str:
     """
@@ -156,3 +214,22 @@ def get_query_parse_fallback_prompt(query_text: str) -> str:
         完整的 Prompt 字符串
     """
     return QUERY_PARSE_FALLBACK_PROMPT.format(query_text=query_text)
+
+
+def get_query_decompose_prompt(query_text: str, llm_analysis: dict) -> str:
+    """
+    获取查询分解 Prompt
+
+    Args:
+        query_text: 用户原始查询
+        llm_analysis: LLM 解析结果
+
+    Returns:
+        完整的 Prompt 字符串
+    """
+    import json
+    analysis_str = json.dumps(llm_analysis, ensure_ascii=False, indent=2)
+    return QUERY_DECOMPOSE_PROMPT.format(
+        query_text=query_text,
+        llm_analysis=analysis_str
+    )

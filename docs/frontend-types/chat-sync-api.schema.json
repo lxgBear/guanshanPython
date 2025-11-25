@@ -1,0 +1,225 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://api.yourdomain.com/schemas/chat-sync-api.json",
+  "title": "Chat Sync API",
+  "description": "Chat Sync API 的请求和响应 JSON Schema 定义",
+  "version": "2.0.0",
+  "definitions": {
+    "ChatSyncRequest": {
+      "type": "object",
+      "required": ["question"],
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "用户问题（必填，1-1000字符）",
+          "examples": ["请介绍关于西藏的新闻"]
+        },
+        "user_id": {
+          "type": "string",
+          "description": "用户ID（可选）",
+          "examples": ["user_12345"]
+        },
+        "search_mode": {
+          "type": "string",
+          "enum": ["single", "multi"],
+          "default": "single",
+          "description": "搜索模式（可选，默认 single）"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Category": {
+      "type": "object",
+      "required": ["大类", "类别", "地域"],
+      "properties": {
+        "大类": {
+          "type": "string",
+          "description": "大类分类",
+          "examples": ["安全情报"]
+        },
+        "类别": {
+          "type": "string",
+          "description": "子类别",
+          "examples": ["涉藏"]
+        },
+        "地域": {
+          "type": "string",
+          "description": "地域",
+          "examples": ["东亚", "北美"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SourceDetail": {
+      "type": "object",
+      "required": [
+        "id",
+        "mongo_id",
+        "title",
+        "source",
+        "score",
+        "category",
+        "publish_time",
+        "preview"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "UUID",
+          "examples": ["6e63c831-c473-4079-a18c-bcffb5ee7edb"]
+        },
+        "mongo_id": {
+          "type": "string",
+          "description": "MongoDB ID",
+          "examples": ["249832360786370562"]
+        },
+        "title": {
+          "type": "string",
+          "description": "标题",
+          "examples": ["本会编辑留学生张雅笛回国探亲遭"文字狱"！"]
+        },
+        "source": {
+          "type": "string",
+          "description": "来源网站",
+          "examples": ["chineseyouthstandfortibet.substack.com"]
+        },
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "相关性评分 (0-1)",
+          "examples": [0.126]
+        },
+        "category": {
+          "$ref": "#/definitions/Category",
+          "description": "分类信息"
+        },
+        "publish_time": {
+          "type": "string",
+          "description": "发布时间",
+          "examples": ["2025-11-24", "未知时间"]
+        },
+        "preview": {
+          "type": "string",
+          "description": "内容预览",
+          "examples": ["**本会编辑留学生张雅笛回国探亲遭"文字狱"！**..."]
+        },
+        "url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "description": "完整URL（从 news_results 查询，可能为 null）",
+          "examples": [
+            "https://chineseyouthstandfortibet.substack.com/p/zhangyadi",
+            null
+          ]
+        },
+        "markdown_content": {
+          "type": ["string", "null"],
+          "description": "完整Markdown内容（从 news_results 查询，可能为 null）",
+          "examples": ["# 标题\n\n内容...", null]
+        },
+        "content_length": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "内容长度（字符数，可能为 null）",
+          "examples": [5000, null]
+        },
+        "title_zh": {
+          "type": ["string", "null"],
+          "description": "中文标题（从 news_results.news_results 查询，可能为 null）",
+          "examples": ["留学生张雅笛回国探亲遭\"文字狱\"", null]
+        },
+        "summary_zh": {
+          "type": ["string", "null"],
+          "description": "中文摘要/翻译内容（从 news_results.news_results 查询，可能为 null）",
+          "examples": ["张雅笛是一名中国留学生，因支持藏人而被捕...", null]
+        },
+        "content_zh": {
+          "type": ["string", "null"],
+          "description": "中文总结（从 news_results.news_results 查询，可能为 null）",
+          "examples": ["本文讲述了一名留学生因人权倡导活动而面临的困境...", null]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ChatSyncResponse": {
+      "type": "object",
+      "required": [
+        "question",
+        "answer",
+        "sources",
+        "sources_count",
+        "answer_length",
+        "status"
+      ],
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "用户问题",
+          "examples": ["请介绍关于西藏的新闻"]
+        },
+        "answer": {
+          "type": "string",
+          "description": "完整答案",
+          "examples": ["近期关于西藏的新闻涉及到..."]
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SourceDetail"
+          },
+          "description": "数据来源列表（含完整内容）"
+        },
+        "sources_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "来源数量",
+          "examples": [3]
+        },
+        "answer_length": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "答案长度",
+          "examples": [307]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["success_from_llm", "success_from_cache"],
+          "description": "状态",
+          "examples": ["success_from_cache"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ChatSyncErrorResponse": {
+      "type": "object",
+      "required": ["error", "message"],
+      "properties": {
+        "error": {
+          "type": "string",
+          "description": "错误类型",
+          "examples": ["外部API调用失败", "搜索失败"]
+        },
+        "message": {
+          "type": "string",
+          "description": "错误消息",
+          "examples": ["无法连接到Chat API", "服务暂时不可用，请稍后重试"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "title": "成功响应",
+      "$ref": "#/definitions/ChatSyncResponse"
+    },
+    {
+      "title": "错误响应",
+      "$ref": "#/definitions/ChatSyncErrorResponse"
+    }
+  ]
+}
