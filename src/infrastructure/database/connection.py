@@ -24,16 +24,35 @@ async def get_mongodb_database() -> AsyncIOMotorDatabase:
 
     if _mongodb_database is None:
         try:
+            # 检测远程MongoDB (hancens.top) 需要 TLS/SSL
+            is_remote_db = 'hancens.top' in settings.MONGODB_URL
+
+            # 构建连接参数
+            connection_params = {
+                'maxPoolSize': settings.MONGODB_MAX_POOL_SIZE,
+                'minPoolSize': settings.MONGODB_MIN_POOL_SIZE,
+                'serverSelectionTimeoutMS': 10000,  # 10秒超时（增加以适应远程网络延迟）
+                'connectTimeoutMS': 10000,           # 10秒连接超时
+                'socketTimeoutMS': 15000,            # 15秒查询超时（写操作可能较慢）
+                'retryWrites': True,  # 启用重试
+                'retryReads': True
+            }
+
+            # 远程MongoDB可能不需要SSL（Navicat的"SSL"只是UI显示）
+            # 先尝试不启用SSL的直连模式
+            if is_remote_db:
+                # 直连模式（避免副本集自动发现导致的网络问题）
+                connection_params['directConnection'] = True
+                logger.info("检测到远程MongoDB，使用直连模式（无SSL）")
+
             _mongodb_client = AsyncIOMotorClient(
                 settings.MONGODB_URL,
-                maxPoolSize=settings.MONGODB_MAX_POOL_SIZE,
-                minPoolSize=settings.MONGODB_MIN_POOL_SIZE,
-                serverSelectionTimeoutMS=5000  # 5秒超时
+                **connection_params
             )
             _mongodb_database = _mongodb_client[settings.MONGODB_DB_NAME]
 
             # 测试连接（使用超时）
-            await asyncio.wait_for(_mongodb_client.admin.command('ping'), timeout=5.0)
+            await asyncio.wait_for(_mongodb_client.admin.command('ping'), timeout=10.0)
             logger.info(f"MongoDB连接成功: {settings.MONGODB_DB_NAME}")
 
         except asyncio.TimeoutError:

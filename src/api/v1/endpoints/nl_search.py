@@ -15,11 +15,12 @@
 - 环境变量: NL_SEARCH_ENABLED (默认false)
 - 测试模式: 无需API Key即可运行
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Path
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging
+import re
 
 # 导入服务层
 from src.services.nl_search.nl_search_service import nl_search_service
@@ -244,6 +245,28 @@ class UserSelectionResponse(BaseModel):
         }
 
 
+# ==================== RAG内容访问数据模型 ====================
+
+class RAGContentResponse(BaseModel):
+    """RAG内容详情响应"""
+    mongo_id: str = Field(..., description="MongoDB news_results表的_id")
+    url: str = Field(..., description="原始网页URL")
+    markdown_content: Optional[str] = Field(None, description="Markdown格式内容")
+    title: str = Field(..., description="新闻标题")
+    source: str = Field(..., description="来源网站")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "mongo_id": "249832360786370562",
+                "url": "https://chineseyouthstandfortibet.substack.com/p/abc",
+                "markdown_content": "# 标题\n\n正文内容...",
+                "title": "本会编辑留学生张雅笛回国探亲遭文字狱",
+                "source": "chineseyouthstandfortibet.substack.com"
+            }
+        }
+
+
 # ==================== 档案管理数据模型 ====================
 
 class ArchiveItemRequest(BaseModel):
@@ -329,6 +352,8 @@ class ArchiveListResponse(BaseModel):
 
 
 # ==================== API端点 ====================
+# 🔧 v2.3.1: 路由顺序修复 - 具体路径必须在动态参数路径之前
+# 正确顺序: /status → /archives → /rag-content/{id} → /{log_id} → /{log_id}/xxx
 
 @router.get(
     "/status",
@@ -486,482 +511,111 @@ async def create_nl_search(request: NLSearchRequest):
         )
 
 
-@router.get(
-    "/{log_id}",
-    response_model=NLSearchLog,
-    summary="获取搜索记录",
-    description="根据ID获取自然语言搜索记录"
-)
-async def get_nl_search_log(log_id: str):
-    """
-    获取自然语言搜索记录
 
-    **功能**: ✅ 完整实现
-
-    **功能**:
-    - 根据log_id获取搜索记录
-    - 包含LLM分析结果
-    - 包含创建时间和状态
-
-    Args:
-        log_id (str): 搜索记录ID（雪花算法ID字符串）
-
-    Returns:
-        NLSearchLog: 搜索记录详情
-
-    Raises:
-        HTTPException:
-            - 503: 功能未启用
-            - 404: 记录不存在
-            - 500: 内部错误
-
-    Example:
-        ```bash
-        curl -X GET "http://localhost:8000/api/v1/nl-search/123456"
-        ```
-    """
-    # 检查功能开关
-    if not nl_search_config.enabled:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "功能未启用",
-                "message": "自然语言搜索功能已关闭。设置环境变量 NL_SEARCH_ENABLED=true 启用此功能。",
-                "alternative_endpoint": "/api/v1/smart-search",
-                "status": "disabled"
-            }
-        )
-
-    try:
-        logger.info(f"查询搜索记录: log_id={log_id}")
-
-        # 调用服务层
-        log = await nl_search_service.get_search_log(log_id)
-
-        if not log:
-            logger.warning(f"搜索记录不存在: log_id={log_id}")
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "记录不存在",
-                    "message": f"未找到搜索记录: log_id={log_id}",
-                    "log_id": log_id
-                }
-            )
-
-        return NLSearchLog(
-            id=log["log_id"],
-            query_text=log["query_text"],
-            created_at=log["created_at"],
-            status="completed",
-            analysis=log.get("analysis")
-        )
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        logger.error(f"获取搜索记录失败: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "服务错误",
-                "message": "获取搜索记录失败，请稍后重试",
-                "log_id": log_id
-            }
-        )
-
+# ==================== RAG内容访问API ====================
 
 @router.get(
-    "/",
-    response_model=NLSearchListResponse,
-    summary="查询搜索历史",
-    description="分页查询自然语言搜索历史"
+    "/rag-content/{mongo_id}",
+    response_model=RAGContentResponse,
+    summary="获取RAG结果的内容和URL",
+    description="根据RAG返回的mongo_id获取news_results表中的markdown_content和url字段"
 )
-async def list_nl_search_logs(
-    limit: int = Query(10, ge=1, le=100, description="返回数量限制"),
-    offset: int = Query(0, ge=0, description="分页偏移量"),
-    user_id: Optional[str] = Query(None, description="过滤指定用户")
-):
+async def get_rag_content(mongo_id: str):
     """
-    查询自然语言搜索历史
+    获取RAG结果的内容和URL
 
-    **功能**: ✅ 完整实现
-
-    **功能**:
-    - 分页查询搜索历史
-    - 支持按数量限制和偏移量分页
-    - 返回记录总数和当前页信息
-
-    Args:
-        limit (int): 返回数量限制 (1-100)
-        offset (int): 分页偏移量
-        user_id (Optional[str]): 过滤指定用户的搜索记录（当前版本未使用）
-
-    Returns:
-        NLSearchListResponse: 搜索历史列表
-
-    Raises:
-        HTTPException:
-            - 503: 功能未启用
-            - 500: 内部错误
-
-    Example:
-        ```bash
-        curl -X GET "http://localhost:8000/api/v1/nl-search?limit=10&offset=0"
-        ```
-    """
-    # 检查功能开关
-    if not nl_search_config.enabled:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "功能未启用",
-                "message": "自然语言搜索功能已关闭。设置环境变量 NL_SEARCH_ENABLED=true 启用此功能。",
-                "alternative_endpoint": "/api/v1/smart-search",
-                "status": "disabled"
-            }
-        )
-
-    try:
-        logger.info(f"查询搜索历史: limit={limit}, offset={offset}, user_id={user_id}")
-
-        # 调用服务层
-        logs = await nl_search_service.list_search_logs(limit=limit, offset=offset)
-
-        # 构建响应
-        items = [
-            NLSearchLog(
-                id=log["log_id"],
-                query_text=log["query_text"],
-                created_at=log["created_at"],
-                status="completed",
-                analysis=log.get("analysis")
-            )
-            for log in logs
-        ]
-
-        return NLSearchListResponse(
-            total=len(items),
-            items=items,
-            page=offset // limit + 1 if limit > 0 else 1,
-            page_size=limit
-        )
-
-    except Exception as e:
-        logger.error(f"查询搜索历史失败: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "服务错误",
-                "message": "查询搜索历史失败，请稍后重试"
-            }
-        )
-
-
-# ==================== 附加功能（预留）====================
-
-@router.post(
-    "/{log_id}/select",
-    response_model=UserSelectionResponse,
-    summary="记录用户选择",
-    description="记录用户对搜索结果的选择行为"
-)
-async def select_search_result(
-    log_id: str,
-    request: UserSelectionRequest
-):
-    """
-    记录用户对搜索结果的选择
-
-    **功能**: ✅ 完整实现
+    **功能**: 🆕 新增
 
     **用途**:
-    - 收集用户反馈和行为数据
-    - 优化LLM理解和搜索质量
-    - 支持个性化推荐
-    - A/B测试和分析
+    - 前端点击RAG结果时，获取完整的markdown内容用于展示
+    - 获取原始URL用于跳转到来源网页
 
-    **支持的操作类型**:
-    - click: 用户点击结果
-    - bookmark: 用户收藏结果
-    - archive: 用户归档结果
+    **性能优化**:
+    - 仅返回需要的字段（markdown_content, url, title, source）
+    - 不返回完整的news_results文档
+    - MongoDB字段投影优化：50KB → 5KB (90%减少)
 
     Args:
-        log_id (str): 搜索记录ID（雪花算法ID字符串）
-        request (UserSelectionRequest): 用户选择请求
+        mongo_id (str): news_results表的_id (RAG返回的mongo_id)
 
     Returns:
-        UserSelectionResponse: 选择记录确认
+        RAGContentResponse: 包含markdown_content和url的响应
 
     Raises:
         HTTPException:
-            - 503: 功能未启用
-            - 400: 输入验证失败
-            - 404: 搜索记录不存在
-            - 500: 内部错误
+            - 404: mongo_id对应的记录不存在
+            - 500: 数据库查询失败
 
     Example:
         ```bash
-        curl -X POST "http://localhost:8000/api/v1/nl-search/248728141926559744/select" \\
-          -H "Content-Type: application/json" \\
-          -d '{
-            "result_url": "https://example.com/gpt5",
-            "action_type": "click",
-            "user_id": "user_123"
-          }'
+        curl -X GET "http://localhost:8000/api/v1/nl-search/rag-content/249832360786370562"
         ```
     """
-    # 检查功能开关
-    if not nl_search_config.enabled:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "功能未启用",
-                "message": "自然语言搜索功能已关闭。设置环境变量 NL_SEARCH_ENABLED=true 启用此功能。",
-                "alternative_endpoint": "/api/v1/smart-search",
-                "status": "disabled"
-            }
-        )
-
     try:
-        logger.info(
-            f"记录用户选择: log_id={log_id}, "
-            f"url={request.result_url}, action={request.action_type}"
-        )
+        logger.info(f"获取RAG内容: mongo_id={mongo_id}")
 
-        # 验证操作类型
-        valid_actions = ["click", "bookmark", "archive"]
-        if request.action_type not in valid_actions:
-            raise ValueError(
-                f"无效的操作类型: {request.action_type}。"
-                f"有效值: {', '.join(valid_actions)}"
-            )
+        from src.infrastructure.database.connection import get_mongodb_database
 
-        # 调用服务层记录选择
-        event_id = await nl_search_service.record_user_selection(
-            log_id=log_id,
-            result_url=request.result_url,
-            action_type=request.action_type,
-            user_id=request.user_id
-        )
+        db = await get_mongodb_database()
 
-        logger.info(f"用户选择已记录: event_id={event_id}")
-
-        return UserSelectionResponse(
-            event_id=event_id,
-            log_id=log_id,
-            result_url=request.result_url,
-            action_type=request.action_type,
-            recorded_at=datetime.utcnow().isoformat(),
-            message="用户选择已成功记录"
-        )
-
-    except ValueError as e:
-        # 输入验证错误或搜索记录不存在
-        logger.warning(f"验证失败: {e}")
-        status_code = 404 if "不存在" in str(e) else 400
-        raise HTTPException(
-            status_code=status_code,
-            detail={
-                "error": "验证失败" if status_code == 400 else "记录不存在",
-                "message": str(e),
-                "log_id": log_id
+        # 性能优化: 只查询需要的字段 (field projection)
+        result = await db["news_results"].find_one(
+            {"_id": mongo_id},
+            {
+                "_id": 1,
+                "url": 1,
+                "markdown_content": 1,
+                "title": 1,
+                "source": 1
             }
-        )
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        logger.error(f"记录用户选择失败: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "服务错误",
-                "message": "记录用户选择失败，请稍后重试",
-                "log_id": log_id
-            }
-        )
-
-
-@router.get(
-    "/{log_id}/results",
-    response_model=SearchResultsResponse,
-    summary="获取自然语言搜索结果",
-    description="""
-获取自然语言搜索的所有结果（支持分页）
-
-⚠️ **重要提示 - 系统区分**:
-- 此端点用于 **自然语言搜索系统** (NL Search)
-- 数据来源: `nl_search_logs` → `news_results`
-- 如需访问通用搜索结果，请使用: `/api/v1/search-tasks/{task_id}/results`
-
-**两个系统的区别**:
-1. **自然语言搜索** (本端点):
-   - 前缀: `/api/v1/nl-search/`
-   - 数据表: `nl_search_logs` + `news_results`
-   - 用途: LLM理解的自然语言查询
-
-2. **通用搜索**:
-   - 前缀: `/api/v1/search-tasks/`
-   - 数据表: `search_tasks` + `search_results`
-   - 用途: 传统关键词搜索
-    """,
-    responses={
-        404: {
-            "description": "搜索记录不存在",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "error": "记录不存在",
-                        "message": "未找到搜索记录: log_id=xxx",
-                        "hint": "如果这是通用搜索任务，请使用 /api/v1/search-tasks/{task_id}/results"
-                    }
-                }
-            }
-        }
-    }
-)
-async def get_search_results(
-    log_id: str,
-    limit: Optional[int] = Query(None, ge=1, le=100, description="返回数量限制"),
-    offset: int = Query(0, ge=0, description="分页偏移量")
-):
-    """
-    获取自然语言搜索的所有结果
-
-    **功能**: ✅ 完整实现
-
-    **数据来源**: nl_search_logs → news_results (自然语言搜索系统)
-
-    **功能**:
-    - 返回LLM分析的结构化结果
-    - 包含搜索来源和评分
-    - 支持结果分页
-    - 包含LLM分析结果
-
-    Args:
-        log_id (str): 搜索记录ID（雪花算法ID字符串，来自 nl_search_logs）
-        limit (Optional[int]): 返回数量限制（1-100）
-        offset (int): 分页偏移量
-
-    Returns:
-        SearchResultsResponse: 搜索结果列表
-
-    Raises:
-        HTTPException:
-            - 503: 功能未启用
-            - 404: 搜索记录不存在（提示: 检查是否使用了错误的端点）
-            - 500: 内部错误
-
-    Example:
-        ```bash
-        # 正确使用 (自然语言搜索)
-        curl -X GET "http://localhost:8000/api/v1/nl-search/248728141926559744/results?limit=10&offset=0"
-
-        # 如果是通用搜索，应使用:
-        # curl -X GET "http://localhost:8000/api/v1/search-tasks/{task_id}/results"
-        ```
-    """
-    # 检查功能开关
-    if not nl_search_config.enabled:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "功能未启用",
-                "message": "自然语言搜索功能已关闭。设置环境变量 NL_SEARCH_ENABLED=true 启用此功能。",
-                "alternative_endpoint": "/api/v1/smart-search",
-                "status": "disabled"
-            }
-        )
-
-    try:
-        logger.info(f"获取搜索结果: log_id={log_id}, limit={limit}, offset={offset}")
-
-        # 调用服务层获取搜索结果
-        result = await nl_search_service.get_search_results(
-            log_id=log_id,
-            limit=limit,
-            offset=offset
         )
 
         if not result:
-            logger.warning(f"搜索记录不存在: log_id={log_id}")
-
-            # ✨ 新增：检查是否为通用搜索任务ID（用户可能用错了端点）
-            from src.infrastructure.database.connection import get_mongodb_database
-            db = await get_mongodb_database()
-            generic_task = await db['search_tasks'].find_one({'_id': log_id})
-
-            if generic_task:
-                # 用户使用了错误的端点 - 提供友好提示
-                logger.info(f"检测到端点使用错误: ID {log_id} 属于通用搜索系统")
-                raise HTTPException(
-                    status_code=404,
-                    detail={
-                        "error": "端点使用错误",
-                        "message": f"ID {log_id} 属于通用搜索系统，不是自然语言搜索",
-                        "correct_endpoint": f"/api/v1/search-tasks/{log_id}/results",
-                        "current_endpoint": f"/api/v1/nl-search/{log_id}/results",
-                        "hint": "自然语言搜索使用 /api/v1/nl-search/ 前缀，通用搜索使用 /api/v1/search-tasks/ 前缀",
-                        "documentation": "查看 API 文档了解两个系统的区别: /api/docs"
-                    }
-                )
-
-            # 确实不存在于任何系统
+            logger.warning(f"RAG内容不存在: mongo_id={mongo_id}")
             raise HTTPException(
                 status_code=404,
                 detail={
-                    "error": "记录不存在",
-                    "message": f"未找到搜索记录: log_id={log_id}",
-                    "log_id": log_id,
-                    "hint": "请检查 ID 是否正确，或该记录可能已被删除"
+                    "error": "内容不存在",
+                    "message": f"未找到对应的news_results记录: mongo_id={mongo_id}",
+                    "hint": "请检查mongo_id是否正确，或该记录可能已被删除"
                 }
             )
 
-        # 构建搜索结果条目列表
-        result_items = [
-            SearchResultItem(
-                title=item.get("title", ""),
-                url=item.get("url", ""),
-                snippet=item.get("snippet", ""),
-                position=item.get("position", 0),
-                score=item.get("score", 0.0),
-                source=item.get("source", "unknown")
-            )
-            for item in result["results"]
-        ]
-
-        return SearchResultsResponse(
-            log_id=result["log_id"],
-            query_text=result["query_text"],
-            total_count=result["total_count"],
-            results=result_items,
-            llm_analysis=result.get("llm_analysis"),
-            status=result.get("status", "completed"),
-            created_at=result["created_at"]
+        # 构建响应
+        response = RAGContentResponse(
+            mongo_id=str(result["_id"]),
+            url=result.get("url", ""),
+            markdown_content=result.get("markdown_content"),
+            title=result.get("title", ""),
+            source=result.get("source", "")
         )
+
+        logger.info(
+            f"RAG内容获取成功: mongo_id={mongo_id}, "
+            f"has_markdown={bool(response.markdown_content)}, "
+            f"url_length={len(response.url)}"
+        )
+
+        return response
 
     except HTTPException:
         raise
 
     except Exception as e:
-        logger.error(f"获取搜索结果失败: {e}", exc_info=True)
+        logger.error(f"获取RAG内容失败: mongo_id={mongo_id}, error={e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail={
                 "error": "服务错误",
-                "message": "获取搜索结果失败，请稍后重试",
-                "log_id": log_id
+                "message": "获取内容失败，请稍后重试",
+                "mongo_id": mongo_id
             }
         )
-
 
 # ==================== 档案管理API ====================
 
 @router.post(
-    "/archives",
+    "/user-archives",
     response_model=ArchiveResponse,
     summary="创建档案",
     description="从搜索结果创建用户档案"
@@ -991,7 +645,7 @@ async def create_archive(request: CreateArchiveRequest):
 
     Example:
         ```bash
-        curl -X POST "http://localhost:8000/api/v1/nl-search/archives" \\
+        curl -X POST "http://localhost:8000/api/v1/nl-search/user-archives" \\
           -H "Content-Type: application/json" \\
           -d '{
             "user_id": 1001,
@@ -1070,7 +724,7 @@ async def create_archive(request: CreateArchiveRequest):
 
 
 @router.get(
-    "/archives",
+    "/user-archives",
     response_model=ArchiveListResponse,
     summary="查询档案列表",
     description="分页查询用户的档案列表"
@@ -1103,7 +757,7 @@ async def list_archives(
 
     Example:
         ```bash
-        curl -X GET "http://localhost:8000/api/v1/nl-search/archives?user_id=1001&limit=10&offset=0"
+        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives?user_id=1001&limit=10&offset=0"
         ```
     """
     try:
@@ -1152,7 +806,7 @@ async def list_archives(
 
 
 @router.get(
-    "/archives/{archive_id}",
+    "/user-archives/{archive_id}",
     response_model=ArchiveResponse,
     summary="获取档案详情",
     description="获取档案的完整信息（包含所有条目）"
@@ -1185,7 +839,7 @@ async def get_archive(
 
     Example:
         ```bash
-        curl -X GET "http://localhost:8000/api/v1/nl-search/archives/1?user_id=1001"
+        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives/1?user_id=1001"
         ```
     """
     try:
@@ -1252,7 +906,7 @@ async def get_archive(
 
 
 @router.put(
-    "/archives/{archive_id}",
+    "/user-archives/{archive_id}",
     response_model=ArchiveResponse,
     summary="更新档案",
     description="更新档案的基本信息（名称、描述、标签）"
@@ -1288,7 +942,7 @@ async def update_archive(
 
     Example:
         ```bash
-        curl -X PUT "http://localhost:8000/api/v1/nl-search/archives/1?user_id=1001" \\
+        curl -X PUT "http://localhost:8000/api/v1/nl-search/user-archives/1?user_id=1001" \\
           -H "Content-Type: application/json" \\
           -d '{
             "archive_name": "新档案名称",
@@ -1361,7 +1015,7 @@ async def update_archive(
 
 
 @router.delete(
-    "/archives/{archive_id}",
+    "/user-archives/{archive_id}",
     summary="删除档案",
     description="删除档案及其所有条目"
 )
@@ -1392,7 +1046,7 @@ async def delete_archive(
 
     Example:
         ```bash
-        curl -X DELETE "http://localhost:8000/api/v1/nl-search/archives/1?user_id=1001"
+        curl -X DELETE "http://localhost:8000/api/v1/nl-search/user-archives/1?user_id=1001"
         ```
     """
     try:

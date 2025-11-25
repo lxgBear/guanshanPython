@@ -186,16 +186,16 @@ class NLSearchConfig(BaseSettings):
     # ==================== Scrape 配置 ====================
 
     scrape_timeout: int = Field(
-        default=15,
-        description="抓取超时时间(秒，降低以避免阻塞)",
+        default=30,
+        description="抓取超时时间(秒)",
         ge=5,
         le=300,
         env="NL_SEARCH_SCRAPE_TIMEOUT"
     )
 
     scrape_max_concurrent: int = Field(
-        default=5,
-        description="最大并发抓取数（提高并发度）",
+        default=3,
+        description="最大并发抓取数",
         ge=1,
         le=10,
         env="NL_SEARCH_SCRAPE_MAX_CONCURRENT"

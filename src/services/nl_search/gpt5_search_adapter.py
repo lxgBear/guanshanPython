@@ -13,8 +13,10 @@ GPT-5 Search API 适配器 (api.gpt.ge)
 """
 import json
 import logging
+import hashlib
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from pathlib import Path
 import asyncio
 
 try:
@@ -85,7 +87,7 @@ class GPT5SearchAdapter:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         test_mode: bool = False,
-        timeout: int = 30
+        timeout: Optional[int] = None
     ):
         """
         初始化搜索适配器
@@ -94,15 +96,18 @@ class GPT5SearchAdapter:
             api_key: api.gpt.ge API Key（可选，默认使用配置）
             base_url: API Base URL（可选，默认使用配置）
             test_mode: 是否测试模式（返回模拟数据）
-            timeout: 请求超时时间（秒）
+            timeout: 请求超时时间（秒，可选，默认使用配置）
         """
         self.api_key = api_key or nl_search_config.llm_api_key
         self.base_url = base_url or nl_search_config.llm_base_url
         self.test_mode = test_mode
-        self.timeout = timeout
+        self.timeout = timeout or nl_search_config.query_timeout  # 使用配置的超时时间
         self.max_results = nl_search_config.max_search_results
         self.search_model = nl_search_config.search_model
         self.max_tokens = nl_search_config.search_max_tokens
+        self.reasoning_enabled = nl_search_config.reasoning_enabled
+        self.reasoning_effort = nl_search_config.reasoning_effort
+        self.use_responses_api = nl_search_config.use_responses_api
 
         # HTTP 客户端
         if httpx is None:
@@ -117,12 +122,19 @@ class GPT5SearchAdapter:
                 }
             )
 
-        # API 端点 (标准 OpenAI chat/completions)
-        self.search_api_url = f"{self.base_url}/chat/completions"
+        # API 端点 (根据配置选择)
+        if self.use_responses_api:
+            self.search_api_url = f"{self.base_url}/responses"
+            self.api_type = "responses"
+        else:
+            self.search_api_url = f"{self.base_url}/chat/completions"
+            self.api_type = "chat_completions"
 
         logger.info(
             f"GPT5SearchAdapter initialized: model={self.search_model}, "
-            f"url={self.search_api_url}, test_mode={self.test_mode}"
+            f"api_type={self.api_type}, url={self.search_api_url}, "
+            f"test_mode={self.test_mode}, reasoning={self.reasoning_enabled} "
+            f"(effort={self.reasoning_effort})"
         )
 
     async def search(
@@ -241,6 +253,10 @@ class GPT5SearchAdapter:
         # 解析响应
         try:
             data = response.json()
+
+            # 保存原始JSON响应（临时功能，用于调试）
+            self._save_search_response_json(query, data)
+
             results = self._parse_gpt5_search_response(data)
 
             # 结果过滤和排序
@@ -266,64 +282,174 @@ class GPT5SearchAdapter:
         language: str
     ) -> Dict[str, Any]:
         """
-        构建搜索 API 请求体 (OpenAI chat/completions format)
+        构建搜索 API 请求体
 
-        参数:
-        - model: gpt-5-search-api
-        - messages: 用户查询
-        - max_tokens: 最大响应 tokens
+        支持两种API格式:
+        1. Responses API (/v1/responses): 官方推荐，支持完整reasoning功能
+           - 使用 'input' 参数
+           - reasoning格式: {"effort": "low|medium|high"}
+
+        2. Chat Completions API (/v1/chat/completions): 兼容模式
+           - 使用 'messages' 参数
+           - reasoning格式: "reasoning_effort": "low|medium|high"
         """
         # 构建搜索提示词
-        search_prompt = f"搜索: {query}"
-        if language and language != "zh-cn":
-            search_prompt = f"Search: {query}"
+        # 检查模型类型，为Gemini添加特殊指令
+        if "gemini" in self.search_model.lower():
+            # Gemini模型：要求在回答中引用来源URL
+            search_prompt = f"""请搜索以下问题，并在回答中明确标注每个信息的来源URL：
 
-        return {
-            "model": self.search_model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": search_prompt
+{query}
+
+要求：
+1. 提供详细的回答
+2. 在每个关键信息后用 [来源: URL] 的格式标注来源链接
+3. 至少提供3-5个不同来源的URL"""
+        else:
+            # gpt-5-search-api 模型：直接使用查询文本
+            search_prompt = query
+
+        if self.use_responses_api:
+            # ✅ Responses API 格式 (官方推荐)
+            payload = {
+                "model": self.search_model,
+                "input": search_prompt,
+                "max_tokens": self.max_tokens,
+            }
+
+            # 添加 reasoning 参数（嵌套对象）
+            if self.reasoning_enabled:
+                payload["reasoning"] = {
+                    "effort": self.reasoning_effort
                 }
-            ],
-            "max_tokens": self.max_tokens,
-            "temperature": 0.3  # 搜索任务使用较低温度
-        }
+                logger.debug(f"[Responses API] Reasoning: effort={self.reasoning_effort}")
+
+        else:
+            # ⚠️ Chat Completions API 格式 (兼容模式)
+            payload = {
+                "model": self.search_model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": search_prompt
+                    }
+                ],
+                "max_tokens": self.max_tokens,
+                "temperature": 0.3
+            }
+
+            # 添加 reasoning_effort 参数（顶层字符串）
+            if self.reasoning_enabled:
+                payload["reasoning_effort"] = self.reasoning_effort
+                logger.debug(f"[Chat Completions API] Reasoning: effort={self.reasoning_effort}")
+
+        return payload
+
+    def _should_filter_url(self, url: str) -> bool:
+        """
+        检查 URL 是否应该被过滤
+
+        Args:
+            url: 待检查的 URL
+
+        Returns:
+            bool: True 表示应该过滤（跳过），False 表示保留
+        """
+        if not nl_search_config.filter_pdf_urls:
+            # 过滤功能已禁用
+            return False
+
+        # 转换为小写进行比较
+        url_lower = url.lower()
+
+        # 移除查询参数（?之后的部分）和锚点（#之后的部分）
+        # 例如: https://example.com/file.pdf?param=value → https://example.com/file.pdf
+        url_path = url_lower.split('?')[0].split('#')[0]
+
+        # 检查是否以排除的扩展名结尾
+        for ext in nl_search_config.excluded_url_extensions:
+            if url_path.endswith(ext.lower()):
+                logger.debug(f"过滤 {ext} 文件: {url}")
+                return True
+
+        return False
 
     def _parse_gpt5_search_response(self, data: Dict[str, Any]) -> List[SearchResult]:
         """
-        解析 gpt-5-search-api 响应
+        解析搜索 API 响应，支持多种格式
 
-        OpenAI chat/completions 响应格式:
-        {
-            "id": "chatcmpl-...",
-            "object": "chat.completion",
-            "model": "gpt-5-search-api-2025-10-14",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "搜索结果内容...",
-                    "annotations": [{
-                        "type": "url_citation",
-                        "url_citation": {
-                            "url": "https://example.com",
-                            "title": "标题",
-                            "start_index": 0,
-                            "end_index": 100
-                        }
-                    }]
-                }
-            }]
-        }
+        支持的格式:
+        1. sonar-deep-research 格式 (Perplexity):
+           {
+               "search_results": [
+                   {"title": "...", "url": "...", "snippet": "...", "source": "web"}
+               ],
+               "citations": ["https://..."]
+           }
+
+        2. gpt-5-search-api 格式 (OpenAI):
+           {
+               "choices": [{
+                   "message": {
+                       "content": "...",
+                       "annotations": [{
+                           "type": "url_citation",
+                           "url_citation": {"url": "...", "title": "..."}
+                       }]
+                   }
+               }]
+           }
         """
         results = []
+        filtered_count = 0  # 统计过滤的 URL 数量
 
         try:
-            # 提取 choice
+            # ✅ 检测 sonar-deep-research 格式 (优先级最高)
+            if "search_results" in data and isinstance(data["search_results"], list):
+                logger.info(f"检测到 sonar-deep-research 格式响应: {len(data['search_results'])} 条结果")
+
+                for idx, item in enumerate(data["search_results"]):
+                    try:
+                        url = item.get("url", "")
+                        title = item.get("title", "")
+                        snippet = item.get("snippet", "")
+                        source = item.get("source", "sonar-deep-research")
+
+                        # 跳过无效结果
+                        if not url or not url.startswith("http"):
+                            logger.debug(f"跳过无效URL: {url}")
+                            continue
+
+                        # ✅ 过滤 PDF 等文件 URL
+                        if self._should_filter_url(url):
+                            filtered_count += 1
+                            continue
+
+                        result = SearchResult(
+                            title=title or url,
+                            url=url,
+                            snippet=snippet[:200],  # 限制摘要长度
+                            position=idx + 1,
+                            score=1.0 - (idx * 0.01),  # 分数递减（sonar结果更多，递减更缓）
+                            source=source
+                        )
+                        results.append(result)
+
+                    except Exception as e:
+                        logger.warning(f"解析 sonar 搜索结果失败: {e}, item={item}")
+                        continue
+
+                # 记录过滤统计
+                if filtered_count > 0:
+                    logger.info(f"✅ 过滤文件URL: {filtered_count} 条 ({', '.join(nl_search_config.excluded_url_extensions)})")
+
+                logger.info(f"✅ sonar 格式解析完成: {len(results)} 条有效结果")
+                return results
+
+            # ⚠️ 检测 gpt-5-search-api 格式 (fallback)
             choices = data.get("choices", [])
             if not choices:
-                logger.warning("响应中没有 choices")
+                logger.warning("响应中没有 choices 或 search_results")
                 return results
 
             first_choice = choices[0]
@@ -349,6 +475,12 @@ class GPT5SearchAdapter:
 
                         # 提取内容片段作为 snippet
                         snippet = content[start_idx:end_idx] if start_idx < end_idx else ""
+
+                        # ✅ 过滤 PDF 等文件 URL
+                        if url and self._should_filter_url(url):
+                            logger.debug(f"GPT-5格式: 过滤文件URL: {url}")
+                            filtered_count += 1
+                            continue
 
                         if url:
                             result = SearchResult(
@@ -379,7 +511,7 @@ class GPT5SearchAdapter:
                     ))
 
         except Exception as e:
-            logger.error(f"解析 GPT-5 搜索响应失败: {e}, data={data}")
+            logger.error(f"解析搜索响应失败: {e}, data={data}")
             raise
 
         return results
@@ -435,6 +567,43 @@ class GPT5SearchAdapter:
             print(f"    ⭐ 评分: {result.score:.2f} | 来源: {result.source}")
 
         print("\n" + "=" * 80 + "\n")
+
+    def _save_search_response_json(
+        self,
+        query: str,
+        response_data: Dict[str, Any]
+    ) -> None:
+        """
+        保存GPT5搜索API返回的原始JSON（临时功能，用于确定搜索数据是否符合预期）
+
+        Args:
+            query: 搜索查询
+            response_data: API返回的原始JSON数据
+        """
+        try:
+            # 生成文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            query_hash = hashlib.md5(query.encode('utf-8')).hexdigest()[:8]
+            filename = f"{timestamp}_{query_hash}.json"
+
+            # 保存路径
+            save_dir = Path(__file__).parent.parent.parent.parent / "data" / "gpt5_search_responses"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            save_path = save_dir / filename
+
+            # 保存JSON
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "query": query,
+                    "timestamp": timestamp,
+                    "response": response_data
+                }, f, ensure_ascii=False, indent=2)
+
+            logger.info(f"✅ GPT5搜索响应已保存: {save_path}")
+
+        except Exception as e:
+            # 保存失败不影响主流程
+            logger.warning(f"保存GPT5搜索响应失败: {e}")
 
     def _generate_test_results(
         self,

@@ -4,7 +4,7 @@ LLM 处理器
 """
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 
 try:
@@ -22,7 +22,8 @@ from src.services.nl_search.config import nl_search_config
 from src.services.nl_search.prompts import (
     get_query_parse_prompt,
     get_query_refine_prompt,
-    get_query_parse_fallback_prompt
+    get_query_parse_fallback_prompt,
+    get_query_decompose_prompt
 )
 
 
@@ -187,6 +188,125 @@ class LLMProcessor:
         except Exception as e:
             logger.error(f"查询精炼异常: {e}", exc_info=True)
             return query_text  # 失败时返回原始查询
+
+    async def decompose_query(
+        self,
+        query_text: str,
+        llm_analysis: Dict[str, Any]
+    ) -> List[str]:
+        """
+        将查询分解为多个子问题（多问题分解模式）
+
+        将一个复杂的自然语言查询分解为4个更具体的子问题，
+        每个子问题可以独立搜索。
+
+        Args:
+            query_text: 用户原始查询
+            llm_analysis: parse_query的分析结果
+
+        Returns:
+            List[str]: 子问题列表（恰好4个）
+
+            如果分解失败，返回包含原始查询的单元素列表
+
+        Example:
+            >>> analysis = await llm_processor.parse_query("最近AI技术突破")
+            >>> sub_queries = await llm_processor.decompose_query("最近AI技术突破", analysis)
+            >>> print(sub_queries)
+            ["GPT-5最新发布和特性", "AI图像生成技术进展", "自动驾驶AI突破", "AI医疗诊断新应用"]
+        """
+        if not self.client:
+            logger.error("LLM 客户端未初始化，无法执行查询分解")
+            return [query_text]  # 降级：返回原始查询
+
+        if not query_text or not query_text.strip():
+            logger.warning("查询文本为空，无法分解")
+            return [query_text]
+
+        # 构建 Prompt
+        prompt = get_query_decompose_prompt(query_text.strip(), llm_analysis)
+
+        try:
+            # 调用 LLM API
+            response_text = await self._call_llm_with_retry(prompt)
+
+            if not response_text:
+                logger.error("LLM 返回空响应，使用原始查询作为降级")
+                return [query_text]
+
+            # 解析 JSON 响应
+            sub_queries = self._parse_decompose_response(response_text)
+
+            if not sub_queries or len(sub_queries) == 0:
+                logger.error("查询分解失败，无法获取有效的子问题列表")
+                return [query_text]
+
+            # 确保恰好4个子问题
+            if len(sub_queries) < 4:
+                logger.warning(f"子问题数量不足4个（当前{len(sub_queries)}个），补充原始查询")
+                while len(sub_queries) < 4:
+                    sub_queries.append(query_text)
+            elif len(sub_queries) > 4:
+                logger.warning(f"子问题数量超过4个（当前{len(sub_queries)}个），截取前4个")
+                sub_queries = sub_queries[:4]
+
+            logger.info(f"查询分解成功: '{query_text}' -> {len(sub_queries)} 个子问题")
+            logger.info(f"子问题列表: {sub_queries}")
+            return sub_queries
+
+        except Exception as e:
+            logger.error(f"查询分解异常: {e}", exc_info=True)
+            return [query_text]  # 失败时返回原始查询
+
+    def _parse_decompose_response(self, response_text: str) -> List[str]:
+        """
+        解析查询分解响应
+
+        处理常见的 LLM 响应格式问题（如 Markdown 代码块）
+
+        Args:
+            response_text: LLM 响应文本
+
+        Returns:
+            子问题列表，如果解析失败返回空列表
+        """
+        if not response_text:
+            return []
+
+        # 清理响应文本
+        text = response_text.strip()
+
+        # 处理 Markdown 代码块
+        if text.startswith("```json"):
+            text = text[7:]  # 去除 ```json
+        elif text.startswith("```"):
+            text = text[3:]   # 去除 ```
+
+        if text.endswith("```"):
+            text = text[:-3]  # 去除尾部 ```
+
+        text = text.strip()
+
+        try:
+            # 尝试解析 JSON
+            sub_queries = json.loads(text)
+
+            # 验证是列表
+            if not isinstance(sub_queries, list):
+                logger.warning(f"分解结果不是列表: {type(sub_queries)}")
+                return []
+
+            # 验证每个元素是字符串
+            valid_queries = []
+            for query in sub_queries:
+                if isinstance(query, str) and query.strip():
+                    valid_queries.append(query.strip())
+
+            return valid_queries
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON 解析失败: {e}, 响应文本: {text[:200]}")
+            return []
 
     async def _call_llm_with_retry(self, prompt: str) -> Optional[str]:
         """
