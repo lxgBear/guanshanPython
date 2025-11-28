@@ -177,3 +177,72 @@ class MongoFirecrawlRawResponseRepository(IFirecrawlRawResponseRepository):
             response_time_ms=doc.get("response_time_ms", 0),
             created_at=doc.get("created_at", datetime.utcnow())
         )
+
+    # ==================== IBasicRepository 基础方法 ====================
+
+    async def update(self, entity: FirecrawlRawResponse) -> bool:
+        """更新Firecrawl原始响应
+
+        Args:
+            entity: 要更新的Firecrawl原始响应实体（必须包含有效的 ID）
+
+        Returns:
+            bool: 更新是否成功
+
+        Raises:
+            RepositoryException: 更新失败时抛出
+        """
+        try:
+            doc = entity.to_dict()
+
+            result = await self.collection.update_one(
+                {"id": entity.id},
+                {"$set": doc}
+            )
+
+            return result.modified_count > 0
+
+        except Exception as e:
+            logger.error(f"❌ 更新Firecrawl原始响应失败: {entity.id}, 错误: {e}")
+            raise RepositoryException(f"更新Firecrawl原始响应失败: {e}")
+
+    async def delete(self, id: str) -> bool:
+        """删除Firecrawl原始响应
+
+        Args:
+            id: 要删除的实体ID
+
+        Returns:
+            bool: 删除是否成功
+
+        Raises:
+            RepositoryException: 删除失败时抛出
+        """
+        try:
+            result = await self.collection.delete_one({"id": id})
+            logger.info(f"删除Firecrawl原始响应: {id}, 删除数量={result.deleted_count}")
+            return result.deleted_count > 0
+
+        except Exception as e:
+            logger.error(f"❌ 删除Firecrawl原始响应失败: {id}, 错误: {e}")
+            raise RepositoryException(f"删除Firecrawl原始响应失败: {e}")
+
+    async def exists(self, id: str) -> bool:
+        """检查Firecrawl原始响应是否存在
+
+        Args:
+            id: 实体ID
+
+        Returns:
+            bool: 实体是否存在
+
+        Raises:
+            RepositoryException: 查询失败时抛出
+        """
+        try:
+            count = await self.collection.count_documents({"id": id})
+            return count > 0
+
+        except Exception as e:
+            logger.error(f"❌ 检查Firecrawl原始响应是否存在失败: {id}, 错误: {e}")
+            raise RepositoryException(f"检查Firecrawl原始响应是否存在失败: {e}")

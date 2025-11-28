@@ -405,6 +405,39 @@ class MongoProcessedResultRepository(IProcessedResultRepository):
             logger.error(f"❌ 批量删除 AI 处理结果失败: {e}")
             raise RepositoryException(f"批量删除 AI 处理结果失败: {e}", e)
 
+    async def bulk_update_fields(
+        self,
+        criteria: Dict[str, Any],
+        updates: Dict[str, Any]
+    ) -> int:
+        """批量更新字段
+
+        根据条件批量更新指定字段，不需要加载完整实体。
+
+        Args:
+            criteria: 更新条件
+            updates: 要更新的字段和值
+
+        Returns:
+            int: 成功更新的数量
+
+        Raises:
+            RepositoryException: 批量更新失败时抛出
+        """
+        try:
+            collection = await self._get_collection()
+            result = await collection.update_many(
+                criteria,
+                {"$set": updates}
+            )
+
+            logger.info(f"✅ 批量更新 AI 处理结果字段: {result.modified_count} 条")
+            return result.modified_count
+
+        except Exception as e:
+            logger.error(f"❌ 批量更新 AI 处理结果字段失败: {e}")
+            raise RepositoryException(f"批量更新 AI 处理结果字段失败: {e}", e)
+
     # ==================== IProcessedResultRepository 特定方法 ====================
 
     async def find_by_task_id(

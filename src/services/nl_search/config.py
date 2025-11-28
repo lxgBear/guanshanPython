@@ -183,6 +183,12 @@ class NLSearchConfig(BaseSettings):
         env="NL_SEARCH_EXCLUDED_URL_EXTENSIONS"
     )
 
+    excluded_domains: List[str] = Field(
+        default=["wikipedia.org", "baike.baidu.com"],
+        description="需要过滤的域名列表（支持部分匹配，如 wikipedia.org 会过滤所有维基百科域名）",
+        env="NL_SEARCH_EXCLUDED_DOMAINS"
+    )
+
     # ==================== Scrape 配置 ====================
 
     scrape_timeout: int = Field(

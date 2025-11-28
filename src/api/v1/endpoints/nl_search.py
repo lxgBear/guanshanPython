@@ -326,6 +326,7 @@ class ArchiveItemResponse(BaseModel):
     user_rating: Optional[int] = Field(None, description="用户评分")
     category: Optional[Dict[str, str]] = Field(None, description="分类信息")
     source: Optional[str] = Field(None, description="新闻来源")
+    url: Optional[str] = Field(None, description="原文链接URL")
     created_at: Optional[str] = Field(None, description="添加时间")
 
 
@@ -730,7 +731,7 @@ async def create_archive(request: CreateArchiveRequest):
     description="分页查询用户的档案列表"
 )
 async def list_archives(
-    user_id: int = Query(..., gt=0, description="用户ID"),
+    user_id: Optional[int] = Query(None, gt=0, description="用户ID（可选，不传则查询所有档案）"),
     limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
     offset: int = Query(0, ge=0, description="分页偏移量")
 ):
@@ -740,12 +741,13 @@ async def list_archives(
     **功能**: ✅ 完整实现
 
     **功能**:
-    - 分页查询用户的档案
+    - 分页查询档案列表
+    - 可选择按用户ID筛选，或查询所有档案
     - 返回档案基本信息（不含条目详情）
     - 按创建时间倒序排列
 
     Args:
-        user_id (int): 用户ID
+        user_id (Optional[int]): 用户ID（可选，不传则查询所有档案）
         limit (int): 返回数量限制 (1-100)
         offset (int): 分页偏移量
 
@@ -757,6 +759,10 @@ async def list_archives(
 
     Example:
         ```bash
+        # 查询所有档案
+        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives?limit=10&offset=0"
+
+        # 查询指定用户的档案
         curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives?user_id=1001&limit=10&offset=0"
         ```
     """
@@ -774,7 +780,7 @@ async def list_archives(
         items = [
             ArchiveResponse(
                 archive_id=archive["archive_id"],
-                user_id=user_id,
+                user_id=archive["user_id"],  # 使用档案中的user_id，而不是查询参数
                 archive_name=archive["archive_name"],
                 description=archive["description"],
                 tags=archive["tags"],
@@ -874,6 +880,7 @@ async def get_archive(
                 user_rating=item["user_rating"],
                 category=item["category"],
                 source=item["source"],
+                url=item.get("url"),  # ✅ 添加URL字段
                 created_at=item["created_at"]
             )
             for item in archive["items"]
@@ -913,7 +920,6 @@ async def get_archive(
 )
 async def update_archive(
     archive_id: str,
-    user_id: int = Query(..., gt=0, description="用户ID（用于权限验证）"),
     request: UpdateArchiveRequest = None
 ):
     """
@@ -923,12 +929,10 @@ async def update_archive(
 
     **功能**:
     - 更新档案名称、描述、标签
-    - 权限验证（仅允许档案所有者修改）
     - 自动更新 updated_at 字段
 
     Args:
-        archive_id (int): 档案ID
-        user_id (int): 用户ID（权限验证）
+        archive_id (str): 档案ID
         request (UpdateArchiveRequest): 更新内容
 
     Returns:
@@ -937,12 +941,12 @@ async def update_archive(
     Raises:
         HTTPException:
             - 400: 输入验证失败
-            - 404: 档案不存在或无权修改
+            - 404: 档案不存在
             - 500: 服务错误
 
     Example:
         ```bash
-        curl -X PUT "http://localhost:8000/api/v1/nl-search/user-archives/1?user_id=1001" \\
+        curl -X PUT "http://localhost:8000/api/v1/nl-search/user-archives/{archive_id}" \\
           -H "Content-Type: application/json" \\
           -d '{
             "archive_name": "新档案名称",
@@ -952,31 +956,30 @@ async def update_archive(
         ```
     """
     try:
-        logger.info(f"更新档案: archive_id={archive_id}, user_id={user_id}")
+        logger.info(f"更新档案: archive_id={archive_id}")
 
         # 调用服务层更新
         success = await mongo_archive_service.update_archive(
             archive_id=archive_id,
-            user_id=user_id,
             archive_name=request.archive_name if request else None,
             description=request.description if request else None,
             tags=request.tags if request else None
         )
 
         if not success:
-            logger.warning(f"档案更新失败: archive_id={archive_id}, user_id={user_id}")
+            logger.warning(f"档案不存在: archive_id={archive_id}")
             raise HTTPException(
                 status_code=404,
                 detail={
                     "error": "档案不存在",
-                    "message": f"未找到档案或您无权修改: archive_id={archive_id}"
+                    "message": "未找到指定的档案"
                 }
             )
 
         # 获取更新后的档案
         archive = await mongo_archive_service.get_archive(
             archive_id=archive_id,
-            user_id=user_id
+            user_id=None
         )
 
         return ArchiveResponse(
@@ -1020,8 +1023,7 @@ async def update_archive(
     description="删除档案及其所有条目"
 )
 async def delete_archive(
-    archive_id: str,
-    user_id: int = Query(..., gt=0, description="用户ID（用于权限验证）")
+    archive_id: str
 ):
     """
     删除档案
@@ -1030,41 +1032,38 @@ async def delete_archive(
 
     **功能**:
     - 删除档案及所有条目（级联删除）
-    - 权限验证（仅允许档案所有者删除）
 
     Args:
-        archive_id (int): 档案ID
-        user_id (int): 用户ID（权限验证）
+        archive_id (str): 档案ID (ObjectId字符串)
 
     Returns:
         dict: 删除结果
 
     Raises:
         HTTPException:
-            - 404: 档案不存在或无权删除
+            - 404: 档案不存在
             - 500: 服务错误
 
     Example:
         ```bash
-        curl -X DELETE "http://localhost:8000/api/v1/nl-search/user-archives/1?user_id=1001"
+        curl -X DELETE "http://localhost:8000/api/v1/nl-search/user-archives/692825cfab7ab1dc61932133"
         ```
     """
     try:
-        logger.info(f"删除档案: archive_id={archive_id}, user_id={user_id}")
+        logger.info(f"删除档案: archive_id={archive_id}")
 
         # 调用服务层删除
         success = await mongo_archive_service.delete_archive(
-            archive_id=archive_id,
-            user_id=user_id
+            archive_id=archive_id
         )
 
         if not success:
-            logger.warning(f"档案删除失败: archive_id={archive_id}, user_id={user_id}")
+            logger.warning(f"档案不存在: archive_id={archive_id}")
             raise HTTPException(
                 status_code=404,
                 detail={
                     "error": "档案不存在",
-                    "message": f"未找到档案或您无权删除: archive_id={archive_id}"
+                    "message": "未找到指定的档案"
                 }
             )
 

@@ -533,10 +533,10 @@ class MongoResultRepository(IResultRepository):
             raise RepositoryException(f"保存搜索结果失败: {e}", e)
 
     async def check_existing_urls(self, task_id: str, urls: List[str]) -> set:
-        """检查哪些 URL 已存在于数据库（v2.1.1: URL 去重辅助方法）
+        """检查哪些 URL 已存在于数据库（v2.2.0: 全局 URL 去重）
 
         Args:
-            task_id: 任务 ID
+            task_id: 任务 ID（保留参数兼容性，实际不再使用）
             urls: URL 列表
 
         Returns:
@@ -546,14 +546,16 @@ class MongoResultRepository(IResultRepository):
             collection = await self._get_collection()
 
             existing_urls = set()
+            # v2.2.0: 移除 task_id 限制，实现全局 URL 去重
+            # 避免跨搜索任务重复调用 Firecrawl
             async for doc in collection.find(
-                {"task_id": task_id, "url": {"$in": urls}},
+                {"url": {"$in": urls}},  # 全局去重
                 {"url": 1}
             ):
                 existing_urls.add(doc.get("url"))
 
             if existing_urls:
-                logger.debug(f"发现{len(existing_urls)}个已存在的 URL (任务: {task_id})")
+                logger.debug(f"发现{len(existing_urls)}个已存在的 URL（全局去重）")
 
             return existing_urls
 

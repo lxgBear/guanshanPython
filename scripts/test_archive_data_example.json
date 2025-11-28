@@ -1,0 +1,57 @@
+[
+  {
+    "title": "AI技术最新进展",
+    "url": "https://example.com/ai-news-1",
+    "content": "人工智能技术在2025年取得了重大突破。深度学习模型的性能显著提升，在自然语言处理、计算机视觉等领域都展现出了惊人的能力。\n\n研究人员开发了新的训练算法，使得模型的训练效率提高了50%。同时，模型的准确率也有了明显的改善。这些进展将推动AI技术在更多实际场景中的应用。",
+    "creator": "editor_ai",
+    "description": "AI技术新闻数据源",
+    "primary_category": "科技",
+    "secondary_category": "人工智能",
+    "tertiary_category": "深度学习",
+    "custom_tags": ["AI", "深度学习", "技术突破"]
+  },
+  {
+    "title": "区块链在金融领域的应用",
+    "url": "https://example.com/blockchain-finance",
+    "content": "区块链技术正在改变传统金融行业。通过去中心化的分布式账本技术，金融交易变得更加透明和安全。\n\n许多银行和金融机构已经开始试点区块链项目。这些项目涵盖了跨境支付、供应链金融、资产管理等多个领域。专家预测，未来5年内，区块链技术将在金融行业得到广泛应用。",
+    "creator": "editor_finance",
+    "description": "区块链金融新闻",
+    "primary_category": "金融",
+    "secondary_category": "区块链",
+    "tertiary_category": "金融科技",
+    "custom_tags": ["区块链", "金融", "金融科技", "创新"]
+  },
+  {
+    "title": "量子计算商业化进程加速",
+    "url": "https://example.com/quantum-computing",
+    "content": "量子计算技术的商业化进程正在加速。多家科技巨头宣布了新的量子计算机产品和服务。\n\n量子计算在密码学、药物研发、材料科学等领域展现出巨大潜力。虽然目前量子计算还处于早期阶段，但技术突破正在不断出现。研究人员预计，未来10年量子计算将进入实用化阶段。",
+    "creator": "editor_tech",
+    "description": "量子计算新闻",
+    "primary_category": "科技",
+    "secondary_category": "量子计算",
+    "tertiary_category": "前沿科技",
+    "custom_tags": ["量子计算", "前沿科技", "商业化"]
+  },
+  {
+    "title": "5G网络覆盖全球主要城市",
+    "url": "https://example.com/5g-network",
+    "content": "全球5G网络建设取得重大进展。主要城市的5G网络覆盖率已经达到80%以上。\n\n5G技术的高速率、低延迟特性为物联网、自动驾驶、远程医疗等应用提供了基础设施支持。运营商正在加速5G基站部署，预计明年底将实现全国主要城市的全覆盖。",
+    "creator": "editor_telecom",
+    "description": "5G网络新闻",
+    "primary_category": "科技",
+    "secondary_category": "通信",
+    "tertiary_category": "5G技术",
+    "custom_tags": ["5G", "通信", "网络", "物联网"]
+  },
+  {
+    "title": "可再生能源占比持续提升",
+    "url": "https://example.com/renewable-energy",
+    "content": "全球可再生能源装机容量持续增长。太阳能和风能发电成本大幅下降，经济性显著提升。\n\n各国政府加大了对可再生能源的政策支持力度。预计到2030年，可再生能源在全球能源结构中的占比将超过40%。这将为应对气候变化做出重要贡献。",
+    "creator": "editor_energy",
+    "description": "可再生能源新闻",
+    "primary_category": "能源",
+    "secondary_category": "可再生能源",
+    "tertiary_category": "清洁能源",
+    "custom_tags": ["可再生能源", "太阳能", "风能", "环保"]
+  }
+]

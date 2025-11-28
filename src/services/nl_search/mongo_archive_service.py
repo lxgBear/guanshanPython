@@ -13,12 +13,12 @@
 日期: 2025-11-17
 """
 import logging
-import uuid
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from src.infrastructure.database.mongo_nl_user_archive_repository import MongoNLUserArchiveRepository
 from src.infrastructure.database.connection import get_mongodb_database
+from src.infrastructure.id_generator import generate_id
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +175,7 @@ class MongoArchiveService:
 
                 # 准备条目数据
                 archive_items.append({
-                    "id": str(uuid.uuid4()),  # 生成唯一ID
+                    "id": generate_id(),  # 生成唯一ID（雪花ID）
                     "news_result_id": news_result_id,
                     "edited_title": edited_title,
                     "edited_summary": edited_summary,
@@ -280,6 +280,7 @@ class MongoArchiveService:
                     "user_rating": item.get("user_rating"),
                     "category": snapshot.get("category"),
                     "source": snapshot.get("source"),
+                    "url": snapshot.get("url"),  # ✅ 添加URL字段
                     "published_at": snapshot.get("published_at"),
                     "media_urls": snapshot.get("media_urls", []),
                     "display_order": item.get("display_order", 0),
@@ -306,14 +307,14 @@ class MongoArchiveService:
 
     async def list_archives(
         self,
-        user_id: int,
+        user_id: Optional[int] = None,
         limit: int = 20,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
-        """获取用户的档案列表
+        """获取档案列表
 
         Args:
-            user_id: 用户ID
+            user_id: 用户ID（可选，不传则查询所有档案）
             limit: 返回数量限制
             offset: 分页偏移量
 
@@ -321,9 +322,12 @@ class MongoArchiveService:
             档案列表
 
         Example:
+            >>> # 查询所有档案
+            >>> archives = await service.list_archives(limit=10)
+            >>> # 查询指定用户的档案
             >>> archives = await service.list_archives(user_id=1001, limit=10)
         """
-        logger.info(f"查询用户档案列表: user_id={user_id}, limit={limit}, offset={offset}")
+        logger.info(f"查询档案列表: user_id={user_id}, limit={limit}, offset={offset}")
 
         try:
             archives = await self.archive_repo.get_by_user(
@@ -335,6 +339,7 @@ class MongoArchiveService:
             results = [
                 {
                     "archive_id": archive.get("_id"),
+                    "user_id": archive.get("user_id"),
                     "archive_name": archive.get("archive_name"),
                     "description": archive.get("description"),
                     "tags": archive.get("tags", []),
@@ -356,7 +361,6 @@ class MongoArchiveService:
     async def update_archive(
         self,
         archive_id: str,
-        user_id: int,
         archive_name: Optional[str] = None,
         description: Optional[str] = None,
         tags: Optional[List[str]] = None
@@ -365,7 +369,6 @@ class MongoArchiveService:
 
         Args:
             archive_id: 档案ID (ObjectId字符串)
-            user_id: 用户ID（用于权限验证）
             archive_name: 新的档案名称
             description: 新的描述
             tags: 新的标签列表
@@ -376,17 +379,16 @@ class MongoArchiveService:
         Example:
             >>> success = await service.update_archive(
             ...     archive_id="507f1f77bcf86cd799439011",
-            ...     user_id=1001,
             ...     archive_name="新档案名称"
             ... )
         """
-        logger.info(f"更新档案: archive_id={archive_id}, user_id={user_id}")
+        logger.info(f"更新档案: archive_id={archive_id}")
 
         try:
-            # 权限验证
+            # 检查档案是否存在
             archive = await self.archive_repo.get_by_id(archive_id)
-            if not archive or archive.get("user_id") != user_id:
-                logger.warning(f"用户 {user_id} 无权更新档案 {archive_id}")
+            if not archive:
+                logger.info(f"档案不存在: archive_id={archive_id}")
                 return False
 
             # 执行更新
@@ -403,29 +405,27 @@ class MongoArchiveService:
             logger.error(f"更新档案失败: {e}", exc_info=True)
             raise
 
-    async def delete_archive(self, archive_id: str, user_id: int) -> bool:
+    async def delete_archive(self, archive_id: str) -> bool:
         """删除档案（包括所有条目）
 
         Args:
             archive_id: 档案ID (ObjectId字符串)
-            user_id: 用户ID（用于权限验证）
 
         Returns:
             bool: 删除是否成功
 
         Example:
             >>> success = await service.delete_archive(
-            ...     archive_id="507f1f77bcf86cd799439011",
-            ...     user_id=1001
+            ...     archive_id="507f1f77bcf86cd799439011"
             ... )
         """
-        logger.info(f"删除档案: archive_id={archive_id}, user_id={user_id}")
+        logger.info(f"删除档案: archive_id={archive_id}")
 
         try:
-            # 权限验证
+            # 检查档案是否存在
             archive = await self.archive_repo.get_by_id(archive_id)
-            if not archive or archive.get("user_id") != user_id:
-                logger.warning(f"用户 {user_id} 无权删除档案 {archive_id}")
+            if not archive:
+                logger.info(f"档案不存在: archive_id={archive_id}")
                 return False
 
             # 执行删除
