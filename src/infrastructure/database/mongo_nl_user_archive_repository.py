@@ -162,14 +162,14 @@ class MongoNLUserArchiveRepository:
 
     async def get_by_user(
         self,
-        user_id: int,
+        user_id: Optional[int] = None,
         limit: int = 20,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
-        """获取用户的档案列表
+        """获取档案列表
 
         Args:
-            user_id: 用户ID
+            user_id: 用户ID（可选，不传则查询所有档案）
             limit: 返回数量限制
             offset: 分页偏移量
 
@@ -177,6 +177,9 @@ class MongoNLUserArchiveRepository:
             List[Dict]: 档案列表
 
         Example:
+            >>> # 查询所有档案
+            >>> archives = await repo.get_by_user(limit=10)
+            >>> # 查询指定用户的档案
             >>> archives = await repo.get_by_user(user_id=1001, limit=10)
             >>> for archive in archives:
             ...     print(archive["archive_name"])
@@ -184,9 +187,10 @@ class MongoNLUserArchiveRepository:
         try:
             collection = await self._get_collection()
 
-            cursor = collection.find(
-                {"user_id": user_id}
-            ).sort("created_at", -1).skip(offset).limit(limit)
+            # 构建查询条件：如果提供了 user_id，则按用户筛选；否则查询所有
+            query = {"user_id": user_id} if user_id is not None else {}
+
+            cursor = collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
 
             archives = []
             async for doc in cursor:

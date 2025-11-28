@@ -205,3 +205,44 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ==========================================
+# Project-specific ignores
+# ==========================================
+
+# Server runtime files
+server.pid
+server.log
+nohup.out
+*.pid
+
+# macOS
+.DS_Store
+
+# Data directories (runtime generated data)
+data/ai_responses/
+data/chat_sse/
+data/gpt5_search_responses/
+
+# Backup files
+*.backup
+*.backup.*
+*.bak
+*.old
+*.tmp
+
+# Test scripts (temporary)
+test_*.py
+check_*.sh
+connect_*.sh
+
+# Shell scripts (可根据需要调整)
+start_server.sh
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Documentation data files
+ai_service_response.json
+test_sonar_pro.json
+

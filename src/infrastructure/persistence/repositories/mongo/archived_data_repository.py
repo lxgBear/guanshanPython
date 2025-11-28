@@ -389,3 +389,92 @@ class MongoArchivedDataRepository(IArchivedDataRepository):
             created_at=doc.get("created_at", datetime.utcnow()),
             updated_at=doc.get("updated_at", datetime.utcnow()),
         )
+
+    # ==================== IBasicRepository 基础方法 ====================
+
+    async def get_by_id(self, id: str) -> Optional[ArchivedData]:
+        """根据ID获取存档数据
+
+        Args:
+            id: 实体ID
+
+        Returns:
+            Optional[ArchivedData]: 存档数据实体，不存在则返回None
+
+        Raises:
+            RepositoryException: 查询失败时抛出
+        """
+        try:
+            doc = await self.collection.find_one({"id": id})
+            return self._doc_to_entity(doc) if doc else None
+        except Exception as e:
+            logger.error(f"❌ 根据ID获取存档数据失败: {id}, 错误: {e}")
+            raise RepositoryException(f"根据ID获取存档数据失败: {e}")
+
+    async def update(self, entity: ArchivedData) -> bool:
+        """更新存档数据
+
+        Args:
+            entity: 要更新的存档数据实体（必须包含有效的 ID）
+
+        Returns:
+            bool: 更新是否成功
+
+        Raises:
+            RepositoryException: 更新失败时抛出
+        """
+        try:
+            entity.updated_at = datetime.utcnow()
+            doc = entity.model_dump()
+
+            result = await self.collection.update_one(
+                {"id": entity.id},
+                {"$set": doc}
+            )
+
+            return result.modified_count > 0
+
+        except Exception as e:
+            logger.error(f"❌ 更新存档数据失败: {entity.id}, 错误: {e}")
+            raise RepositoryException(f"更新存档数据失败: {e}")
+
+    async def delete(self, id: str) -> bool:
+        """删除存档数据
+
+        Args:
+            id: 要删除的实体ID
+
+        Returns:
+            bool: 删除是否成功
+
+        Raises:
+            RepositoryException: 删除失败时抛出
+        """
+        try:
+            result = await self.collection.delete_one({"id": id})
+            logger.info(f"删除存档数据: {id}, 删除数量={result.deleted_count}")
+            return result.deleted_count > 0
+
+        except Exception as e:
+            logger.error(f"❌ 删除存档数据失败: {id}, 错误: {e}")
+            raise RepositoryException(f"删除存档数据失败: {e}")
+
+    async def exists(self, id: str) -> bool:
+        """检查存档数据是否存在
+
+        Args:
+            id: 实体ID
+
+        Returns:
+            bool: 实体是否存在
+
+        Raises:
+            RepositoryException: 查询失败时抛出
+        """
+        try:
+            count = await self.collection.count_documents({"id": id})
+            return count > 0
+
+        except Exception as e:
+            logger.error(f"❌ 检查存档数据是否存在失败: {id}, 错误: {e}")
+            raise RepositoryException(f"检查存档数据是否存在失败: {e}")

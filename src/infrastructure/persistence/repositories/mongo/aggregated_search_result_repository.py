@@ -401,3 +401,117 @@ class MongoAggregatedSearchResultRepository(IAggregatedSearchResultRepository):
         except Exception as e:
             logger.error(f"❌ 批量更新状态失败, 错误: {e}")
             raise RepositoryException(f"批量更新状态失败: {e}")
+
+    # ==================== IBasicRepository 基础方法 ====================
+
+    async def create(self, entity: AggregatedSearchResult) -> str:
+        """创建聚合搜索结果
+
+        Args:
+            entity: 聚合搜索结果实体
+
+        Returns:
+            str: 创建成功后的实体ID
+
+        Raises:
+            RepositoryException: 创建失败时抛出
+        """
+        try:
+            doc = entity.to_dict()
+            doc["_id"] = entity.id  # MongoDB使用 _id 作为主键
+
+            await (await self._get_collection()).insert_one(doc)
+            logger.info(f"✅ 创建聚合搜索结果成功: {entity.id}")
+            return entity.id
+
+        except Exception as e:
+            logger.error(f"❌ 创建聚合搜索结果失败: {entity.id}, 错误: {e}")
+            raise RepositoryException(f"创建聚合搜索结果失败: {e}")
+
+    async def get_by_id(self, id: str) -> Optional[AggregatedSearchResult]:
+        """根据ID获取聚合搜索结果
+
+        Args:
+            id: 实体ID
+
+        Returns:
+            Optional[AggregatedSearchResult]: 实体对象，如果不存在则返回 None
+
+        Raises:
+            RepositoryException: 查询失败时抛出
+        """
+        try:
+            doc = await (await self._get_collection()).find_one({"_id": id})
+            return AggregatedSearchResult.from_dict(doc) if doc else None
+
+        except Exception as e:
+            logger.error(f"❌ 根据ID获取聚合搜索结果失败: {id}, 错误: {e}")
+            raise RepositoryException(f"根据ID获取聚合搜索结果失败: {e}")
+
+    async def update(self, entity: AggregatedSearchResult) -> bool:
+        """更新聚合搜索结果
+
+        Args:
+            entity: 要更新的聚合搜索结果实体（必须包含有效的 ID）
+
+        Returns:
+            bool: 更新是否成功
+
+        Raises:
+            RepositoryException: 更新失败时抛出
+        """
+        try:
+            entity.updated_at = datetime.utcnow()
+            doc = entity.to_dict()
+
+            result = await (await self._get_collection()).update_one(
+                {"_id": entity.id},
+                {"$set": doc}
+            )
+
+            return result.modified_count > 0
+
+        except Exception as e:
+            logger.error(f"❌ 更新聚合搜索结果失败: {entity.id}, 错误: {e}")
+            raise RepositoryException(f"更新聚合搜索结果失败: {e}")
+
+    async def delete(self, id: str) -> bool:
+        """删除聚合搜索结果
+
+        Args:
+            id: 要删除的实体ID
+
+        Returns:
+            bool: 删除是否成功
+
+        Raises:
+            RepositoryException: 删除失败时抛出
+        """
+        try:
+            result = await (await self._get_collection()).delete_one({"_id": id})
+            logger.info(f"删除聚合搜索结果: {id}, 删除数量={result.deleted_count}")
+            return result.deleted_count > 0
+
+        except Exception as e:
+            logger.error(f"❌ 删除聚合搜索结果失败: {id}, 错误: {e}")
+            raise RepositoryException(f"删除聚合搜索结果失败: {e}")
+
+    async def exists(self, id: str) -> bool:
+        """检查聚合搜索结果是否存在
+
+        Args:
+            id: 实体ID
+
+        Returns:
+            bool: 实体是否存在
+
+        Raises:
+            RepositoryException: 查询失败时抛出
+        """
+        try:
+            count = await (await self._get_collection()).count_documents({"_id": id})
+            return count > 0
+
+        except Exception as e:
+            logger.error(f"❌ 检查聚合搜索结果是否存在失败: {id}, 错误: {e}")
+            raise RepositoryException(f"检查聚合搜索结果是否存在失败: {e}")

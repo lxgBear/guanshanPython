@@ -75,7 +75,7 @@ class MapRequest(BaseModel):
 class ExtractRequest(BaseModel):
     """数据提取请求"""
     url: HttpUrl = Field(..., description="目标URL")
-    schema: Dict[str, Any] = Field(..., description="提取模式定义")
+    extraction_schema: Dict[str, Any] = Field(..., description="提取模式定义", alias="schema")
     
     class Config:
         json_schema_extra = {
@@ -244,7 +244,7 @@ async def extract_data(
     使用自然语言描述的schema来提取数据
     """
     try:
-        data = await crawler.extract(str(request.url), request.schema)
+        data = await crawler.extract(str(request.url), request.extraction_schema)
         
         return {
             "success": True,

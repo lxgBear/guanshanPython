@@ -179,6 +179,42 @@ class MongoSummaryReportRepository(ISummaryReportRepository):
             logger.error(f"❌ 删除报告失败: {report_id}, 错误: {e}")
             raise RepositoryException(f"删除报告失败: {e}")
 
+    # ==================== IBasicRepository 基础方法 ====================
+
+    async def get_by_id(self, id: str) -> Optional[SummaryReport]:
+        """根据ID获取报告（IBasicRepository要求的标准方法）
+
+        Args:
+            id: 报告ID
+
+        Returns:
+            Optional[SummaryReport]: 报告实体，不存在则返回None
+
+        Raises:
+            RepositoryException: 查询失败时抛出
+        """
+        # 调用已有的find_by_id方法
+        return await self.find_by_id(id)
+
+    async def exists(self, id: str) -> bool:
+        """检查报告是否存在
+
+        Args:
+            id: 报告ID
+
+        Returns:
+            bool: 报告是否存在
+
+        Raises:
+            RepositoryException: 查询失败时抛出
+        """
+        try:
+            count = await self.collection.count_documents({"report_id": id})
+            return count > 0
+        except Exception as e:
+            logger.error(f"❌ 检查报告是否存在失败: {id}, 错误: {e}")
+            raise RepositoryException(f"检查报告是否存在失败: {e}")
+
 
 class MongoSummaryReportVersionRepository(ISummaryReportVersionRepository):
     """SummaryReportVersion MongoDB Repository 实现

@@ -362,6 +362,12 @@ class GPT5SearchAdapter:
         # 转换为小写进行比较
         url_lower = url.lower()
 
+        # ✅ v2.7.0: 检查是否包含需要排除的域名（如维基百科、百度百科）
+        for domain in nl_search_config.excluded_domains:
+            if domain.lower() in url_lower:
+                logger.debug(f"过滤域名 {domain}: {url}")
+                return True
+
         # 移除查询参数（?之后的部分）和锚点（#之后的部分）
         # 例如: https://example.com/file.pdf?param=value → https://example.com/file.pdf
         url_path = url_lower.split('?')[0].split('#')[0]
@@ -527,7 +533,7 @@ class GPT5SearchAdapter:
         策略:
         1. 去重（相同 URL）
         2. 按相关性评分排序
-        3. 限制结果数量
+        3. 不限制结果数量（返回所有去重后的结果）
         """
         # 1. 去重
         seen_urls = set()
@@ -541,8 +547,8 @@ class GPT5SearchAdapter:
         # 2. 排序（按 score 降序，再按 position 升序）
         unique_results.sort(key=lambda r: (-r.score, r.position))
 
-        # 3. 限制数量
-        return unique_results[:max_results]
+        # 3. 不限制数量 - 返回所有结果
+        return unique_results
 
     def _print_search_results(self, query: str, results: List[SearchResult]) -> None:
         """
