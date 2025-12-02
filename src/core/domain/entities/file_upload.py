@@ -125,6 +125,7 @@ class FileUpload:
 
     # 元数据
     metadata: Dict[str, Any] = field(default_factory=dict)
+    tags: List[str] = field(default_factory=list)  # 标签列表
 
     # 关联信息
     uploaded_by: str = ""                 # 上传者

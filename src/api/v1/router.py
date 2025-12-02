@@ -15,6 +15,7 @@ from src.api.v1.endpoints import firecrawl_utils
 from src.api.v1.endpoints import nl_search
 from src.api.v1.endpoints import user_edits
 from src.api.v1.endpoints import chat
+from src.api.v1.endpoints import upload
 
 # 创建主路由器
 api_router = APIRouter()
@@ -95,6 +96,12 @@ api_router.include_router(
 api_router.include_router(
     chat.router,
     tags=["💬 Chat接口"]
+)
+
+# 文件上传管理（v1.0.0新增）
+api_router.include_router(
+    upload.router,
+    tags=["📁 文件上传管理"]
 )
 
 # ==========================================
