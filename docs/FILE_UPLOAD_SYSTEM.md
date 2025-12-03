@@ -77,6 +77,8 @@ curl -X POST "http://localhost:8000/api/v1/upload?tags=重要,合同,2024" \
 
 **支持格式**: PDF (`.pdf`), DOCX (`.docx`)
 
+> ⚠️ **注意**: 系统不支持图片文件上传（如 `.jpg`, `.png`, `.gif`, `.webp` 等）。仅支持文档格式的内容提取和存储。
+
 **最大文件大小**: 100MB (可在 `.env` 中配置)
 
 **请求示例**:

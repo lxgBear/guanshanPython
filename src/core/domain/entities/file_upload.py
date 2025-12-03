@@ -48,7 +48,7 @@ class FileCategory(Enum):
 @dataclass
 class FileUploadConfig:
     """文件上传配置"""
-    # 允许的文件类型（MIME types）
+    # 允许的文件类型（MIME types）- 不包含图片类型
     allowed_mime_types: List[str] = field(default_factory=lambda: [
         "application/pdf",
         "application/msword",
@@ -56,18 +56,13 @@ class FileUploadConfig:
         "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "text/csv",
-        "application/json",
-        "image/jpeg",
-        "image/png",
-        "image/gif",
-        "image/webp"
+        "application/json"
     ])
 
-    # 允许的文件扩展名
+    # 允许的文件扩展名 - 不包含图片格式
     allowed_extensions: List[str] = field(default_factory=lambda: [
         ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-        ".csv", ".json", ".txt",
-        ".jpg", ".jpeg", ".png", ".gif", ".webp"
+        ".csv", ".json", ".txt"
     ])
 
     # 最大文件大小（字节）默认 10MB
