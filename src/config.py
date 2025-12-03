@@ -2,10 +2,16 @@
 应用配置管理
 使用Pydantic Settings进行配置验证和管理
 """
+import os
 from typing import List, Optional
 from functools import lru_cache
 from pydantic_settings import BaseSettings
 from pydantic import Field, validator
+from dotenv import load_dotenv
+
+# 预先加载 .env 文件中的 NO_PROXY 配置（必须在 Settings 初始化之前）
+# 这样可以确保 .env 中的值优先于系统环境变量
+load_dotenv(override=True)
 
 
 class Settings(BaseSettings):
@@ -34,12 +40,16 @@ class Settings(BaseSettings):
         env="ALLOWED_ORIGINS"
     )
     
+    # 网络代理配置（VPN绕过内网IP，避免代理干扰MongoDB连接）
+    NO_PROXY: Optional[str] = Field(default=None, env="NO_PROXY")
+    no_proxy: Optional[str] = Field(default=None, env="no_proxy")
+
     # MongoDB配置
     MONGODB_URL: str = Field(..., env="MONGODB_URL")
     MONGODB_DB_NAME: str = Field(default="intelligent_system", env="MONGODB_DB_NAME")
     MONGODB_MAX_POOL_SIZE: int = Field(default=100, env="MONGODB_MAX_POOL_SIZE")
     MONGODB_MIN_POOL_SIZE: int = Field(default=10, env="MONGODB_MIN_POOL_SIZE")
-    
+
     # MariaDB配置
     MARIADB_URL: str = Field(..., env="MARIADB_URL")
     MARIADB_POOL_SIZE: int = Field(default=20, env="MARIADB_POOL_SIZE")
@@ -106,7 +116,17 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """获取配置单例"""
-    return Settings()
+    settings = Settings()
+
+    # 设置 NO_PROXY 环境变量（避免代理干扰 MongoDB 内网连接）
+    if settings.NO_PROXY:
+        os.environ['NO_PROXY'] = settings.NO_PROXY
+        os.environ['no_proxy'] = settings.NO_PROXY
+    elif settings.no_proxy:
+        os.environ['NO_PROXY'] = settings.no_proxy
+        os.environ['no_proxy'] = settings.no_proxy
+
+    return settings
 
 
 settings = get_settings()
