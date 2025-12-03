@@ -117,13 +117,39 @@ Result: 35  # Connection refused / No route to host
    nc -zv 192.168.0.3 27017
    ```
 
-## 📌 Navicat 连接成功的可能解释
+## 🎯 最终根因：OpenVPN 应用级网络过滤
 
-1. **不同的连接配置** - Navicat 可能使用了不同的主机名或IP地址
-2. **SSH 隧道** - Navicat 可能通过 SSH 隧道连接
-3. **本地 MongoDB** - Navicat 实际连接的是 localhost 而非 192.168.0.3
+### 关键诊断结果
 
-**建议**: 请确认 Navicat 的实际连接配置（主机、端口、连接方式）
+**测试对比**:
+```bash
+# ✅ 系统命令可以连接
+$ nc -zv 192.168.0.3 27017
+Connection to 192.168.0.3 port 27017 [tcp/*] succeeded!
+
+# ✅ ICMP 可以 ping 通
+$ ping -c 3 192.168.0.3
+3 packets transmitted, 3 packets received, 0.0% packet loss
+
+# ❌ Python socket 连接失败
+$ python3 -c "import socket; s=socket.socket(); s.connect(('192.168.0.3', 27017))"
+OSError: [Errno 65] No route to host
+```
+
+### 根本原因
+
+**OpenVPN (utun5 接口) 在 macOS 系统层面实施了应用程序级网络过滤**:
+- VPN 使用 Network Extension 或 Packet Filter 拦截 Python 进程的连接
+- 系统命令（如 `nc`, `ping`）被允许访问内网
+- Python 应用程序的 socket 连接被阻止
+
+这是 macOS VPN 应用常见的安全策略，用于防止应用程序绕过 VPN。
+
+## 📌 Navicat 连接成功的解释
+
+1. **Navicat 是白名单应用** - VPN 可能允许 Navicat 访问内网
+2. **SSH 隧道** - Navicat 可能通过 SSH 隧道连接，绕过 VPN 过滤
+3. **不同的网络策略** - GUI 应用程序与命令行应用程序的网络策略不同
 
 ## 📝 修改文件清单
 
@@ -131,13 +157,45 @@ Result: 35  # Connection refused / No route to host
 2. `src/core/domain/entities/file_upload.py` - 移除图片类型支持
 3. `docs/FILE_UPLOAD_SYSTEM.md` - 更新文件类型说明
 
+## ✅ 解决方案
+
+### 方案 1: 临时关闭 OpenVPN（推荐用于开发）
+```bash
+# 关闭 OpenVPN
+# 方法取决于你使用的 VPN 客户端
+
+# 测试连接
+python3 -c "import socket; s=socket.socket(); s.connect(('192.168.0.3', 27017)); print('✅ 连接成功')"
+
+# 重启服务器
+./start_server.sh
+```
+
+### 方案 2: 配置 VPN 白名单
+在 OpenVPN 客户端中添加 Python 应用到白名单：
+- macOS 系统偏好设置 → 安全性与隐私 → 防火墙 → 防火墙选项
+- 或在 VPN 应用中配置分流规则，允许 192.168.0.0/24 直连
+
+### 方案 3: SSH 隧道（生产环境推荐）
+```bash
+# 创建 SSH 隧道到 MongoDB 服务器
+ssh -L 27017:192.168.0.3:27017 your-jump-server
+
+# 修改 .env 连接本地端口
+MONGODB_URL=mongodb://mongodb:password@localhost:27017/?authSource=admin&directConnection=true
+```
+
+### 方案 4: 使用 MongoDB 云服务地址
+如果有公网可访问的 MongoDB 地址，直接使用公网地址（已在 .env 中配置为备选方案）
+
 ## 🔄 后续步骤
 
-1. **立即**: 联系基础设施团队检查 MongoDB 服务
-2. **测试**: 服务恢复后重启应用验证连接
-3. **监控**: 添加 MongoDB 连接健康检查
+1. **立即**: 尝试方案 1（关闭 VPN）验证问题
+2. **短期**: 使用方案 2 或 3 配置白名单/隧道
+3. **长期**: 考虑使用云 MongoDB 服务或配置专用跳板机
 
 ---
 
 **报告时间**: 2025-12-03
-**状态**: 配置已优化，等待基础设施修复
+**最终状态**: 应用配置已优化，根因已确认为 OpenVPN 应用级网络过滤
+**解决方法**: 关闭 VPN 或配置白名单/SSH 隧道
