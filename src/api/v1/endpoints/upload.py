@@ -238,10 +238,15 @@ async def upload_file(
         # ========================================
         # 💾 创建文件上传实体，包含提取的内容和标签
         # ========================================
+        # 提取标题：使用文件名（去掉扩展名）作为标题
+        file_title = os.path.splitext(file.filename)[0] if file.filename else ""
+
         file_upload = FileUpload(
             file_id=file_id,
             original_filename=file.filename,
             stored_filename=safe_filename,
+            title=file_title,                                    # 文件标题
+            content=extracted_content.get("text", ""),           # 提取的正文内容
             file_size=len(content),
             mime_type=file.content_type or "application/octet-stream",
             storage_provider=StorageProviderEnum.LOCAL,
@@ -253,12 +258,7 @@ async def upload_file(
             upload_progress=100,
             created_at=now,
             updated_at=now,
-            tags=parsed_tags,  # 添加标签
-            metadata={
-                "extracted_content": extracted_content,
-                "extraction_timestamp": now.isoformat(),
-                "file_type": extraction_result.get("file_type")
-            }
+            tags=parsed_tags
         )
 
         # ========================================

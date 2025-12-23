@@ -78,7 +78,8 @@ class MongoNLUserArchiveRepository:
         items: List[Dict[str, Any]],
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
-        search_log_id: Optional[int] = None
+        search_log_id: Optional[int] = None,
+        user_summary: Optional[str] = None
     ) -> Optional[str]:
         """创建档案
 
@@ -89,6 +90,7 @@ class MongoNLUserArchiveRepository:
             description: 档案描述（可选）
             tags: 标签列表（可选）
             search_log_id: 关联的搜索记录ID（可选）
+            user_summary: 用户内容总结（可选）v2.5.4新增 - 自动生成的条目汇总
 
         Returns:
             Optional[str]: 创建的档案ID（ObjectId字符串），失败时返回 None
@@ -98,7 +100,8 @@ class MongoNLUserArchiveRepository:
             ...     user_id=1001,
             ...     archive_name="AI技术突破",
             ...     items=[{"news_result_id": "...", ...}],
-            ...     tags=["AI", "技术"]
+            ...     tags=["AI", "技术"],
+            ...     user_summary="# AI技术突破\\n\\n## 1. GPT-5发布..."
             ... )
         """
         try:
@@ -115,6 +118,7 @@ class MongoNLUserArchiveRepository:
                 "search_log_id": search_log_id,
                 "items": items,  # 条目列表已包含所有字段
                 "items_count": len(items),
+                "user_summary": user_summary,  # v2.5.4: 自动生成的条目汇总
                 "created_at": now,
                 "updated_at": now
             }
@@ -208,7 +212,9 @@ class MongoNLUserArchiveRepository:
         archive_id: str,
         archive_name: Optional[str] = None,
         description: Optional[str] = None,
-        tags: Optional[List[str]] = None
+        tags: Optional[List[str]] = None,
+        user_summary: Optional[str] = None,
+        generated_report: Optional[str] = None
     ) -> bool:
         """更新档案信息
 
@@ -217,6 +223,8 @@ class MongoNLUserArchiveRepository:
             archive_name: 新的档案名称（可选）
             description: 新的描述（可选）
             tags: 新的标签列表（可选）
+            user_summary: 用户上传的内容总结（可选）v2.5.3新增
+            generated_report: AI生成的摘要报告（可选）v2.5.9新增
 
         Returns:
             bool: 更新是否成功
@@ -225,7 +233,9 @@ class MongoNLUserArchiveRepository:
             >>> success = await repo.update(
             ...     archive_id="507f1f77bcf86cd799439011",
             ...     archive_name="新档案名称",
-            ...     description="新描述"
+            ...     description="新描述",
+            ...     user_summary="用户自定义的内容总结...",
+            ...     generated_report="AI生成的摘要报告..."
             ... )
         """
         try:
@@ -242,6 +252,14 @@ class MongoNLUserArchiveRepository:
 
             if tags is not None:
                 update_fields["tags"] = tags
+
+            # v2.5.3: 支持用户上传的内容总结
+            if user_summary is not None:
+                update_fields["user_summary"] = user_summary
+
+            # v2.5.9: 支持AI生成的摘要报告
+            if generated_report is not None:
+                update_fields["generated_report"] = generated_report
 
             if not update_fields:
                 logger.warning("更新档案时未提供任何字段")

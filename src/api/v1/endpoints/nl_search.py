@@ -270,22 +270,68 @@ class RAGContentResponse(BaseModel):
 # ==================== 档案管理数据模型 ====================
 
 class ArchiveItemRequest(BaseModel):
-    """档案条目请求"""
-    news_result_id: str = Field(..., description="新闻结果ID（MongoDB ObjectId）")
-    edited_title: Optional[str] = Field(None, description="编辑后的标题")
-    edited_summary: Optional[str] = Field(None, description="编辑后的摘要")
-    user_notes: Optional[str] = Field(None, description="用户备注")
+    """档案条目请求
+
+    v2.5.0: 支持双数据源 ID 格式
+    - ObjectId (24位十六进制): file_uploads 集合 (用户上传文档)
+    - 雪花ID (17-20位数字): search_results 集合 (新闻搜索结果)
+    """
+    news_result_id: str = Field(
+        ...,
+        description="结果ID（ObjectId 或 雪花ID）",
+        min_length=17,
+        max_length=24
+    )
+    edited_title: Optional[str] = Field(None, description="编辑后的标题", max_length=500)
+    edited_summary: Optional[str] = Field(None, description="编辑后的摘要", max_length=5000)
+    user_notes: Optional[str] = Field(None, description="用户备注", max_length=2000)
     user_rating: Optional[int] = Field(None, ge=1, le=5, description="用户评分 1-5")
+
+    @classmethod
+    def validate_news_result_id(cls, v: str) -> str:
+        """验证 news_result_id 格式
+
+        支持两种格式:
+        1. ObjectId: 24位十六进制 (file_uploads)
+        2. 雪花ID: 17-20位纯数字 (search_results)
+        """
+        import re
+        # ObjectId 格式: 24位十六进制
+        if re.match(r'^[a-fA-F0-9]{24}$', v):
+            return v
+        # 雪花ID 格式: 17-20位纯数字
+        if v.isdigit() and 17 <= len(v) <= 20:
+            return v
+        raise ValueError(
+            f"无效的 ID 格式: '{v}'. "
+            "支持 ObjectId (24位十六进制) 或 雪花ID (17-20位数字)"
+        )
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # 在实例化时验证 ID 格式
+        self.validate_news_result_id(self.news_result_id)
 
 
 class CreateArchiveRequest(BaseModel):
-    """创建档案请求"""
+    """创建档案请求
+
+    安全性增强 (v2.4.0):
+    - items 最大限制 100 条，防止资源耗尽
+    - 自动去重 news_result_id，防止重复条目
+    - archive_name 和 description 自动清理危险字符
+    """
     user_id: int = Field(..., description="用户ID", gt=0)
     archive_name: str = Field(..., description="档案名称", min_length=1, max_length=255)
     description: Optional[str] = Field(None, description="档案描述", max_length=2000)
-    tags: Optional[List[str]] = Field(None, description="档案标签列表")
+    tags: Optional[List[str]] = Field(None, description="档案标签列表", max_length=20)
     search_log_id: Optional[str] = Field(None, description="关联的搜索记录ID（雪花算法ID字符串）")
-    items: List[ArchiveItemRequest] = Field(..., description="档案条目列表", min_length=1)
+    items: List[ArchiveItemRequest] = Field(
+        ...,
+        description="档案条目列表（最多100条，自动去重）",
+        min_length=1,
+        max_length=100
+    )
 
     class Config:
         json_schema_extra = {
@@ -294,13 +340,19 @@ class CreateArchiveRequest(BaseModel):
                 "archive_name": "2024年AI技术突破汇总",
                 "description": "整理2024年重要的AI技术突破新闻",
                 "tags": ["AI", "技术", "2024"],
-                "search_log_id": 123456,
+                "search_log_id": "248728141926559744",
                 "items": [
                     {
                         "news_result_id": "507f1f77bcf86cd799439011",
-                        "edited_title": "GPT-5重磅发布",
-                        "edited_summary": "OpenAI发布最新GPT-5模型...",
+                        "edited_title": "用户上传文档标题",
+                        "edited_summary": "来自用户上传的文档...",
                         "user_rating": 5
+                    },
+                    {
+                        "news_result_id": "248728141926559744",
+                        "edited_title": "新闻搜索结果标题",
+                        "edited_summary": "来自新闻搜索的结果...",
+                        "user_rating": 4
                     }
                 ]
             }
@@ -308,14 +360,25 @@ class CreateArchiveRequest(BaseModel):
 
 
 class UpdateArchiveRequest(BaseModel):
-    """更新档案请求"""
+    """更新档案请求
+
+    v2.5.3: 新增 user_summary 字段，用于存储用户上传的内容总结
+    v2.5.9: 新增 generated_report 字段，用于存储AI生成的摘要报告
+    """
     archive_name: Optional[str] = Field(None, description="新的档案名称", min_length=1, max_length=255)
     description: Optional[str] = Field(None, description="新的描述", max_length=2000)
     tags: Optional[List[str]] = Field(None, description="新的标签列表")
+    user_summary: Optional[str] = Field(None, description="用户上传的内容总结（用于总结items列表内容）", max_length=50000)
+    generated_report: Optional[str] = Field(None, description="AI生成的摘要报告", max_length=100000)
 
 
 class ArchiveItemResponse(BaseModel):
-    """档案条目响应"""
+    """档案条目响应
+
+    v2.5.1: category 字段支持两种格式:
+    - 字符串: file_uploads 数据源的分类 (如 "document", "other")
+    - 字典: news_results 数据源的分类信息 (如 {"type": "news", "topic": "科技"})
+    """
     id: int = Field(..., description="条目ID")
     news_result_id: str = Field(..., description="新闻结果ID")
     title: str = Field(..., description="显示标题（优先显示编辑标题）")
@@ -324,14 +387,18 @@ class ArchiveItemResponse(BaseModel):
     edited_summary: Optional[str] = Field(None, description="用户编辑的摘要")
     user_notes: Optional[str] = Field(None, description="用户备注")
     user_rating: Optional[int] = Field(None, description="用户评分")
-    category: Optional[Dict[str, str]] = Field(None, description="分类信息")
+    category: Optional[Any] = Field(None, description="分类信息（字符串或字典格式）")
     source: Optional[str] = Field(None, description="新闻来源")
     url: Optional[str] = Field(None, description="原文链接URL")
     created_at: Optional[str] = Field(None, description="添加时间")
 
 
 class ArchiveResponse(BaseModel):
-    """档案响应"""
+    """档案响应
+
+    v2.5.2: 新增 generated_report 字段，返回 AI 生成的档案摘要报告
+    v2.5.3: 新增 user_summary 字段，返回用户上传的内容总结
+    """
     archive_id: str = Field(..., description="档案ID（MongoDB ObjectId）")
     user_id: int = Field(..., description="用户ID")
     archive_name: str = Field(..., description="档案名称")
@@ -340,6 +407,8 @@ class ArchiveResponse(BaseModel):
     search_log_id: Optional[str] = Field(None, description="关联的搜索记录ID（雪花算法ID字符串）")
     items_count: int = Field(..., description="档案条目数量")
     items: Optional[List[ArchiveItemResponse]] = Field(None, description="档案条目列表（仅详情接口返回）")
+    generated_report: Optional[str] = Field(None, description="AI生成的档案摘要报告（Markdown格式）")
+    user_summary: Optional[str] = Field(None, description="用户上传的内容总结（用于总结items列表内容）")
     created_at: Optional[str] = Field(None, description="创建时间")
     updated_at: Optional[str] = Field(None, description="更新时间")
 
@@ -625,13 +694,19 @@ async def create_archive(request: CreateArchiveRequest):
     """
     创建档案
 
-    **功能**: ✅ 完整实现
+    **功能**: ✅ 完整实现 (v2.4.0 增强)
 
     **流程**:
     1. 验证输入数据
-    2. 为每个条目创建快照（从MongoDB news_results）
-    3. 批量创建档案条目
-    4. 返回档案信息
+    2. 去重处理（基于 news_result_id）
+    3. 为每个条目创建快照（从MongoDB news_results）
+    4. 批量创建档案条目
+    5. 返回档案信息（包含去重统计）
+
+    **v2.4.0 安全增强**:
+    - 自动去重：相同 news_result_id 只保留第一条
+    - 输入清理：移除潜在危险字符
+    - 条目限制：最多 100 条
 
     Args:
         request (CreateArchiveRequest): 创建档案请求
@@ -664,26 +739,58 @@ async def create_archive(request: CreateArchiveRequest):
         ```
     """
     try:
-        logger.info(f"创建档案请求: user={request.user_id}, name='{request.archive_name}', items={len(request.items)}")
+        # v2.4.0: 去重处理 - 基于 news_result_id 去重，保留第一条
+        seen_ids = set()
+        unique_items = []
+        duplicate_count = 0
 
-        # 准备条目数据
+        for item in request.items:
+            if item.news_result_id not in seen_ids:
+                seen_ids.add(item.news_result_id)
+                unique_items.append(item)
+            else:
+                duplicate_count += 1
+
+        if duplicate_count > 0:
+            logger.warning(
+                f"创建档案时检测到重复条目: user={request.user_id}, "
+                f"原始数量={len(request.items)}, 去重后={len(unique_items)}, "
+                f"重复数量={duplicate_count}"
+            )
+
+        # v2.4.0: 输入清理 - 移除潜在危险字符
+        def sanitize_text(text: str) -> str:
+            if not text:
+                return text
+            # 移除 HTML 标签和脚本注入风险
+            return re.sub(r'<[^>]+>', '', text).strip()
+
+        archive_name = sanitize_text(request.archive_name)
+        description = sanitize_text(request.description) if request.description else None
+
+        logger.info(
+            f"创建档案请求: user={request.user_id}, name='{archive_name}', "
+            f"items={len(unique_items)} (原始={len(request.items)}, 去重={duplicate_count})"
+        )
+
+        # 准备条目数据（使用去重后的列表）
         items_data = [
             {
                 "news_result_id": item.news_result_id,
-                "edited_title": item.edited_title,
-                "edited_summary": item.edited_summary,
-                "user_notes": item.user_notes,
+                "edited_title": sanitize_text(item.edited_title) if item.edited_title else None,
+                "edited_summary": sanitize_text(item.edited_summary) if item.edited_summary else None,
+                "user_notes": sanitize_text(item.user_notes) if item.user_notes else None,
                 "user_rating": item.user_rating
             }
-            for item in request.items
+            for item in unique_items
         ]
 
-        # 调用服务层创建档案
+        # 调用服务层创建档案（使用清理后的值）
         result = await mongo_archive_service.create_archive(
             user_id=request.user_id,
-            archive_name=request.archive_name,
+            archive_name=archive_name,  # v2.4.0: 使用清理后的名称
             items=items_data,
-            description=request.description,
+            description=description,  # v2.4.0: 使用清理后的描述
             tags=request.tags,
             search_log_id=request.search_log_id
         )
@@ -776,7 +883,7 @@ async def list_archives(
             offset=offset
         )
 
-        # 构建响应
+        # 构建响应 (v2.5.2: 添加 generated_report, v2.5.3: 添加 user_summary)
         items = [
             ArchiveResponse(
                 archive_id=archive["archive_id"],
@@ -787,6 +894,8 @@ async def list_archives(
                 search_log_id=archive["search_log_id"],
                 items_count=archive["items_count"],
                 items=None,  # 列表接口不返回条目详情
+                generated_report=archive.get("generated_report"),  # v2.5.2: AI生成的摘要报告
+                user_summary=archive.get("user_summary"),  # v2.5.3: 用户上传的内容总结
                 created_at=archive["created_at"],
                 updated_at=archive["updated_at"]
             )
@@ -886,6 +995,8 @@ async def get_archive(
             for item in archive["items"]
         ]
 
+        # v2.5.2: 添加 generated_report 字段
+        # v2.5.3: 添加 user_summary 字段
         return ArchiveResponse(
             archive_id=archive["archive_id"],
             user_id=archive["user_id"],
@@ -895,6 +1006,8 @@ async def get_archive(
             search_log_id=archive["search_log_id"],
             items_count=archive["items_count"],
             items=items,
+            generated_report=archive.get("generated_report"),  # v2.5.2: AI生成的摘要报告
+            user_summary=archive.get("user_summary"),  # v2.5.3: 用户上传的内容总结
             created_at=archive["created_at"],
             updated_at=archive["updated_at"]
         )
@@ -916,7 +1029,7 @@ async def get_archive(
     "/user-archives/{archive_id}",
     response_model=ArchiveResponse,
     summary="更新档案",
-    description="更新档案的基本信息（名称、描述、标签）"
+    description="更新档案的基本信息（名称、描述、标签、user_summary、generated_report）"
 )
 async def update_archive(
     archive_id: str,
@@ -958,12 +1071,14 @@ async def update_archive(
     try:
         logger.info(f"更新档案: archive_id={archive_id}")
 
-        # 调用服务层更新
+        # 调用服务层更新 (v2.5.9: 支持 generated_report 字段)
         success = await mongo_archive_service.update_archive(
             archive_id=archive_id,
             archive_name=request.archive_name if request else None,
             description=request.description if request else None,
-            tags=request.tags if request else None
+            tags=request.tags if request else None,
+            user_summary=request.user_summary if request else None,
+            generated_report=request.generated_report if request else None
         )
 
         if not success:
@@ -991,6 +1106,8 @@ async def update_archive(
             search_log_id=archive["search_log_id"],
             items_count=archive["items_count"],
             items=None,  # 更新接口不返回条目详情
+            generated_report=archive.get("generated_report"),  # v2.5.2
+            user_summary=archive.get("user_summary"),  # v2.5.3
             created_at=archive["created_at"],
             updated_at=archive["updated_at"]
         )

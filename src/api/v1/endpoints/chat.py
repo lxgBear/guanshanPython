@@ -27,6 +27,7 @@ from pathlib import Path
 from src.services.nl_search.nl_search_service import nl_search_service
 from src.services.nl_search.config import nl_search_config
 from src.infrastructure.database.connection import get_mongodb_database
+from bson import ObjectId
 
 logger = logging.getLogger(__name__)
 
@@ -74,21 +75,28 @@ class CategoryModel(BaseModel):
 
 
 class SourceDetail(BaseModel):
-    """来源详情模型（增强版，包含完整内容）"""
+    """来源详情模型（增强版，统一格式）
+
+    v2.7.1: 统一新闻来源和用户上传格式
+    - 用户上传数据映射到相同字段结构
+    - file_uploads.title → title_zh
+    - file_uploads.content → content_zh
+    - file_uploads.storage_url → url
+    """
     id: str = Field(..., description="UUID")
     mongo_id: str = Field(..., description="MongoDB ID")
     title: str = Field(..., description="标题")
-    source: str = Field(..., description="来源网站")
+    source: str = Field(..., description="来源：新闻网站名称 或 '用户上传'")
     score: float = Field(..., description="相关性评分")
     category: CategoryModel = Field(..., description="分类信息")
     publish_time: str = Field(..., description="发布时间")
     preview: str = Field(..., description="内容预览")
-    url: Optional[str] = Field(None, description="完整URL（从news_results查询）")
-    markdown_content: Optional[str] = Field(None, description="完整Markdown内容（从news_results查询）")
+    url: Optional[str] = Field(None, description="完整URL")
+    markdown_content: Optional[str] = Field(None, description="完整Markdown内容")
     content_length: Optional[int] = Field(None, description="内容长度")
-    title_zh: Optional[str] = Field(None, description="中文标题（从news_results.news_results查询）")
-    summary_zh: Optional[str] = Field(None, description="中文摘要/翻译内容（从news_results.news_results查询）")
-    content_zh: Optional[str] = Field(None, description="中文总结（从news_results.news_results查询）")
+    title_zh: Optional[str] = Field(None, description="中文标题")
+    summary_zh: Optional[str] = Field(None, description="中文摘要")
+    content_zh: Optional[str] = Field(None, description="中文内容/正文")
 
 
 class ChatSyncResponse(BaseModel):
@@ -626,24 +634,11 @@ async def chat_sync_endpoint(request: ChatRequest):
 
         for source in sources_data:
             mongo_id = source.get('mongo_id')
+            source_type = source.get('source', '')  # 来源类型
+
             if not mongo_id:
                 logger.warning(f"来源缺少mongo_id: {source.get('id')}")
                 continue
-
-            # ✅ v2.6.0: 查询 news_results 集合（移除 markdown_content 优化传输）
-            news_result = await db["news_results"].find_one(
-                {"_id": mongo_id},
-                {
-                    "url": 1,
-                    "news_results.title_zh": 1,
-                    "news_results.summary_zh": 1,
-                    "news_results.content_zh": 1,
-                    "_id": 0
-                }
-            )
-
-            # 提取嵌套的 news_results 对象
-            nested_news_results = news_result.get('news_results', {}) if news_result else {}
 
             # 处理 category 字段,如果为空则提供默认值
             category_data = source.get('category', {})
@@ -654,23 +649,88 @@ async def chat_sync_endpoint(request: ChatRequest):
                     '地域': '未知'
                 }
 
-            # 构建增强的来源对象（v2.6.0: 移除 markdown_content 优化传输）
-            enhanced_source = SourceDetail(
-                id=source.get('id', ''),
-                mongo_id=mongo_id,
-                title=source.get('title', ''),
-                source=source.get('source', ''),
-                score=source.get('score', 0.0),
-                category=CategoryModel(**category_data),
-                publish_time=source.get('publish_time', '未知时间'),
-                preview=source.get('preview', ''),
-                url=news_result.get('url') if news_result else None,
-                # v2.6.0: 移除 markdown_content 和 content_length，优化前端传输
-                # v2.5.0: news_results 包含中文翻译字段
-                title_zh=nested_news_results.get('title_zh'),
-                summary_zh=nested_news_results.get('summary_zh'),
-                content_zh=nested_news_results.get('content_zh')
-            )
+            # ✅ v2.7.2: 根据来源类型路由到不同数据集合，统一字段格式
+            if source_type == "用户上传":
+                # 从 file_uploads 集合查询（使用 _id ObjectId）
+                try:
+                    file_result = await db["file_uploads"].find_one(
+                        {"_id": ObjectId(mongo_id)},
+                        {
+                            "title": 1,
+                            "content": 1,
+                            "original_filename": 1,
+                            "storage_url": 1,
+                            "_id": 0
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"ObjectId 转换失败: {mongo_id}, 错误: {e}")
+                    file_result = None
+
+                if file_result:
+                    logger.info(f"从 file_uploads 查询成功: file_id={mongo_id}")
+                    # 映射到统一字段格式
+                    file_title = file_result.get('title') or source.get('title', '')
+                    file_content = file_result.get('content', '')
+
+                    enhanced_source = SourceDetail(
+                        id=source.get('id', ''),
+                        mongo_id=mongo_id,
+                        title=file_title,
+                        source=source_type,
+                        score=source.get('score', 0.0),
+                        category=CategoryModel(**category_data),
+                        publish_time=source.get('publish_time', '未知时间'),
+                        preview=source.get('preview', '') or file_content[:200] if file_content else '',
+                        url=file_result.get('storage_url'),
+                        # 统一字段映射：file_uploads → news 格式
+                        title_zh=file_title,           # title → title_zh
+                        summary_zh=None,               # 用户上传无摘要
+                        content_zh=file_content,       # content → content_zh
+                        content_length=len(file_content) if file_content else None
+                    )
+                else:
+                    logger.warning(f"未找到 file_id={mongo_id} 的 file_uploads 记录")
+                    enhanced_source = SourceDetail(
+                        id=source.get('id', ''),
+                        mongo_id=mongo_id,
+                        title=source.get('title', ''),
+                        source=source_type,
+                        score=source.get('score', 0.0),
+                        category=CategoryModel(**category_data),
+                        publish_time=source.get('publish_time', '未知时间'),
+                        preview=source.get('preview', '')
+                    )
+            else:
+                # 从 news_results 集合查询（原有逻辑）
+                news_result = await db["news_results"].find_one(
+                    {"_id": mongo_id},
+                    {
+                        "url": 1,
+                        "news_results.title_zh": 1,
+                        "news_results.summary_zh": 1,
+                        "news_results.content_zh": 1,
+                        "_id": 0
+                    }
+                )
+
+                # 提取嵌套的 news_results 对象
+                nested_news_results = news_result.get('news_results', {}) if news_result else {}
+
+                enhanced_source = SourceDetail(
+                    id=source.get('id', ''),
+                    mongo_id=mongo_id,
+                    title=source.get('title', ''),
+                    source=source_type,
+                    score=source.get('score', 0.0),
+                    category=CategoryModel(**category_data),
+                    publish_time=source.get('publish_time', '未知时间'),
+                    preview=source.get('preview', ''),
+                    url=news_result.get('url') if news_result else None,
+                    title_zh=nested_news_results.get('title_zh'),
+                    summary_zh=nested_news_results.get('summary_zh'),
+                    content_zh=nested_news_results.get('content_zh')
+                )
 
             enhanced_sources.append(enhanced_source)
 

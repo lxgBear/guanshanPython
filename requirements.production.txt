@@ -10,11 +10,11 @@ pydantic>=2.5.0
 pydantic-settings>=2.1.0
 
 # Databases
-motor>=3.3.2                # MongoDB async driver
+motor>=3.3.2
 pymongo>=4.6.1
 sqlalchemy[asyncio]>=2.0.25
-aiomysql>=0.2.0             # MariaDB async driver
-alembic>=1.13.1             # Database migrations
+aiomysql>=0.2.0
+alembic>=1.13.1
 
 # Caching
 redis>=5.0.1
@@ -31,13 +31,13 @@ langchain-community>=0.0.10
 openai>=1.10.0,<2.0.0
 anthropic>=0.8.1
 tiktoken>=0.5.2
-qdrant-client>=1.7.1        # Vector database
+qdrant-client>=1.7.1
 
 # Web Scraping
 httpx>=0.25.2
 beautifulsoup4>=4.12.2
 lxml>=5.0.0
-firecrawl-py>=1.0.0         # Firecrawl SDK
+firecrawl-py>=1.0.0
 
 # Utilities
 pyyaml>=6.0.1
