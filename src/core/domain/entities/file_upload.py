@@ -96,6 +96,8 @@ class FileUpload:
     original_filename: str = ""           # 原始文件名
     stored_filename: str = ""             # 存储文件名（带哈希）
     display_name: Optional[str] = None    # 显示名称（可自定义）
+    title: str = ""                       # 文件标题（从文档提取）
+    content: str = ""                     # 提取的正文内容
 
     # 文件属性
     file_size: int = 0                    # 文件大小（字节）
@@ -214,30 +216,23 @@ class FileUpload:
             "original_filename": self.original_filename,
             "stored_filename": self.stored_filename,
             "display_name": self.display_name,
+            "title": self.title,
+            "content": self.content,
             "file_size": self.file_size,
             "file_size_formatted": self.get_file_size_formatted(),
             "mime_type": self.mime_type,
             "file_extension": self.file_extension,
             "category": self.category.value,
             "storage_provider": self.storage_provider.value,
-            "storage_bucket": self.storage_bucket,
             "storage_path": self.storage_path,
             "storage_url": self.storage_url,
-            "cdn_url": self.cdn_url,
             "status": self.status.value,
             "upload_progress": self.upload_progress,
-            "virus_scan_status": self.virus_scan_status,
             "content_hash": self.content_hash,
-            "metadata": self.metadata,
+            "tags": self.tags,
             "uploaded_by": self.uploaded_by,
-            "related_entity_type": self.related_entity_type,
-            "related_entity_id": self.related_entity_id,
-            "is_public": self.is_public,
-            "access_token": self.access_token,
-            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
-            "deleted_at": self.deleted_at.isoformat() if self.deleted_at else None,
             "is_test_data": self.is_test_data
         }
 
@@ -246,15 +241,15 @@ class FileUpload:
         return {
             "file_id": self.file_id,
             "original_filename": self.original_filename,
+            "title": self.title,
             "display_name": self.display_name or self.original_filename,
             "file_size": self.file_size,
             "file_size_formatted": self.get_file_size_formatted(),
             "mime_type": self.mime_type,
             "category": self.category.value,
             "status": self.status.value,
-            "upload_progress": self.upload_progress,
-            "storage_url": self.storage_url if self.is_public else None,
-            "cdn_url": self.cdn_url if self.is_public else None,
+            "tags": self.tags,
+            "storage_url": self.storage_url,
             "uploaded_by": self.uploaded_by,
             "created_at": self.created_at.isoformat()
         }

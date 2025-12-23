@@ -77,6 +77,8 @@ class MongoFileUploadRepository(IBasicRepository[FileUpload]):
             "original_filename": file_upload.original_filename,
             "stored_filename": file_upload.stored_filename,
             "display_name": file_upload.display_name,
+            "title": file_upload.title,
+            "content": file_upload.content,
             "file_size": file_upload.file_size,
             "mime_type": file_upload.mime_type,
             "file_extension": file_upload.file_extension,
@@ -90,7 +92,6 @@ class MongoFileUploadRepository(IBasicRepository[FileUpload]):
             "uploaded_by": file_upload.uploaded_by,
             "created_at": file_upload.created_at,
             "updated_at": file_upload.updated_at,
-            "metadata": file_upload.metadata,
             "tags": file_upload.tags
         }
 
@@ -108,6 +109,8 @@ class MongoFileUploadRepository(IBasicRepository[FileUpload]):
             original_filename=doc.get("original_filename", ""),
             stored_filename=doc.get("stored_filename", ""),
             display_name=doc.get("display_name"),
+            title=doc.get("title", ""),
+            content=doc.get("content", ""),
             file_size=doc.get("file_size", 0),
             mime_type=doc.get("mime_type", ""),
             file_extension=doc.get("file_extension", ""),
@@ -121,7 +124,6 @@ class MongoFileUploadRepository(IBasicRepository[FileUpload]):
             uploaded_by=doc.get("uploaded_by", ""),
             created_at=doc.get("created_at", datetime.utcnow()),
             updated_at=doc.get("updated_at", datetime.utcnow()),
-            metadata=doc.get("metadata", {}),
             tags=doc.get("tags", [])
         )
 

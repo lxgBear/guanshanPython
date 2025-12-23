@@ -151,10 +151,7 @@ class DocumentExtractor:
                 file_content
             )
 
-            logger.info(
-                f"✅ PDF 提取成功: {content['total_pages']} 页, "
-                f"{content['word_count']} 字"
-            )
+            logger.info(f"✅ PDF 提取成功: {content['word_count']} 字")
 
             return content
 
@@ -169,53 +166,30 @@ class DocumentExtractor:
             file_content: PDF 文件二进制内容
 
         Returns:
-            提取的内容字典
+            提取的内容字典（简化版，只包含 text 和 word_count）
         """
         # 从字节流打开 PDF
         doc = fitz.open(stream=file_content, filetype="pdf")
 
-        content = {
-            "total_pages": len(doc),
-            "text": "",
-            "pages": [],
-            "metadata": dict(doc.metadata),
-            "has_images": False,
-            "word_count": 0
-        }
+        text_parts = []
 
-        # 逐页提取内容
+        # 逐页提取文本内容
         for page_num in range(len(doc)):
             page = doc[page_num]
-
-            # 提取文本
             page_text = page.get_text("text")
-
-            # 检查是否有图片
-            image_list = page.get_images()
-            has_page_images = len(image_list) > 0
-
-            if has_page_images:
-                content["has_images"] = True
-
-            # 页面信息
-            page_info = {
-                "page_number": page_num + 1,
-                "text": page_text,
-                "char_count": len(page_text),
-                "has_images": has_page_images,
-                "image_count": len(image_list)
-            }
-
-            content["pages"].append(page_info)
-            content["text"] += page_text + "\n\n"
+            if page_text.strip():
+                text_parts.append(page_text)
 
         # 关闭文档
         doc.close()
 
-        # 计算总字数（近似）
-        content["word_count"] = len(content["text"].split())
+        # 合并为单一文本字符串
+        full_text = "\n\n".join(text_parts)
 
-        return content
+        return {
+            "text": full_text,
+            "word_count": len(full_text.split())
+        }
 
     async def extract_docx(self, file_content: bytes) -> Dict[str, Any]:
         """提取 DOCX 文档内容
@@ -246,10 +220,7 @@ class DocumentExtractor:
                 file_content
             )
 
-            logger.info(
-                f"✅ DOCX 提取成功: {content['total_paragraphs']} 段落, "
-                f"{content['word_count']} 字"
-            )
+            logger.info(f"✅ DOCX 提取成功: {content['word_count']} 字")
 
             return content
 
@@ -264,50 +235,32 @@ class DocumentExtractor:
             file_content: DOCX 文件二进制内容
 
         Returns:
-            提取的内容字典
+            提取的内容字典（简化版，只包含 text 和 word_count）
         """
         # 从字节流打开 DOCX
         doc = Document(BytesIO(file_content))
 
-        content = {
-            "total_paragraphs": len(doc.paragraphs),
-            "text": "",
-            "paragraphs": [],
-            "has_tables": len(doc.tables) > 0,
-            "table_count": len(doc.tables),
-            "word_count": 0
-        }
+        text_parts = []
 
         # 提取段落内容
         for para in doc.paragraphs:
             if para.text.strip():  # 跳过空段落
-                para_info = {
-                    "text": para.text,
-                    "style": para.style.name if para.style else "Normal",
-                    "alignment": str(para.alignment) if para.alignment else None
-                }
-
-                content["paragraphs"].append(para_info)
-                content["text"] += para.text + "\n"
+                text_parts.append(para.text)
 
         # 提取表格内容
-        if content["has_tables"]:
-            content["tables"] = []
-            for table in doc.tables:
-                table_data = []
-                for row in table.rows:
-                    row_data = [cell.text for cell in row.cells]
-                    table_data.append(row_data)
-                content["tables"].append(table_data)
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = " | ".join([cell.text for cell in row.cells if cell.text.strip()])
+                if row_text.strip():
+                    text_parts.append(row_text)
 
-                # 将表格内容也添加到文本中
-                table_text = "\n".join([" | ".join(row) for row in table_data])
-                content["text"] += f"\n[表格]\n{table_text}\n\n"
+        # 合并为单一文本字符串
+        full_text = "\n".join(text_parts)
 
-        # 计算总字数（近似）
-        content["word_count"] = len(content["text"].split())
-
-        return content
+        return {
+            "text": full_text,
+            "word_count": len(full_text.split())
+        }
 
     @staticmethod
     def validate_file_type(filename: str) -> bool:

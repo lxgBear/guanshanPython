@@ -13,8 +13,8 @@ RUN apt-get update && apt-get install -y \
 # 复制依赖文件
 COPY requirements.txt .
 
-# 安装Python依赖
-RUN pip install --no-cache-dir --user -r requirements.txt
+# 使用国内镜像源安装Python依赖
+RUN pip install --no-cache-dir --user -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
 
 # 最终镜像
 FROM python:3.11-slim

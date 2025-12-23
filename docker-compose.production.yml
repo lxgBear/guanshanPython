@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: guanshan-app
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+      - ./data:/app/data
