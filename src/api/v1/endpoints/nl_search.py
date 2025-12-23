@@ -320,12 +320,15 @@ class CreateArchiveRequest(BaseModel):
     - items 最大限制 100 条，防止资源耗尽
     - 自动去重 news_result_id，防止重复条目
     - archive_name 和 description 自动清理危险字符
+
+    v2.6.0: 新增 search_task_id 支持定时任务关联
     """
     user_id: int = Field(..., description="用户ID", gt=0)
     archive_name: str = Field(..., description="档案名称", min_length=1, max_length=255)
     description: Optional[str] = Field(None, description="档案描述", max_length=2000)
     tags: Optional[List[str]] = Field(None, description="档案标签列表", max_length=20)
-    search_log_id: Optional[str] = Field(None, description="关联的搜索记录ID（雪花算法ID字符串）")
+    search_log_id: Optional[str] = Field(None, description="关联的搜索记录ID（雪花算法ID字符串，来自自然语言搜索）")
+    search_task_id: Optional[str] = Field(None, description="关联的定时任务ID（雪花算法ID字符串，来自定时搜索任务）")
     items: List[ArchiveItemRequest] = Field(
         ...,
         description="档案条目列表（最多100条，自动去重）",
@@ -341,6 +344,7 @@ class CreateArchiveRequest(BaseModel):
                 "description": "整理2024年重要的AI技术突破新闻",
                 "tags": ["AI", "技术", "2024"],
                 "search_log_id": "248728141926559744",
+                "search_task_id": "248728141926559745",
                 "items": [
                     {
                         "news_result_id": "507f1f77bcf86cd799439011",
@@ -398,13 +402,15 @@ class ArchiveResponse(BaseModel):
 
     v2.5.2: 新增 generated_report 字段，返回 AI 生成的档案摘要报告
     v2.5.3: 新增 user_summary 字段，返回用户上传的内容总结
+    v2.6.0: 新增 search_task_id 字段，支持定时任务关联
     """
     archive_id: str = Field(..., description="档案ID（MongoDB ObjectId）")
     user_id: int = Field(..., description="用户ID")
     archive_name: str = Field(..., description="档案名称")
     description: Optional[str] = Field(None, description="档案描述")
     tags: List[str] = Field(..., description="档案标签")
-    search_log_id: Optional[str] = Field(None, description="关联的搜索记录ID（雪花算法ID字符串）")
+    search_log_id: Optional[str] = Field(None, description="关联的搜索记录ID（雪花算法ID字符串，来自自然语言搜索）")
+    search_task_id: Optional[str] = Field(None, description="关联的定时任务ID（雪花算法ID字符串，来自定时搜索任务）")
     items_count: int = Field(..., description="档案条目数量")
     items: Optional[List[ArchiveItemResponse]] = Field(None, description="档案条目列表（仅详情接口返回）")
     generated_report: Optional[str] = Field(None, description="AI生成的档案摘要报告（Markdown格式）")
@@ -786,13 +792,15 @@ async def create_archive(request: CreateArchiveRequest):
         ]
 
         # 调用服务层创建档案（使用清理后的值）
+        # v2.6.0: 新增 search_task_id 支持定时任务关联
         result = await mongo_archive_service.create_archive(
             user_id=request.user_id,
             archive_name=archive_name,  # v2.4.0: 使用清理后的名称
             items=items_data,
             description=description,  # v2.4.0: 使用清理后的描述
             tags=request.tags,
-            search_log_id=request.search_log_id
+            search_log_id=request.search_log_id,
+            search_task_id=request.search_task_id  # v2.6.0: 定时任务关联
         )
 
         logger.info(f"档案创建成功: archive_id={result['archive_id']}")
@@ -805,6 +813,7 @@ async def create_archive(request: CreateArchiveRequest):
             description=request.description,
             tags=request.tags or [],
             search_log_id=request.search_log_id,
+            search_task_id=request.search_task_id,  # v2.6.0: 定时任务关联
             items_count=result["items_count"],
             items=None,  # 创建接口不返回条目详情
             created_at=result["created_at"],
@@ -883,7 +892,7 @@ async def list_archives(
             offset=offset
         )
 
-        # 构建响应 (v2.5.2: 添加 generated_report, v2.5.3: 添加 user_summary)
+        # 构建响应 (v2.5.2: 添加 generated_report, v2.5.3: 添加 user_summary, v2.6.0: 添加 search_task_id)
         items = [
             ArchiveResponse(
                 archive_id=archive["archive_id"],
@@ -892,6 +901,7 @@ async def list_archives(
                 description=archive["description"],
                 tags=archive["tags"],
                 search_log_id=archive["search_log_id"],
+                search_task_id=archive.get("search_task_id"),  # v2.6.0: 定时任务关联
                 items_count=archive["items_count"],
                 items=None,  # 列表接口不返回条目详情
                 generated_report=archive.get("generated_report"),  # v2.5.2: AI生成的摘要报告
@@ -997,6 +1007,7 @@ async def get_archive(
 
         # v2.5.2: 添加 generated_report 字段
         # v2.5.3: 添加 user_summary 字段
+        # v2.6.0: 添加 search_task_id 字段
         return ArchiveResponse(
             archive_id=archive["archive_id"],
             user_id=archive["user_id"],
@@ -1004,6 +1015,7 @@ async def get_archive(
             description=archive["description"],
             tags=archive["tags"],
             search_log_id=archive["search_log_id"],
+            search_task_id=archive.get("search_task_id"),  # v2.6.0: 定时任务关联
             items_count=archive["items_count"],
             items=items,
             generated_report=archive.get("generated_report"),  # v2.5.2: AI生成的摘要报告
@@ -1097,6 +1109,7 @@ async def update_archive(
             user_id=None
         )
 
+        # v2.6.0: 添加 search_task_id 字段
         return ArchiveResponse(
             archive_id=archive["archive_id"],
             user_id=archive["user_id"],
@@ -1104,6 +1117,7 @@ async def update_archive(
             description=archive["description"],
             tags=archive["tags"],
             search_log_id=archive["search_log_id"],
+            search_task_id=archive.get("search_task_id"),  # v2.6.0: 定时任务关联
             items_count=archive["items_count"],
             items=None,  # 更新接口不返回条目详情
             generated_report=archive.get("generated_report"),  # v2.5.2
