@@ -214,7 +214,8 @@ class MongoArchiveService:
         items: List[Dict[str, Any]],
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
-        search_log_id: Optional[int] = None
+        search_log_id: Optional[str] = None,
+        search_task_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """创建档案
 
@@ -229,7 +230,8 @@ class MongoArchiveService:
                 - user_rating: 用户评分 1-5 (可选)
             description: 档案描述
             tags: 档案标签列表
-            search_log_id: 关联的搜索记录ID
+            search_log_id: 关联的搜索记录ID（来自自然语言搜索）
+            search_task_id: 关联的定时任务ID（来自定时搜索任务，v2.6.0新增）
 
         Returns:
             包含档案信息的字典:
@@ -428,6 +430,7 @@ class MongoArchiveService:
             logger.info(f"生成 user_summary: length={len(user_summary)} chars")
 
             # 创建档案（包含所有条目）
+            # v2.6.0: 新增 search_task_id 支持定时任务关联
             archive_id = await self.archive_repo.create(
                 user_id=user_id,
                 archive_name=archive_name,
@@ -435,6 +438,7 @@ class MongoArchiveService:
                 description=description,
                 tags=tags,
                 search_log_id=search_log_id,
+                search_task_id=search_task_id,  # v2.6.0: 定时任务关联
                 user_summary=user_summary  # v2.5.4: 传入自动生成的总结
             )
 
@@ -538,6 +542,7 @@ class MongoArchiveService:
             if user_summary is not None and isinstance(user_summary, str) and not user_summary.strip():
                 user_summary = None
 
+            # v2.6.0: 添加 search_task_id 字段
             return {
                 "archive_id": archive.get("_id"),
                 "user_id": archive.get("user_id"),
@@ -545,6 +550,7 @@ class MongoArchiveService:
                 "description": archive.get("description"),
                 "tags": archive.get("tags", []),
                 "search_log_id": archive.get("search_log_id"),
+                "search_task_id": archive.get("search_task_id"),  # v2.6.0: 定时任务关联
                 "items_count": archive.get("items_count", 0),
                 "items": items,
                 "generated_report": generated_report,  # v2.5.2: AI生成的摘要报告
@@ -602,6 +608,7 @@ class MongoArchiveService:
                 if user_summary is not None and isinstance(user_summary, str) and not user_summary.strip():
                     user_summary = None
 
+                # v2.6.0: 添加 search_task_id 字段
                 results.append({
                     "archive_id": archive.get("_id"),
                     "user_id": archive.get("user_id"),
@@ -609,6 +616,7 @@ class MongoArchiveService:
                     "description": archive.get("description"),
                     "tags": archive.get("tags", []),
                     "search_log_id": archive.get("search_log_id"),
+                    "search_task_id": archive.get("search_task_id"),  # v2.6.0: 定时任务关联
                     "items_count": archive.get("items_count", 0),
                     "generated_report": generated_report,  # v2.5.2: AI生成的摘要报告
                     "user_summary": user_summary,  # v2.5.3: 用户上传的内容总结

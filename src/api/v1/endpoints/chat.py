@@ -628,11 +628,28 @@ async def chat_sync_endpoint(request: ChatRequest):
 
         logger.info(f"最终数据: answer_length={len(full_answer)}, sources_count={len(sources_data)}, status={stream_status}")
 
-        # 4. 查询 MongoDB 获取完整内容
+        # 4. 去重处理：按 mongo_id 去重，保留第一个出现的
+        seen_mongo_ids = set()
+        unique_sources = []
+        duplicate_count = 0
+
+        for source in sources_data:
+            mongo_id = source.get('mongo_id')
+            if mongo_id and mongo_id in seen_mongo_ids:
+                duplicate_count += 1
+                continue
+            if mongo_id:
+                seen_mongo_ids.add(mongo_id)
+            unique_sources.append(source)
+
+        if duplicate_count > 0:
+            logger.info(f"去重处理: 原始={len(sources_data)}, 去重后={len(unique_sources)}, 重复={duplicate_count}")
+
+        # 5. 查询 MongoDB 获取完整内容
         db = await get_mongodb_database()
         enhanced_sources = []
 
-        for source in sources_data:
+        for source in unique_sources:
             mongo_id = source.get('mongo_id')
             source_type = source.get('source', '')  # 来源类型
 
@@ -734,7 +751,7 @@ async def chat_sync_endpoint(request: ChatRequest):
 
             enhanced_sources.append(enhanced_source)
 
-        logger.info(f"MongoDB查询完成: {len(enhanced_sources)}/{len(sources_data)} 条记录获取了完整内容")
+        logger.info(f"MongoDB查询完成: {len(enhanced_sources)}/{len(unique_sources)} 条记录获取了完整内容")
 
         # 5. 构建响应
         response_data = ChatSyncResponse(

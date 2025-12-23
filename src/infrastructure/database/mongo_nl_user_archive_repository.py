@@ -78,7 +78,8 @@ class MongoNLUserArchiveRepository:
         items: List[Dict[str, Any]],
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
-        search_log_id: Optional[int] = None,
+        search_log_id: Optional[str] = None,
+        search_task_id: Optional[str] = None,
         user_summary: Optional[str] = None
     ) -> Optional[str]:
         """创建档案
@@ -89,7 +90,8 @@ class MongoNLUserArchiveRepository:
             items: 档案条目列表
             description: 档案描述（可选）
             tags: 标签列表（可选）
-            search_log_id: 关联的搜索记录ID（可选）
+            search_log_id: 关联的搜索记录ID（可选，来自自然语言搜索）
+            search_task_id: 关联的定时任务ID（可选，来自定时搜索任务）v2.6.0新增
             user_summary: 用户内容总结（可选）v2.5.4新增 - 自动生成的条目汇总
 
         Returns:
@@ -101,6 +103,7 @@ class MongoNLUserArchiveRepository:
             ...     archive_name="AI技术突破",
             ...     items=[{"news_result_id": "...", ...}],
             ...     tags=["AI", "技术"],
+            ...     search_task_id="248728141926559745",
             ...     user_summary="# AI技术突破\\n\\n## 1. GPT-5发布..."
             ... )
         """
@@ -110,12 +113,14 @@ class MongoNLUserArchiveRepository:
             now = datetime.utcnow()
 
             # 准备文档
+            # v2.6.0: 新增 search_task_id 支持定时任务关联
             document = {
                 "user_id": user_id,
                 "archive_name": archive_name,
                 "description": description,
                 "tags": tags or [],
                 "search_log_id": search_log_id,
+                "search_task_id": search_task_id,  # v2.6.0: 定时任务关联
                 "items": items,  # 条目列表已包含所有字段
                 "items_count": len(items),
                 "user_summary": user_summary,  # v2.5.4: 自动生成的条目汇总
