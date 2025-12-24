@@ -20,6 +20,7 @@ from src.api.v1.endpoints.search_tasks_validation import (
     validate_task_creation,
     get_task_mode_description
 )
+from src.api.dependencies.auth import require_permissions
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/search-tasks", tags=["🔍 搜索任务管理"])
@@ -526,7 +527,8 @@ async def update_task_status(task_id: str, status_data: SearchTaskStatusUpdate):
     "/{task_id}",
     status_code=200,
     summary="删除搜索任务",
-    description="永久删除搜索任务及其相关的搜索结果。此操作不可撤销。"
+    description="永久删除搜索任务及其相关的搜索结果。此操作不可撤销。",
+    dependencies=[Depends(require_permissions("info:delete"))]
 )
 async def delete_search_task(task_id: str):
     """删除搜索任务"""

@@ -6,9 +6,10 @@
 3. LLM/AI生成（预留）
 """
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, status, Query
+from fastapi import APIRouter, HTTPException, status, Query, Depends
 from pydantic import BaseModel, Field
 
+from src.api.dependencies.auth import require_permissions
 from src.services.summary_report_service import summary_report_service
 from src.core.domain.entities.summary_report import (
     SummaryReport,
@@ -208,7 +209,11 @@ async def update_report(report_id: str, request: UpdateReportRequest):
         )
 
 
-@router.delete("/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{report_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permissions("info:delete"))]
+)
 async def delete_report(report_id: str):
     """
     删除报告

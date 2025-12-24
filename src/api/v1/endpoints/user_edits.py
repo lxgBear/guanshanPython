@@ -7,9 +7,10 @@
 日期: 2025-11-17
 """
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 
+from src.api.dependencies.auth import require_permissions
 from src.services.user_edit_service import user_edit_service
 
 router = APIRouter(
@@ -596,7 +597,8 @@ async def batch_update_with_snapshot(request: EnhancedBatchUpdateRequest):
 @router.delete(
     "/{record_id}",
     summary="删除编辑记录",
-    description="删除单条用户编辑记录"
+    description="删除单条用户编辑记录",
+    dependencies=[Depends(require_permissions("info:delete"))]
 )
 async def delete_record(record_id: str):
     """

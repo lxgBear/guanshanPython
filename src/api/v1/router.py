@@ -1,10 +1,14 @@
 """
 API v1 路由配置
 
+混合权限架构:
+- Layer 1: 路由级权限 - 在 include_router 中通过 dependencies 配置
+- Layer 2: 端点级权限 - 在各 endpoint 文件中单独配置（用于更细粒度控制）
+
 前端API：只包含前端需要的接口，暴露在API文档中
 内部API：系统管理接口，隐藏在API文档中
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from src.api.v1.endpoints import crawl
 from src.api.v1.endpoints import search_tasks_frontend, search_results_frontend, internal_api, scheduler_management
 from src.api.v1.endpoints import instant_search
@@ -16,100 +20,134 @@ from src.api.v1.endpoints import nl_search
 from src.api.v1.endpoints import user_edits
 from src.api.v1.endpoints import chat
 from src.api.v1.endpoints import upload
+from src.api.v1.endpoints.auth import router as auth_router
+
+# 权限依赖
+from src.api.dependencies.auth import (
+    get_current_active_user,
+    require_permissions,
+    require_roles
+)
 
 # 创建主路由器
 api_router = APIRouter()
 
 # ==========================================
-# 前端API - 暴露在API文档中
+# 认证与权限API (公开 + 已认证)
 # ==========================================
 
-# 爬取服务（保留原有功能）
+# 用户认证与权限管理
+# 注意：auth 模块内部有更细粒度的权限控制
+api_router.include_router(
+    auth_router,
+    prefix="/auth",
+    tags=["🔐 认证与权限"]
+)
+
+# ==========================================
+# 前端API - 需要权限控制
+# ==========================================
+
+# 爬取服务 - 需要 info:create 权限
 api_router.include_router(
     crawl.router,
     prefix="/crawl",
-    tags=["🌐 网页爬取服务"]
+    tags=["🌐 网页爬取服务"],
+    dependencies=[Depends(require_permissions("info:create"))]
 )
 
-# 搜索任务管理（前端优化版 - 通用搜索系统）
+# 搜索任务管理 - 需要 search:basic 或 search:advanced 权限
 api_router.include_router(
     search_tasks_frontend.router,
-    tags=["🔍 搜索任务管理 (通用搜索)"]
+    tags=["🔍 搜索任务管理 (通用搜索)"],
+    dependencies=[Depends(require_permissions("search:basic", "search:advanced"))]
 )
 
-# 搜索结果查询（前端优化版 - 通用搜索系统，数据源: search_tasks → search_results）
+# 搜索结果查询 - 需要 search:basic 或 search:advanced 权限
 api_router.include_router(
     search_results_frontend.router,
-    tags=["📊 搜索结果查询 (通用搜索)"]
+    tags=["📊 搜索结果查询 (通用搜索)"],
+    dependencies=[Depends(require_permissions("search:basic", "search:advanced"))]
 )
 
-# 调度器管理
+# 调度器管理 - 需要 system:config 权限
 api_router.include_router(
     scheduler_management.router,
-    tags=["📊 调度器管理"]
+    tags=["📊 调度器管理"],
+    dependencies=[Depends(require_permissions("system:config"))]
 )
 
-# 即时搜索（v1.3.0新增）
+# 即时搜索 - 需要 search:basic 权限
 api_router.include_router(
     instant_search.router,
-    tags=["⚡ 即时搜索"]
+    tags=["⚡ 即时搜索"],
+    dependencies=[Depends(require_permissions("search:basic", "search:advanced"))]
 )
 
-# 智能搜索（v2.0.0新增 - LLM查询分解）
+# 智能搜索 - 需要 search:advanced 权限
 api_router.include_router(
     smart_search.router,
-    tags=["🧠 智能搜索（LLM分解）"]
+    tags=["🧠 智能搜索（LLM分解）"],
+    dependencies=[Depends(require_permissions("search:advanced"))]
 )
 
-# 智能总结报告系统
+# 智能总结报告 - 需要 search:advanced 或 info:read 权限
 api_router.include_router(
     summary_report_management.router,
-    tags=["📝 智能总结报告"]
+    tags=["📝 智能总结报告"],
+    dependencies=[Depends(require_permissions("search:advanced", "info:read"))]
 )
 
-# 数据源管理系统（v1.4.0新增）
+# 数据源管理 - 需要 info:create 或 info:update 权限
 api_router.include_router(
     data_source_management.router,
-    tags=["📦 数据源管理"]
+    tags=["📦 数据源管理"],
+    dependencies=[Depends(require_permissions("info:create", "info:update"))]
 )
 
-# Firecrawl 工具（积分估算和定价信息）
+# Firecrawl 工具 - 公开接口（积分估算和定价信息）
 api_router.include_router(
     firecrawl_utils.router,
     tags=["💰 Firecrawl 工具"]
+    # 无 dependencies，公开访问
 )
 
-# 自然语言搜索（v1.0.0-beta - 独立系统，数据源: nl_search_logs → news_results）
+# 自然语言搜索 - 需要 search:multilang 权限
 api_router.include_router(
     nl_search.router,
     prefix="/nl-search",
-    tags=["🤖 自然语言搜索 (NL Search - Beta)"]
+    tags=["🤖 自然语言搜索 (NL Search - Beta)"],
+    dependencies=[Depends(require_permissions("search:multilang", "search:basic"))]
 )
 
-# 用户批量编辑（v1.0.0新增）
+# 用户批量编辑 - 需要 info:update 权限
 api_router.include_router(
     user_edits.router,
-    tags=["✏️ 用户批量编辑"]
+    tags=["✏️ 用户批量编辑"],
+    dependencies=[Depends(require_permissions("info:update"))]
 )
 
-# Chat接口（v1.0.0新增 - 映射到NL Search）
+# Chat接口 - 需要 search:basic 或 search:multilang 权限
 api_router.include_router(
     chat.router,
-    tags=["💬 Chat接口"]
+    tags=["💬 Chat接口"],
+    dependencies=[Depends(require_permissions("search:basic", "search:multilang"))]
 )
 
-# 文件上传管理（v1.0.0新增）
+# 文件上传管理 - 需要 info:create 权限
 api_router.include_router(
     upload.router,
-    tags=["📁 文件上传管理"]
+    tags=["📁 文件上传管理"],
+    dependencies=[Depends(require_permissions("info:create"))]
 )
 
 # ==========================================
-# 内部API - 隐藏在API文档中
+# 内部API - 仅管理员可访问
 # ==========================================
 
 # 系统内部接口（手动执行、系统状态等）
 api_router.include_router(
     internal_api.router,
-    tags=["🔧 系统内部接口"]
+    tags=["🔧 系统内部接口"],
+    dependencies=[Depends(require_roles("admin"))]
 )

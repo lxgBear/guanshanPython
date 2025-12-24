@@ -2,8 +2,18 @@
 NL Search 核心服务
 用于编排整个自然语言搜索流程
 
-版本: v2.0.0 (MongoDB)
-日期: 2025-11-17
+版本: v3.1.0 (OSINT 增强)
+日期: 2025-12-24
+
+v3.1.0 更新:
+- 集成 Source Tier 来源分层分类 (6级: 官方/权威/主流/专业/一般/社交)
+- 集成 5级可信度评分系统 (确认/可信/待核实/存疑/不可靠)
+- 每个搜索结果自动附带 source_tier 和 credibility 信息
+
+v3.0.0 更新:
+- 集成 ClaudeClient 替代 LLMProcessor
+- 添加 Claude rerank 智能重排序功能
+- 支持 Claude parse_query 查询解析
 """
 import logging
 import asyncio
@@ -19,6 +29,9 @@ from src.infrastructure.crawlers.firecrawl_adapter import FirecrawlAdapter
 from src.services.nl_search.search_result_adapter import nl_search_result_adapter
 from src.infrastructure.persistence.repositories.mongo.result_repository import MongoResultRepository
 from src.services.nl_search.url_normalizer import normalize_url
+
+# v3.0.0: Claude 客户端集成
+from src.infrastructure.llm.claude_client import create_claude_client, ClaudeClient
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +71,21 @@ class NLSearchService:
         # 初始化 SearchResult 仓储（用于双写到独立集合）
         self.result_repository = MongoResultRepository()
 
-        logger.info("NLSearchService 初始化完成 (MongoDB + Firecrawl + SearchResult双写)")
+        # v3.0.0: 初始化 Claude 客户端
+        self.claude_client: Optional[ClaudeClient] = None
+        self.use_claude = nl_search_config.claude_enabled
+        if self.use_claude:
+            try:
+                self.claude_client = create_claude_client()
+                logger.info("✅ Claude 客户端初始化成功")
+            except Exception as e:
+                logger.warning(f"⚠️ Claude 客户端初始化失败，降级使用 LLMProcessor: {e}")
+                self.use_claude = False
+
+        logger.info(
+            f"NLSearchService 初始化完成 "
+            f"(MongoDB + Firecrawl + SearchResult双写, Claude={'启用' if self.use_claude else '禁用'})"
+        )
 
     async def create_search(
         self,
@@ -130,11 +157,17 @@ class NLSearchService:
 
         try:
 
-            # 3. LLM解析查询
-            logger.info("调用LLM解析查询...")
-            analysis = await self.llm_processor.parse_query(query_text)
-            logger.info(f"LLM解析完成: intent={analysis.get('intent')}, "
-                       f"keywords={analysis.get('keywords')}")
+            # 3. LLM解析查询 (v3.0.0: 支持 Claude)
+            if self.use_claude and self.claude_client:
+                logger.info("🤖 使用 Claude 解析查询...")
+                analysis = await self.claude_client.parse_query(query_text)
+                logger.info(f"Claude 解析完成: intent={analysis.get('intent')}, "
+                           f"keywords={analysis.get('keywords')}")
+            else:
+                logger.info("调用 LLMProcessor (GPT) 解析查询...")
+                analysis = await self.llm_processor.parse_query(query_text)
+                logger.info(f"LLM解析完成: intent={analysis.get('intent')}, "
+                           f"keywords={analysis.get('keywords')}")
 
             # 4. 更新分析结果（允许失败）
             try:
@@ -198,6 +231,30 @@ class NLSearchService:
             f"分数过滤: {len(results_dict)}个结果 → {len(high_score_results)}个高分结果 "
             f"(阈值: {nl_search_config.score_threshold})"
         )
+
+        # v3.1.0: Claude Rerank 智能重排序 + OSINT 增强 (Source Tier + Credibility)
+        if self.use_claude and self.claude_client and high_score_results:
+            try:
+                logger.info("🔄 使用 Claude 进行智能重排序 (v3.1.0 OSINT 增强)...")
+                reranked_results = await self.claude_client.rerank_results(
+                    query=query_text,
+                    analysis=analysis,
+                    results=high_score_results,
+                    max_results=15
+                )
+                if reranked_results:
+                    high_score_results = reranked_results
+                    # 统计增强信息
+                    tiers = {}
+                    for r in reranked_results:
+                        tier = r.get("source_tier", {}).get("tier", "unknown")
+                        tiers[tier] = tiers.get(tier, 0) + 1
+                    logger.info(
+                        f"✅ Claude 重排序完成: {len(reranked_results)} 个结果 "
+                        f"(来源分布: {tiers})"
+                    )
+            except Exception as e:
+                logger.warning(f"⚠️ Claude 重排序失败，使用原始排序: {e}")
 
         # 并发抓取内容（只爬取高分结果，节省Firecrawl成本）
         enriched_results = await self._scrape_search_results_concurrent(
