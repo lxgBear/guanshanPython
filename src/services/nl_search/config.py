@@ -241,6 +241,76 @@ class NLSearchConfig(BaseSettings):
         env="NL_SEARCH_CACHE_TTL"
     )
 
+    # ==================== Claude API 配置 (多语言搜索) ====================
+
+    claude_enabled: bool = Field(
+        default=False,
+        description="是否启用 Claude 多语言搜索功能",
+        env="NL_SEARCH_CLAUDE_ENABLED"
+    )
+
+    claude_base_url: str = Field(
+        default="http://23.106.129.19:2828/api",
+        description="Claude API Base URL (代理 API)",
+        env="ANTHROPIC_BASE_URL"
+    )
+
+    claude_api_key: Optional[str] = Field(
+        default=None,
+        description="Claude API Key (代理 API Token)",
+        env="ANTHROPIC_AUTH_TOKEN"
+    )
+
+    claude_model: str = Field(
+        default="claude-sonnet-4-20250514",
+        description="Claude 模型名称",
+        env="CLAUDE_MODEL"
+    )
+
+    claude_timeout: int = Field(
+        default=60,
+        description="Claude API 超时时间(秒)",
+        ge=10,
+        le=300,
+        env="NL_SEARCH_CLAUDE_TIMEOUT"
+    )
+
+    claude_max_tokens: int = Field(
+        default=1500,
+        description="Claude 响应最大 token 数",
+        ge=500,
+        le=4096,
+        env="NL_SEARCH_CLAUDE_MAX_TOKENS"
+    )
+
+    # ==================== 多语言搜索配置 ====================
+
+    multilang_enabled: bool = Field(
+        default=False,
+        description="是否启用多语言搜索",
+        env="NL_SEARCH_MULTILANG_ENABLED"
+    )
+
+    multilang_languages: List[str] = Field(
+        default=["zh", "en", "ja", "ko"],
+        description="支持的语言列表 (zh=中文, en=英语, ja=日语, ko=韩语)",
+        env="NL_SEARCH_MULTILANG_LANGUAGES"
+    )
+
+    multilang_results_per_lang: int = Field(
+        default=5,
+        description="每种语言的搜索结果数",
+        ge=1,
+        le=20,
+        env="NL_SEARCH_MULTILANG_RESULTS_PER_LANG"
+    )
+
+    multilang_enable_summary: bool = Field(
+        default=True,
+        description="是否生成 Claude 汇总分析",
+        env="NL_SEARCH_MULTILANG_ENABLE_SUMMARY"
+    )
+
     class Config:
         """Pydantic Settings 配置"""
         env_prefix = "NL_SEARCH_"

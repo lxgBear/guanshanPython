@@ -15,6 +15,9 @@ from httpx import AsyncClient
 os.environ["TESTING"] = "true"
 os.environ["FIRECRAWL_API_KEY"] = "test-api-key"
 os.environ["LOG_LEVEL"] = "DEBUG"
+os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only-32chars")
+os.environ.setdefault("JWT_ALGORITHM", "HS256")
+os.environ.setdefault("JWT_EXPIRATION_HOURS", "24")
 
 
 @pytest.fixture(scope="session")
@@ -117,11 +120,89 @@ def sample_crawl_result():
 def sample_document():
     """样本文档实体"""
     from src.core.domain.entities.document import Document, DocumentStatus
-    
+
     return Document(
         url="https://example.com",
         content="Sample document content",
         title="Sample Document",
         status=DocumentStatus.PENDING,
         metadata={"source": "test"}
+    )
+
+
+# ==========================================
+# 认证相关 Fixtures
+# ==========================================
+
+@pytest.fixture
+def test_user_data():
+    """测试用户数据"""
+    return {
+        "username": "testuser",
+        "password": "TestPassword123",
+        "email": "test@example.com",
+        "display_name": "测试用户",
+        "phone": "13800138000",
+        "department": "测试部门",
+        "role_codes": ["reviewer"]
+    }
+
+
+@pytest.fixture
+def test_admin_data():
+    """测试管理员数据"""
+    return {
+        "username": "admin",
+        "password": "Admin@123",
+        "email": "admin@system.com",
+        "display_name": "系统管理员",
+        "role_codes": ["admin"]
+    }
+
+
+@pytest.fixture
+def test_role_data():
+    """测试角色数据"""
+    return {
+        "code": "test_role",
+        "name": "测试角色",
+        "level": 50,
+        "description": "用于测试的角色",
+        "permission_codes": ["user:read", "user:list"]
+    }
+
+
+@pytest.fixture
+def jwt_handler():
+    """JWT处理器实例"""
+    from src.infrastructure.auth import JWTHandler
+    return JWTHandler()
+
+
+@pytest.fixture
+def password_handler():
+    """密码处理器实例"""
+    from src.infrastructure.auth import PasswordHandler
+    return PasswordHandler()
+
+
+@pytest.fixture
+def test_access_token(jwt_handler):
+    """测试访问令牌"""
+    return jwt_handler.create_access_token(
+        user_id=1,
+        username="testuser",
+        roles=["reviewer"],
+        permissions=["user:read", "info:create"]
+    )
+
+
+@pytest.fixture
+def test_admin_token(jwt_handler):
+    """测试管理员令牌"""
+    return jwt_handler.create_access_token(
+        user_id=1,
+        username="admin",
+        roles=["admin"],
+        permissions=["user:create", "user:read", "user:update", "user:delete"]
     )

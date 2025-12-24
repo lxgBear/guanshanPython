@@ -15,17 +15,20 @@
 - 环境变量: NL_SEARCH_ENABLED (默认false)
 - 测试模式: 无需API Key即可运行
 """
-from fastapi import APIRouter, HTTPException, Query, Path
+from fastapi import APIRouter, HTTPException, Query, Path, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging
 import re
 
+from src.api.dependencies.auth import require_permissions
+
 # 导入服务层
 from src.services.nl_search.nl_search_service import nl_search_service
 from src.services.nl_search.mongo_archive_service import mongo_archive_service  # 使用 MongoDB 版本
 from src.services.nl_search.config import nl_search_config
+from src.services.nl_search.multilang_search_service import get_multilang_search_service
 
 logger = logging.getLogger(__name__)
 
@@ -1151,7 +1154,8 @@ async def update_archive(
 @router.delete(
     "/user-archives/{archive_id}",
     summary="删除档案",
-    description="删除档案及其所有条目"
+    description="删除档案及其所有条目",
+    dependencies=[Depends(require_permissions("info:delete"))]
 )
 async def delete_archive(
     archive_id: str
@@ -1216,4 +1220,263 @@ async def delete_archive(
                 "error": "服务错误",
                 "message": "删除档案失败,请稍后重试"
             }
+        )
+
+
+# ==================== 多语言搜索 API (Claude + Firecrawl) ====================
+
+class MultilangSearchRequest(BaseModel):
+    """多语言搜索请求
+
+    基于 Claude + Firecrawl Search 的多语言 OSINT 搜索
+    默认支持中文、英语、日语、韩语四种语言
+    """
+    query_text: str = Field(
+        ...,
+        description="用户输入的查询文本",
+        min_length=1,
+        max_length=1000,
+        examples=["从日本2025防卫白书看东亚安全趋势", "AI技术最新突破"]
+    )
+    languages: Optional[List[str]] = Field(
+        default=["zh", "en", "ja", "ko"],
+        description="搜索语言列表 (zh=中文, en=英语, ja=日语, ko=韩语)"
+    )
+    include_summary: bool = Field(
+        default=True,
+        description="是否生成 Claude 汇总分析"
+    )
+    results_per_language: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="每种语言的搜索结果数"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query_text": "从日本2025防卫白书看东亚安全趋势",
+                "languages": ["zh", "en", "ja", "ko"],
+                "include_summary": True,
+                "results_per_language": 5
+            }
+        }
+
+
+class MultilangSearchResponse(BaseModel):
+    """多语言搜索响应"""
+    query: str = Field(..., description="原始查询")
+    timestamp: str = Field(..., description="搜索时间戳")
+    multilang_queries: Dict[str, str] = Field(..., description="多语言查询映射")
+    result_counts: Dict[str, int] = Field(..., description="各语言结果数量")
+    results: Dict[str, List[Dict[str, Any]]] = Field(..., description="各语言搜索结果")
+    summary: Optional[str] = Field(None, description="Claude 汇总分析 (Markdown格式)")
+    execution_time_ms: int = Field(..., description="总耗时(毫秒)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query": "从日本2025防卫白书看东亚安全趋势",
+                "timestamp": "2025-12-23T18:00:00",
+                "multilang_queries": {
+                    "zh": "日本2025防卫白书 东亚安全",
+                    "en": "Japan Defense White Paper 2025",
+                    "ja": "2025年防衛白書",
+                    "ko": "일본 2025 방위백서"
+                },
+                "result_counts": {"zh": 5, "en": 5, "ja": 5, "ko": 5},
+                "results": {},
+                "summary": "# 综合分析\n\n...",
+                "execution_time_ms": 70000
+            }
+        }
+
+
+class MultilangServiceStatus(BaseModel):
+    """多语言搜索服务状态"""
+    service: str = Field(..., description="服务名称")
+    version: str = Field(..., description="版本号")
+    claude_configured: bool = Field(..., description="Claude API 是否配置")
+    firecrawl_configured: bool = Field(..., description="Firecrawl API 是否配置")
+    supported_languages: List[str] = Field(..., description="支持的语言列表")
+    results_per_language: int = Field(..., description="每语言结果数")
+    enabled: bool = Field(..., description="功能是否启用")
+
+
+@router.get(
+    "/multilang/status",
+    response_model=MultilangServiceStatus,
+    summary="多语言搜索服务状态",
+    description="检查 Claude + Firecrawl 多语言搜索服务状态"
+)
+async def get_multilang_status():
+    """
+    检查多语言搜索服务状态
+
+    **功能**: 检查 Claude API 和 Firecrawl API 配置状态
+
+    Returns:
+        MultilangServiceStatus: 服务状态信息
+    """
+    try:
+        service = get_multilang_search_service()
+        status = await service.get_service_status()
+
+        return MultilangServiceStatus(
+            service=status["service"],
+            version=status["version"],
+            claude_configured=status["claude_configured"],
+            firecrawl_configured=status["firecrawl_configured"],
+            supported_languages=status["supported_languages"],
+            results_per_language=status["results_per_language"],
+            enabled=status["claude_configured"] and status["firecrawl_configured"]
+        )
+
+    except Exception as e:
+        logger.error(f"获取多语言搜索状态失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "服务错误", "message": str(e)}
+        )
+
+
+@router.post(
+    "/multilang",
+    response_model=MultilangSearchResponse,
+    summary="多语言 OSINT 搜索",
+    description="基于 Claude + Firecrawl 的多语言搜索，默认支持中/英/日/韩四种语言"
+)
+async def create_multilang_search(request: MultilangSearchRequest):
+    """
+    多语言 OSINT 搜索
+
+    **功能**: ✅ 完整实现
+
+    **流程**:
+    1. Claude 生成多语言搜索查询
+    2. Firecrawl 并行搜索多种语言
+    3. Claude 汇总分析多语言结果
+
+    **默认语言**: 中文(zh)、英语(en)、日语(ja)、韩语(ko)
+
+    Args:
+        request (MultilangSearchRequest): 搜索请求
+
+    Returns:
+        MultilangSearchResponse: 多语言搜索结果
+
+    Example:
+        ```bash
+        curl -X POST "http://localhost:8000/api/v1/nl-search/multilang" \\
+          -H "Content-Type: application/json" \\
+          -d '{
+            "query_text": "从日本2025防卫白书看东亚安全趋势",
+            "languages": ["zh", "en", "ja", "ko"],
+            "include_summary": true,
+            "results_per_language": 5
+          }'
+        ```
+    """
+    try:
+        logger.info(
+            f"多语言搜索请求: query='{request.query_text[:50]}...', "
+            f"languages={request.languages}, summary={request.include_summary}"
+        )
+
+        # 获取服务实例
+        service = get_multilang_search_service()
+
+        # 检查服务配置
+        status = await service.get_service_status()
+        if not status["claude_configured"]:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "服务未配置",
+                    "message": "Claude API 未配置，请设置 ANTHROPIC_AUTH_TOKEN 环境变量"
+                }
+            )
+
+        if not status["firecrawl_configured"]:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "服务未配置",
+                    "message": "Firecrawl API 未配置，请设置 FIRECRAWL_API_KEY 环境变量"
+                }
+            )
+
+        # 执行多语言搜索
+        result = await service.search(
+            query=request.query_text,
+            languages=request.languages,
+            include_summary=request.include_summary
+        )
+
+        logger.info(
+            f"多语言搜索完成: languages={len(result['multilang_queries'])}, "
+            f"total_results={sum(result['result_counts'].values())}, "
+            f"time={result['execution_time_ms']}ms"
+        )
+
+        return MultilangSearchResponse(
+            query=result["query"],
+            timestamp=result["timestamp"],
+            multilang_queries=result["multilang_queries"],
+            result_counts=result["result_counts"],
+            results=result["results"],
+            summary=result.get("summary"),
+            execution_time_ms=result["execution_time_ms"]
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.warning(f"多语言搜索输入验证失败: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "输入验证失败", "message": str(e)}
+        )
+    except Exception as e:
+        logger.error(f"多语言搜索失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "搜索失败", "message": "服务暂时不可用，请稍后重试"}
+        )
+
+
+@router.post(
+    "/multilang/analyze",
+    summary="分析查询意图",
+    description="使用 Claude 分析用户查询意图"
+)
+async def analyze_query(
+    query_text: str = Query(..., min_length=1, max_length=1000, description="查询文本")
+):
+    """
+    分析查询意图
+
+    使用 Claude 解析用户查询的意图、关键词、实体等信息
+
+    Args:
+        query_text: 用户查询文本
+
+    Returns:
+        查询分析结果
+    """
+    try:
+        service = get_multilang_search_service()
+        analysis = await service.analyze_query(query_text)
+
+        return {
+            "query": query_text,
+            "analysis": analysis
+        }
+
+    except Exception as e:
+        logger.error(f"查询分析失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "分析失败", "message": str(e)}
         )

@@ -20,6 +20,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.api.dependencies.auth import require_permissions
 from src.infrastructure.storage.local_storage import LocalStorageService
 from src.infrastructure.database.file_upload_repository import MongoFileUploadRepository
 from src.core.domain.entities.file_upload import (
@@ -340,7 +341,12 @@ async def download_file(
         raise HTTPException(status_code=500, detail=f"文件下载失败: {str(e)}")
 
 
-@router.delete("/files/{file_id}", response_model=DeleteResponse, summary="删除文件")
+@router.delete(
+    "/files/{file_id}",
+    response_model=DeleteResponse,
+    summary="删除文件",
+    dependencies=[Depends(require_permissions("info:delete"))]
+)
 async def delete_file(
     file_id: str,
     storage_service: LocalStorageService = Depends(get_storage_service),

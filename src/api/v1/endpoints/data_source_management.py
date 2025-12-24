@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from src.infrastructure.database.connection import get_mongodb_database
 from src.services.data_curation_service import DataCurationService
 from src.utils.logger import get_logger
+from src.api.dependencies.auth import require_permissions
 
 logger = get_logger(__name__)
 
@@ -319,7 +320,11 @@ async def update_data_source_content(
         raise HTTPException(status_code=500, detail=f"更新数据源内容失败: {str(e)}")
 
 
-@router.delete("/{data_source_id}", summary="删除数据源")
+@router.delete(
+    "/{data_source_id}",
+    summary="删除数据源",
+    dependencies=[Depends(require_permissions("info:delete"))]
+)
 async def delete_data_source(
     data_source_id: str,
     deleted_by: str = Query(..., description="删除者"),
@@ -593,7 +598,11 @@ async def batch_archive_raw_data(
         raise HTTPException(status_code=500, detail=f"批量留存失败: {str(e)}")
 
 
-@router.post("/batch/delete", summary="批量删除原始数据")
+@router.post(
+    "/batch/delete",
+    summary="批量删除原始数据",
+    dependencies=[Depends(require_permissions("info:delete"))]
+)
 async def batch_delete_raw_data(
     request: BatchOperationRequest,
     service: DataCurationService = Depends(get_data_curation_service)
