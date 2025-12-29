@@ -27,6 +27,9 @@ from pathlib import Path
 from src.services.nl_search.nl_search_service import nl_search_service
 from src.services.nl_search.config import nl_search_config
 from src.infrastructure.database.connection import get_mongodb_database
+from src.infrastructure.database.chat_conversation_repository import (
+    chat_conversation_repository
+)
 from bson import ObjectId
 
 logger = logging.getLogger(__name__)
@@ -40,8 +43,17 @@ router = APIRouter()
 
 # ==================== 数据模型 ====================
 
+class HistoryMessage(BaseModel):
+    """历史消息模型"""
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str
+
+
 class ChatRequest(BaseModel):
-    """Chat请求模型（兼容前端）"""
+    """Chat请求模型（兼容前端）
+
+    v1.1.0: 新增 conversation_id 和 history 支持多轮对话
+    """
     question: str = Field(
         ...,
         description="用户提问（自然语言）",
@@ -58,11 +70,24 @@ class ChatRequest(BaseModel):
         description="搜索模式: single=单次搜索, multi=多问题分解",
         pattern="^(single|multi)$"
     )
+    conversation_id: Optional[str] = Field(
+        None,
+        description="对话会话ID（可选，用于多轮对话）"
+    )
+    history: Optional[List[HistoryMessage]] = Field(
+        None,
+        description="对话历史（可选，如果提供了conversation_id会自动从服务器获取）"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
-                "question": "请介绍关于西藏的新闻"
+                "question": "请介绍关于西藏的新闻",
+                "conversation_id": "248728141926559744",
+                "history": [
+                    {"role": "user", "content": "你好"},
+                    {"role": "assistant", "content": "你好！有什么可以帮助你的？"}
+                ]
             }
         }
 
@@ -452,42 +477,76 @@ async def chat_endpoint(request: ChatRequest):
 @router.post(
     "/chat/sync",
     summary="Chat接口（同步响应，含完整内容）",
-    description="调用本地NL Search服务，自动保存到MongoDB并返回完整内容",
+    description="调用本地NL Search服务，自动保存到MongoDB并返回完整内容。支持多轮对话历史。",
     response_model=ChatSyncResponse
 )
 async def chat_sync_endpoint(request: ChatRequest):
     """
     Chat接口 - 同步返回完整结果（含完整内容）
 
-    **功能** (v2.5.0 - news_results集成):
+    **功能** (v2.6.0 - 多轮对话支持):
     1. 调用本地 NL Search 服务执行搜索（sonar-pro + firecrawl + 入库）
     2. 自动保存搜索记录到 MongoDB nl_search_logs 集合
     3. 调用远程 AI 服务 (http://192.168.0.5:8035/chat) 进行智能处理
     4. 提取 AI 返回的 sources 中的 mongo_id
     5. 查询 MongoDB news_results 获取完整内容（包含中文翻译字段）
     6. 返回 AI 增强的响应（含完整内容和中文翻译）
+    7. 【新增】支持多轮对话历史，可传入 conversation_id 或 history
 
     **数据流**:
     - 用户问题 → NLSearchService.create_search() → 保存到 MongoDB
-    - 搜索结果 → 远程 AI 服务 → AI 生成答案 + 智能排序来源
+    - 搜索结果 + 历史对话 → 远程 AI 服务 → AI 生成答案 + 智能排序来源
     - sources[].mongo_id → news_results 查询 → 完整内容（嵌套结构 + 中文翻译）
     - 合并数据 → 返回前端
+    - 【新增】如提供 conversation_id，自动保存对话到 chat_conversations
 
     Args:
-        request (ChatRequest): Chat请求
+        request (ChatRequest): Chat请求（支持 conversation_id 和 history）
 
     Returns:
         ChatSyncResponse: 包含完整内容的响应
 
     Example:
         ```bash
+        # 单次对话
         curl -X POST "http://localhost:8000/api/v1/chat/sync" \\
           -H "Content-Type: application/json" \\
           -d '{"question": "请介绍关于西藏的新闻"}'
+
+        # 多轮对话
+        curl -X POST "http://localhost:8000/api/v1/chat/sync" \\
+          -H "Content-Type: application/json" \\
+          -d '{"question": "继续介绍", "conversation_id": "248728141926559744"}'
         ```
     """
     try:
-        logger.info(f"Chat同步请求: question='{request.question[:50]}...'")
+        logger.info(f"Chat同步请求: question='{request.question[:50]}...', conversation_id={request.conversation_id}")
+
+        # 0. 处理对话历史
+        conversation_history = []
+
+        # 如果提供了 conversation_id，从数据库获取历史
+        if request.conversation_id:
+            try:
+                messages = await chat_conversation_repository.get_messages(
+                    request.conversation_id, limit=20  # 限制最近20条消息
+                )
+                if messages:
+                    conversation_history = [
+                        {"role": msg["role"], "content": msg["content"]}
+                        for msg in messages
+                    ]
+                    logger.info(f"从数据库加载对话历史: {len(conversation_history)} 条消息")
+            except Exception as e:
+                logger.warning(f"加载对话历史失败: {e}")
+
+        # 如果请求中直接提供了 history，使用请求中的历史（覆盖数据库历史）
+        if request.history:
+            conversation_history = [
+                {"role": msg.role, "content": msg.content}
+                for msg in request.history
+            ]
+            logger.info(f"使用请求中的对话历史: {len(conversation_history)} 条消息")
 
         # 1. 调用本地 NL Search 服务
         result = await nl_search_service.create_search(
@@ -504,16 +563,24 @@ async def chat_sync_endpoint(request: ChatRequest):
 
         try:
             async with httpx.AsyncClient(timeout=REMOTE_AI_SERVICE_TIMEOUT) as client:
+                # 构建 AI 服务请求参数
+                ai_request_data = {
+                    "question": request.question,
+                    "search_results": result.get("results", []),
+                    "user_id": request.user_id,
+                    "log_id": log_id
+                }
+
+                # 如果有对话历史，添加到请求中
+                if conversation_history:
+                    ai_request_data["history"] = conversation_history
+                    logger.info(f"向 AI 服务传递 {len(conversation_history)} 条对话历史")
+
                 # 使用 stream 方法处理 SSE 响应
                 async with client.stream(
                     "POST",
                     REMOTE_AI_SERVICE_URL,
-                    json={
-                        "question": request.question,
-                        "search_results": result.get("results", []),
-                        "user_id": request.user_id,
-                        "log_id": log_id
-                    }
+                    json=ai_request_data
                 ) as ai_response:
                     if ai_response.status_code != 200:
                         error_text = await ai_response.aread()
@@ -753,7 +820,38 @@ async def chat_sync_endpoint(request: ChatRequest):
 
         logger.info(f"MongoDB查询完成: {len(enhanced_sources)}/{len(unique_sources)} 条记录获取了完整内容")
 
-        # 5. 构建响应
+        # 5. 保存对话到数据库（如果提供了 conversation_id）
+        if request.conversation_id:
+            try:
+                # 保存用户消息
+                await chat_conversation_repository.add_message(
+                    conversation_id=request.conversation_id,
+                    role="user",
+                    content=request.question
+                )
+
+                # 保存 AI 回复
+                sources_for_save = [
+                    {
+                        "id": s.id,
+                        "mongo_id": s.mongo_id,
+                        "title": s.title,
+                        "source": s.source
+                    }
+                    for s in enhanced_sources[:5]  # 只保存前5个来源的摘要
+                ]
+                await chat_conversation_repository.add_message(
+                    conversation_id=request.conversation_id,
+                    role="assistant",
+                    content=full_answer,
+                    sources=sources_for_save
+                )
+                logger.info(f"对话已保存到会话: {request.conversation_id}")
+
+            except Exception as e:
+                logger.warning(f"保存对话失败: {e}")
+
+        # 6. 构建响应
         response_data = ChatSyncResponse(
             question=request.question,
             answer=full_answer,
@@ -784,3 +882,367 @@ async def chat_sync_endpoint(request: ChatRequest):
                 "message": "服务暂时不可用，请稍后重试"
             }
         )
+
+
+# ==================== 对话历史 API ====================
+# v1.1.0 新增：对话会话持久化
+# chat_conversation_repository 已在文件顶部导入
+
+
+class ConversationCreateRequest(BaseModel):
+    """创建对话会话请求"""
+    user_id: Optional[str] = Field(None, description="用户ID")
+    title: Optional[str] = Field(None, description="会话标题（可选，自动从首条消息生成）")
+
+
+class ConversationCreateResponse(BaseModel):
+    """创建对话会话响应"""
+    conversation_id: str
+    title: str
+    created_at: str
+
+
+class MessageModel(BaseModel):
+    """消息模型"""
+    id: str
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str
+    timestamp: str
+    sources: List[Dict[str, Any]] = []
+
+
+class ConversationModel(BaseModel):
+    """对话会话模型"""
+    id: str = Field(..., alias="_id")
+    title: str
+    user_id: Optional[str]
+    messages: List[MessageModel]
+    message_count: int
+    last_message_at: str
+    created_at: str
+
+    class Config:
+        populate_by_name = True
+
+
+class ConversationListItem(BaseModel):
+    """对话列表项"""
+    id: str = Field(..., alias="_id")
+    title: str
+    user_id: Optional[str]
+    message_count: int
+    last_message_at: str
+    last_message: Optional[MessageModel]
+    created_at: str
+
+    class Config:
+        populate_by_name = True
+
+
+class ConversationListResponse(BaseModel):
+    """对话列表响应"""
+    conversations: List[ConversationListItem]
+    total: int
+    has_more: bool
+
+
+class AddMessageRequest(BaseModel):
+    """添加消息请求"""
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str = Field(..., min_length=1)
+    sources: Optional[List[Dict[str, Any]]] = None
+
+
+class UpdateTitleRequest(BaseModel):
+    """更新标题请求"""
+    title: str = Field(..., min_length=1, max_length=100)
+
+
+@router.post(
+    "/chat/conversations",
+    response_model=ConversationCreateResponse,
+    summary="创建对话会话",
+    description="创建新的对话会话，返回会话ID"
+)
+async def create_conversation(request: ConversationCreateRequest):
+    """创建新对话会话"""
+    try:
+        conversation_id = await chat_conversation_repository.create_conversation(
+            user_id=request.user_id,
+            title=request.title
+        )
+
+        conversation = await chat_conversation_repository.get_by_id(
+            conversation_id, include_messages=False
+        )
+
+        return ConversationCreateResponse(
+            conversation_id=conversation_id,
+            title=conversation["title"],
+            created_at=conversation["created_at"].isoformat()
+        )
+
+    except Exception as e:
+        logger.error(f"创建对话会话失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="创建对话会话失败")
+
+
+@router.get(
+    "/chat/conversations",
+    response_model=ConversationListResponse,
+    summary="获取对话列表",
+    description="获取用户的对话会话列表（分页）"
+)
+async def get_conversations(
+    user_id: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0
+):
+    """获取对话列表"""
+    try:
+        conversations = await chat_conversation_repository.get_recent_conversations(
+            user_id=user_id,
+            limit=limit + 1,  # 多取一条判断是否有更多
+            offset=offset
+        )
+
+        has_more = len(conversations) > limit
+        if has_more:
+            conversations = conversations[:limit]
+
+        total = await chat_conversation_repository.count_conversations(user_id=user_id)
+
+        # 转换时间格式
+        items = []
+        for conv in conversations:
+            last_msg = conv.get("last_message")
+            items.append(ConversationListItem(
+                _id=conv["_id"],
+                title=conv["title"],
+                user_id=conv.get("user_id"),
+                message_count=conv["message_count"],
+                last_message_at=conv["last_message_at"].isoformat() if conv.get("last_message_at") else "",
+                last_message=MessageModel(
+                    id=last_msg["id"],
+                    role=last_msg["role"],
+                    content=last_msg["content"],
+                    timestamp=last_msg["timestamp"],
+                    sources=last_msg.get("sources", [])
+                ) if last_msg else None,
+                created_at=conv["created_at"].isoformat() if conv.get("created_at") else ""
+            ))
+
+        return ConversationListResponse(
+            conversations=items,
+            total=total,
+            has_more=has_more
+        )
+
+    except Exception as e:
+        logger.error(f"获取对话列表失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取对话列表失败")
+
+
+@router.get(
+    "/chat/conversations/{conversation_id}",
+    summary="获取对话详情",
+    description="获取指定对话会话的完整信息和消息历史"
+)
+async def get_conversation(conversation_id: str):
+    """获取对话详情"""
+    try:
+        conversation = await chat_conversation_repository.get_by_id(
+            conversation_id, include_messages=True
+        )
+
+        if not conversation:
+            raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        # 转换时间格式
+        messages = []
+        for msg in conversation.get("messages", []):
+            messages.append({
+                "id": msg["id"],
+                "role": msg["role"],
+                "content": msg["content"],
+                "timestamp": msg["timestamp"],
+                "sources": msg.get("sources", [])
+            })
+
+        return {
+            "id": conversation["_id"],
+            "title": conversation["title"],
+            "user_id": conversation.get("user_id"),
+            "messages": messages,
+            "message_count": conversation["message_count"],
+            "last_message_at": conversation["last_message_at"].isoformat() if conversation.get("last_message_at") else "",
+            "created_at": conversation["created_at"].isoformat() if conversation.get("created_at") else ""
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取对话详情失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取对话详情失败")
+
+
+@router.post(
+    "/chat/conversations/{conversation_id}/messages",
+    summary="添加消息",
+    description="向对话会话添加新消息"
+)
+async def add_message(conversation_id: str, request: AddMessageRequest):
+    """添加消息到对话"""
+    try:
+        message_id = await chat_conversation_repository.add_message(
+            conversation_id=conversation_id,
+            role=request.role,
+            content=request.content,
+            sources=request.sources
+        )
+
+        if not message_id:
+            raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        return {
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+            "role": request.role,
+            "content": request.content
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"添加消息失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="添加消息失败")
+
+
+@router.get(
+    "/chat/conversations/{conversation_id}/messages",
+    summary="获取消息历史",
+    description="获取对话会话的消息历史（支持分页）"
+)
+async def get_messages(
+    conversation_id: str,
+    limit: Optional[int] = None,
+    before: Optional[str] = None
+):
+    """获取消息历史"""
+    try:
+        messages = await chat_conversation_repository.get_messages(
+            conversation_id=conversation_id,
+            limit=limit,
+            before_message_id=before
+        )
+
+        if messages is None:
+            raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        return {
+            "conversation_id": conversation_id,
+            "messages": messages,
+            "count": len(messages)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取消息历史失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取消息历史失败")
+
+
+@router.patch(
+    "/chat/conversations/{conversation_id}",
+    summary="更新对话标题",
+    description="更新对话会话的标题"
+)
+async def update_conversation(conversation_id: str, request: UpdateTitleRequest):
+    """更新对话标题"""
+    try:
+        success = await chat_conversation_repository.update_title(
+            conversation_id=conversation_id,
+            title=request.title
+        )
+
+        if not success:
+            raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        return {"success": True, "title": request.title}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新对话标题失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="更新对话标题失败")
+
+
+@router.delete(
+    "/chat/conversations/{conversation_id}",
+    summary="删除对话",
+    description="删除指定的对话会话"
+)
+async def delete_conversation(conversation_id: str):
+    """删除对话会话"""
+    try:
+        success = await chat_conversation_repository.delete_conversation(
+            conversation_id=conversation_id
+        )
+
+        if not success:
+            raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        return {"success": True, "deleted_id": conversation_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除对话会话失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="删除对话会话失败")
+
+
+@router.get(
+    "/chat/conversations/search",
+    summary="搜索对话",
+    description="按关键词搜索对话会话"
+)
+async def search_conversations(
+    q: str,
+    user_id: Optional[str] = None,
+    limit: int = 20
+):
+    """搜索对话"""
+    try:
+        conversations = await chat_conversation_repository.search_conversations(
+            query=q,
+            user_id=user_id,
+            limit=limit
+        )
+
+        items = []
+        for conv in conversations:
+            last_msg = conv.get("last_message")
+            items.append({
+                "id": conv["_id"],
+                "title": conv["title"],
+                "user_id": conv.get("user_id"),
+                "message_count": conv["message_count"],
+                "last_message_at": conv["last_message_at"].isoformat() if conv.get("last_message_at") else "",
+                "last_message": {
+                    "id": last_msg["id"],
+                    "role": last_msg["role"],
+                    "content": last_msg["content"],
+                    "timestamp": last_msg["timestamp"]
+                } if last_msg else None,
+                "created_at": conv["created_at"].isoformat() if conv.get("created_at") else ""
+            })
+
+        return {
+            "query": q,
+            "results": items,
+            "count": len(items)
+        }
+
+    except Exception as e:
+        logger.error(f"搜索对话失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="搜索对话失败")
