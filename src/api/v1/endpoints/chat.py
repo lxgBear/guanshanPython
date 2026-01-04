@@ -31,6 +31,7 @@ from pathlib import Path
 
 from src.services.nl_search.nl_search_service import nl_search_service
 from src.services.nl_search.config import nl_search_config
+from src.services.nl_search.search_history_service import search_history_service
 from src.infrastructure.database.connection import get_mongodb_database
 from src.infrastructure.database.chat_conversation_repository import (
     chat_conversation_repository
@@ -858,6 +859,40 @@ async def chat_sync_endpoint(request: ChatRequest):
             except Exception as e:
                 logger.warning(f"保存对话失败: {e}")
 
+        # 5.5 v2.8.0: 保存搜索历史
+        if request.user_id:
+            try:
+                # 将 SourceDetail 对象转换为 dict
+                sources_for_history = [
+                    {
+                        "mongo_id": s.mongo_id,
+                        "source": s.source,
+                        "title": s.title,
+                        "score": s.score,
+                        "category": {
+                            "大类": s.category.大类,
+                            "类别": s.category.类别,
+                            "地域": s.category.地域
+                        },
+                        "publish_time": s.publish_time,
+                        "preview": s.preview[:200] if s.preview else ""
+                    }
+                    for s in enhanced_sources
+                ]
+
+                history_id = await search_history_service.save_from_sync_response(
+                    user_id=int(request.user_id),
+                    question=request.question,
+                    answer=full_answer,
+                    sources=sources_for_history,
+                    conversation_id=request.conversation_id,
+                    search_mode=request.search_mode
+                )
+                logger.info(f"搜索历史已保存: history_id={history_id}, user_id={request.user_id}")
+
+            except Exception as e:
+                logger.warning(f"保存搜索历史失败: {e}")
+
         # 6. 构建响应
         response_data = ChatSyncResponse(
             question=request.question,
@@ -1461,3 +1496,255 @@ async def search_conversations(
     except Exception as e:
         logger.error(f"搜索对话失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="搜索对话失败")
+
+
+# ==================== 搜索历史 API (v2.8.0) ====================
+
+class SearchHistoryResultModel(BaseModel):
+    """搜索结果项模型"""
+    mongo_id: str
+    source: str
+    title: str
+    score: float
+    category: Optional[Dict[str, str]] = None
+    publish_time: Optional[str] = None
+    preview: Optional[str] = None
+
+
+class SearchHistoryItemModel(BaseModel):
+    """搜索历史记录模型"""
+    id: str = Field(..., alias="_id")
+    user_id: int
+    query: str
+    answer: Optional[str] = None
+    results: Optional[List[SearchHistoryResultModel]] = None
+    results_count: int = 0
+    conversation_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[str] = None
+
+    class Config:
+        populate_by_name = True
+
+
+class SearchHistoryListResponse(BaseModel):
+    """搜索历史列表响应"""
+    items: List[SearchHistoryItemModel]
+    total: int
+    limit: int
+    offset: int
+
+
+class SearchHistoryStatsResponse(BaseModel):
+    """搜索统计响应"""
+    total_searches: int
+    total_results: int
+    avg_results_per_search: float
+
+
+@router.get(
+    "/chat/search-history",
+    summary="获取搜索历史列表",
+    description="获取当前用户的搜索历史记录（分页）。v2.8.0 新增"
+)
+async def get_search_history(
+    current_user: User = Depends(get_current_active_user),
+    limit: int = 20,
+    offset: int = 0,
+    source_filter: Optional[str] = None
+):
+    """获取用户搜索历史列表
+
+    Args:
+        limit: 返回数量限制
+        offset: 偏移量
+        source_filter: 按来源类型筛选 (可选)
+    """
+    try:
+        result = await search_history_service.get_user_history(
+            user_id=current_user.id,
+            limit=limit,
+            offset=offset,
+            source_filter=source_filter
+        )
+
+        # 转换日期格式
+        items = []
+        for item in result["items"]:
+            items.append({
+                "_id": item["_id"],
+                "user_id": item["user_id"],
+                "query": item["query"],
+                "answer": item.get("answer"),
+                "results_count": item.get("results_count", 0),
+                "conversation_id": item.get("conversation_id"),
+                "metadata": item.get("metadata"),
+                "created_at": item["created_at"].isoformat() if item.get("created_at") else None
+            })
+
+        return SearchHistoryListResponse(
+            items=items,
+            total=result["total"],
+            limit=result["limit"],
+            offset=result["offset"]
+        )
+
+    except Exception as e:
+        logger.error(f"获取搜索历史失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取搜索历史失败")
+
+
+@router.get(
+    "/chat/search-history/{history_id}",
+    summary="获取搜索历史详情",
+    description="获取指定搜索历史的完整详情"
+)
+async def get_search_history_detail(
+    history_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """获取搜索历史详情"""
+    try:
+        history = await search_history_service.get_history_detail(
+            history_id=history_id,
+            user_id=current_user.id
+        )
+
+        if not history:
+            raise HTTPException(status_code=404, detail="历史记录不存在")
+
+        return {
+            "_id": history["_id"],
+            "user_id": history["user_id"],
+            "query": history["query"],
+            "answer": history.get("answer"),
+            "results": history.get("results", []),
+            "results_count": history.get("results_count", 0),
+            "conversation_id": history.get("conversation_id"),
+            "metadata": history.get("metadata"),
+            "created_at": history["created_at"].isoformat() if history.get("created_at") else None,
+            "updated_at": history["updated_at"].isoformat() if history.get("updated_at") else None
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取搜索历史详情失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取搜索历史详情失败")
+
+
+@router.get(
+    "/chat/search-history/by-result/{mongo_id}",
+    summary="按结果ID查询历史",
+    description="查询引用了特定搜索结果的历史记录"
+)
+async def find_history_by_result(
+    mongo_id: str,
+    current_user: User = Depends(get_current_active_user),
+    limit: int = 20
+):
+    """查询包含特定 mongo_id 的历史记录"""
+    try:
+        histories = await search_history_service.find_by_result_id(
+            mongo_id=mongo_id,
+            user_id=current_user.id,
+            limit=limit
+        )
+
+        items = []
+        for h in histories:
+            items.append({
+                "_id": h["_id"],
+                "query": h["query"],
+                "results_count": h.get("results_count", 0),
+                "created_at": h["created_at"].isoformat() if h.get("created_at") else None
+            })
+
+        return {"items": items, "count": len(items)}
+
+    except Exception as e:
+        logger.error(f"按结果ID查询历史失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="查询失败")
+
+
+@router.get(
+    "/chat/search-history/by-source/{source}",
+    summary="按来源类型查询历史",
+    description="查询包含特定来源类型的历史记录"
+)
+async def find_history_by_source(
+    source: str,
+    current_user: User = Depends(get_current_active_user),
+    limit: int = 20,
+    offset: int = 0
+):
+    """按来源类型查询历史记录"""
+    try:
+        histories = await search_history_service.find_by_source_type(
+            source=source,
+            user_id=current_user.id,
+            limit=limit,
+            offset=offset
+        )
+
+        items = []
+        for h in histories:
+            items.append({
+                "_id": h["_id"],
+                "query": h["query"],
+                "results_count": h.get("results_count", 0),
+                "created_at": h["created_at"].isoformat() if h.get("created_at") else None
+            })
+
+        return {"items": items, "count": len(items)}
+
+    except Exception as e:
+        logger.error(f"按来源类型查询历史失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="查询失败")
+
+
+@router.get(
+    "/chat/search-history/stats",
+    response_model=SearchHistoryStatsResponse,
+    summary="获取搜索统计",
+    description="获取用户的搜索行为统计"
+)
+async def get_search_stats(
+    current_user: User = Depends(get_current_active_user)
+):
+    """获取用户搜索统计"""
+    try:
+        stats = await search_history_service.get_user_statistics(current_user.id)
+        return SearchHistoryStatsResponse(**stats)
+
+    except Exception as e:
+        logger.error(f"获取搜索统计失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取统计失败")
+
+
+@router.delete(
+    "/chat/search-history/{history_id}",
+    summary="删除搜索历史",
+    description="删除指定的搜索历史记录"
+)
+async def delete_search_history(
+    history_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """删除搜索历史记录"""
+    try:
+        success = await search_history_service.delete_history(
+            history_id=history_id,
+            user_id=current_user.id
+        )
+
+        if not success:
+            raise HTTPException(status_code=404, detail="历史记录不存在或无权删除")
+
+        return {"message": "删除成功", "history_id": history_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除搜索历史失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="删除失败")
