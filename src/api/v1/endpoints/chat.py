@@ -13,8 +13,13 @@ Chat API 端点
 
 版本: v1.0.0
 日期: 2025-11-22
+
+v2.7.0 更新:
+- 添加 Token 认证，强制从 Token 获取用户身份
+- 添加用户隔离逻辑（admin 查看所有，普通用户只能查看自己的）
+- 新增 info_items 和 is_pinned 字段支持
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, AsyncGenerator, List, Dict, Any
@@ -30,6 +35,8 @@ from src.infrastructure.database.connection import get_mongodb_database
 from src.infrastructure.database.chat_conversation_repository import (
     chat_conversation_repository
 )
+from src.core.domain.entities.auth.user import User
+from src.api.dependencies.auth import get_current_active_user
 from bson import ObjectId
 
 logger = logging.getLogger(__name__)
@@ -889,10 +896,23 @@ async def chat_sync_endpoint(request: ChatRequest):
 # chat_conversation_repository 已在文件顶部导入
 
 
+class InfoItemModel(BaseModel):
+    """信息条目模型 - 对应前端 InfoItem"""
+    id: str = Field(..., description="条目ID")
+    title: str = Field(..., description="标题")
+    source: Optional[str] = Field(None, description="来源")
+    mongo_id: Optional[str] = Field(None, description="MongoDB ID")
+    score: Optional[float] = Field(None, description="相关性评分")
+    preview: Optional[str] = Field(None, description="预览内容")
+
+
 class ConversationCreateRequest(BaseModel):
-    """创建对话会话请求"""
-    user_id: Optional[str] = Field(None, description="用户ID")
+    """创建对话会话请求
+
+    v2.7.0: user_id 已移除，后端从 Token 自动获取用户身份
+    """
     title: Optional[str] = Field(None, description="会话标题（可选，自动从首条消息生成）")
+    is_pinned: Optional[bool] = Field(False, description="是否置顶")
 
 
 class ConversationCreateResponse(BaseModel):
@@ -909,10 +929,14 @@ class MessageModel(BaseModel):
     content: str
     timestamp: str
     sources: List[Dict[str, Any]] = []
+    info_items: List[InfoItemModel] = Field(default_factory=list, description="关联的信息条目")
 
 
 class ConversationModel(BaseModel):
-    """对话会话模型"""
+    """对话会话模型
+
+    v2.7.0: 新增 is_pinned 和 info_items 字段
+    """
     id: str = Field(..., alias="_id")
     title: str
     user_id: Optional[str]
@@ -920,6 +944,8 @@ class ConversationModel(BaseModel):
     message_count: int
     last_message_at: str
     created_at: str
+    is_pinned: bool = Field(default=False, description="是否置顶")
+    info_items: List[InfoItemModel] = Field(default_factory=list, description="对话关联的信息条目")
 
     class Config:
         populate_by_name = True
@@ -934,6 +960,7 @@ class ConversationListItem(BaseModel):
     last_message_at: str
     last_message: Optional[MessageModel]
     created_at: str
+    is_pinned: bool = Field(default=False, description="是否置顶")
 
     class Config:
         populate_by_name = True
@@ -951,30 +978,38 @@ class AddMessageRequest(BaseModel):
     role: str = Field(..., pattern="^(user|assistant)$")
     content: str = Field(..., min_length=1)
     sources: Optional[List[Dict[str, Any]]] = None
-
-
-class UpdateTitleRequest(BaseModel):
-    """更新标题请求"""
-    title: str = Field(..., min_length=1, max_length=100)
+    info_items: Optional[List[InfoItemModel]] = Field(None, description="关联的信息条目")
 
 
 @router.post(
     "/chat/conversations",
     response_model=ConversationCreateResponse,
     summary="创建对话会话",
-    description="创建新的对话会话，返回会话ID"
+    description="创建新的对话会话，返回会话ID。v2.7.0: 需要 Token 认证"
 )
-async def create_conversation(request: ConversationCreateRequest):
-    """创建新对话会话"""
+async def create_conversation(
+    request: ConversationCreateRequest,
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
+):
+    """创建新对话会话
+
+    v2.7.0: user_id 从 Token 自动获取，不再从请求参数传入
+    """
     try:
+        # v2.7.0: 从 Token 获取用户 ID
+        user_id = str(current_user.id)
+
         conversation_id = await chat_conversation_repository.create_conversation(
-            user_id=request.user_id,
-            title=request.title
+            user_id=user_id,
+            title=request.title,
+            metadata={"is_pinned": request.is_pinned or False}
         )
 
         conversation = await chat_conversation_repository.get_by_id(
             conversation_id, include_messages=False
         )
+
+        logger.info(f"创建对话会话成功: conv_id={conversation_id}, user_id={user_id}")
 
         return ConversationCreateResponse(
             conversation_id=conversation_id,
@@ -991,17 +1026,28 @@ async def create_conversation(request: ConversationCreateRequest):
     "/chat/conversations",
     response_model=ConversationListResponse,
     summary="获取对话列表",
-    description="获取用户的对话会话列表（分页）"
+    description="获取用户的对话会话列表（分页）。v2.7.0: 需要 Token 认证，admin 可查看所有，普通用户只能查看自己的"
 )
 async def get_conversations(
-    user_id: Optional[str] = None,
+    current_user: User = Depends(get_current_active_user),  # v2.7.0: 强制 Token 认证
     limit: int = 20,
     offset: int = 0
 ):
-    """获取对话列表"""
+    """获取对话列表
+
+    v2.7.0: 用户隔离
+    - admin 角色可查看所有对话
+    - 普通用户只能查看自己的对话
+    """
     try:
+        # v2.7.0: 用户隔离逻辑
+        is_admin = "admin" in current_user.roles
+        effective_user_id = None if is_admin else str(current_user.id)
+
+        logger.info(f"获取对话列表: user_id={current_user.id}, is_admin={is_admin}, effective_filter={effective_user_id}")
+
         conversations = await chat_conversation_repository.get_recent_conversations(
-            user_id=user_id,
+            user_id=effective_user_id,
             limit=limit + 1,  # 多取一条判断是否有更多
             offset=offset
         )
@@ -1010,12 +1056,13 @@ async def get_conversations(
         if has_more:
             conversations = conversations[:limit]
 
-        total = await chat_conversation_repository.count_conversations(user_id=user_id)
+        total = await chat_conversation_repository.count_conversations(user_id=effective_user_id)
 
         # 转换时间格式
         items = []
         for conv in conversations:
             last_msg = conv.get("last_message")
+            metadata = conv.get("metadata", {})
             items.append(ConversationListItem(
                 _id=conv["_id"],
                 title=conv["title"],
@@ -1027,9 +1074,11 @@ async def get_conversations(
                     role=last_msg["role"],
                     content=last_msg["content"],
                     timestamp=last_msg["timestamp"],
-                    sources=last_msg.get("sources", [])
+                    sources=last_msg.get("sources", []),
+                    info_items=last_msg.get("info_items", [])
                 ) if last_msg else None,
-                created_at=conv["created_at"].isoformat() if conv.get("created_at") else ""
+                created_at=conv["created_at"].isoformat() if conv.get("created_at") else "",
+                is_pinned=metadata.get("is_pinned", False)
             ))
 
         return ConversationListResponse(
@@ -1046,10 +1095,16 @@ async def get_conversations(
 @router.get(
     "/chat/conversations/{conversation_id}",
     summary="获取对话详情",
-    description="获取指定对话会话的完整信息和消息历史"
+    description="获取指定对话会话的完整信息和消息历史。v2.7.0: 需要 Token 认证，非 admin 只能访问自己的对话"
 )
-async def get_conversation(conversation_id: str):
-    """获取对话详情"""
+async def get_conversation(
+    conversation_id: str,
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
+):
+    """获取对话详情
+
+    v2.7.0: 用户隔离 - 非 admin 只能访问自己的对话
+    """
     try:
         conversation = await chat_conversation_repository.get_by_id(
             conversation_id, include_messages=True
@@ -1057,6 +1112,18 @@ async def get_conversation(conversation_id: str):
 
         if not conversation:
             raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        # v2.7.0: 权限检查 - 非 admin 只能访问自己的对话
+        is_admin = "admin" in current_user.roles
+        conv_owner_id = conversation.get("user_id")
+        if not is_admin and str(conv_owner_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "AUTH_005",
+                    "message": "权限不足，您只能查看自己的对话"
+                }
+            )
 
         # 转换时间格式
         messages = []
@@ -1066,9 +1133,11 @@ async def get_conversation(conversation_id: str):
                 "role": msg["role"],
                 "content": msg["content"],
                 "timestamp": msg["timestamp"],
-                "sources": msg.get("sources", [])
+                "sources": msg.get("sources", []),
+                "info_items": msg.get("info_items", [])
             })
 
+        metadata = conversation.get("metadata", {})
         return {
             "id": conversation["_id"],
             "title": conversation["title"],
@@ -1076,7 +1145,9 @@ async def get_conversation(conversation_id: str):
             "messages": messages,
             "message_count": conversation["message_count"],
             "last_message_at": conversation["last_message_at"].isoformat() if conversation.get("last_message_at") else "",
-            "created_at": conversation["created_at"].isoformat() if conversation.get("created_at") else ""
+            "created_at": conversation["created_at"].isoformat() if conversation.get("created_at") else "",
+            "is_pinned": metadata.get("is_pinned", False),
+            "info_items": conversation.get("info_items", [])
         }
 
     except HTTPException:
@@ -1089,16 +1160,49 @@ async def get_conversation(conversation_id: str):
 @router.post(
     "/chat/conversations/{conversation_id}/messages",
     summary="添加消息",
-    description="向对话会话添加新消息"
+    description="向对话会话添加新消息。v2.7.0: 需要 Token 认证，非 admin 只能向自己的对话添加消息"
 )
-async def add_message(conversation_id: str, request: AddMessageRequest):
-    """添加消息到对话"""
+async def add_message(
+    conversation_id: str,
+    request: AddMessageRequest,
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
+):
+    """添加消息到对话
+
+    v2.7.0: 用户隔离 - 非 admin 只能向自己的对话添加消息
+    """
     try:
+        # v2.7.0: 先检查对话归属
+        conversation = await chat_conversation_repository.get_by_id(
+            conversation_id, include_messages=False
+        )
+
+        if not conversation:
+            raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        # v2.7.0: 权限检查
+        is_admin = "admin" in current_user.roles
+        conv_owner_id = conversation.get("user_id")
+        if not is_admin and str(conv_owner_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "AUTH_005",
+                    "message": "权限不足，您只能向自己的对话添加消息"
+                }
+            )
+
+        # 转换 info_items 为字典格式
+        info_items_dict = None
+        if request.info_items:
+            info_items_dict = [item.model_dump() for item in request.info_items]
+
         message_id = await chat_conversation_repository.add_message(
             conversation_id=conversation_id,
             role=request.role,
             content=request.content,
-            sources=request.sources
+            sources=request.sources,
+            metadata={"info_items": info_items_dict} if info_items_dict else None
         )
 
         if not message_id:
@@ -1121,15 +1225,39 @@ async def add_message(conversation_id: str, request: AddMessageRequest):
 @router.get(
     "/chat/conversations/{conversation_id}/messages",
     summary="获取消息历史",
-    description="获取对话会话的消息历史（支持分页）"
+    description="获取对话会话的消息历史（支持分页）。v2.7.0: 需要 Token 认证，非 admin 只能获取自己的对话消息"
 )
 async def get_messages(
     conversation_id: str,
+    current_user: User = Depends(get_current_active_user),  # v2.7.0: 强制 Token 认证
     limit: Optional[int] = None,
     before: Optional[str] = None
 ):
-    """获取消息历史"""
+    """获取消息历史
+
+    v2.7.0: 用户隔离 - 非 admin 只能获取自己的对话消息
+    """
     try:
+        # v2.7.0: 先检查对话归属
+        conversation = await chat_conversation_repository.get_by_id(
+            conversation_id, include_messages=False
+        )
+
+        if not conversation:
+            raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        # v2.7.0: 权限检查
+        is_admin = "admin" in current_user.roles
+        conv_owner_id = conversation.get("user_id")
+        if not is_admin and str(conv_owner_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "AUTH_005",
+                    "message": "权限不足，您只能获取自己的对话消息"
+                }
+            )
+
         messages = await chat_conversation_repository.get_messages(
             conversation_id=conversation_id,
             limit=limit,
@@ -1152,45 +1280,117 @@ async def get_messages(
         raise HTTPException(status_code=500, detail="获取消息历史失败")
 
 
+class UpdateConversationRequest(BaseModel):
+    """更新对话请求 - v2.7.0 扩展"""
+    title: Optional[str] = Field(None, min_length=1, max_length=100, description="会话标题")
+    is_pinned: Optional[bool] = Field(None, description="是否置顶")
+
+
 @router.patch(
     "/chat/conversations/{conversation_id}",
-    summary="更新对话标题",
-    description="更新对话会话的标题"
+    summary="更新对话",
+    description="更新对话会话的标题或置顶状态。v2.7.0: 需要 Token 认证，非 admin 只能更新自己的对话"
 )
-async def update_conversation(conversation_id: str, request: UpdateTitleRequest):
-    """更新对话标题"""
+async def update_conversation(
+    conversation_id: str,
+    request: UpdateConversationRequest,
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
+):
+    """更新对话
+
+    v2.7.0: 用户隔离 - 非 admin 只能更新自己的对话
+    """
     try:
-        success = await chat_conversation_repository.update_title(
-            conversation_id=conversation_id,
-            title=request.title
+        # v2.7.0: 先检查对话归属
+        conversation = await chat_conversation_repository.get_by_id(
+            conversation_id, include_messages=False
         )
 
-        if not success:
+        if not conversation:
             raise HTTPException(status_code=404, detail="对话会话不存在")
 
-        return {"success": True, "title": request.title}
+        # v2.7.0: 权限检查
+        is_admin = "admin" in current_user.roles
+        conv_owner_id = conversation.get("user_id")
+        if not is_admin and str(conv_owner_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "AUTH_005",
+                    "message": "权限不足，您只能更新自己的对话"
+                }
+            )
+
+        # 更新标题
+        if request.title:
+            await chat_conversation_repository.update_title(
+                conversation_id=conversation_id,
+                title=request.title
+            )
+
+        # 更新置顶状态
+        if request.is_pinned is not None:
+            await chat_conversation_repository.update_metadata(
+                conversation_id=conversation_id,
+                metadata={"is_pinned": request.is_pinned},
+                merge=True
+            )
+
+        return {
+            "success": True,
+            "title": request.title,
+            "is_pinned": request.is_pinned
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"更新对话标题失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="更新对话标题失败")
+        logger.error(f"更新对话失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="更新对话失败")
 
 
 @router.delete(
     "/chat/conversations/{conversation_id}",
     summary="删除对话",
-    description="删除指定的对话会话"
+    description="删除指定的对话会话。v2.7.0: 需要 Token 认证，非 admin 只能删除自己的对话"
 )
-async def delete_conversation(conversation_id: str):
-    """删除对话会话"""
+async def delete_conversation(
+    conversation_id: str,
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
+):
+    """删除对话会话
+
+    v2.7.0: 用户隔离 - 非 admin 只能删除自己的对话
+    """
     try:
+        # v2.7.0: 先检查对话归属
+        conversation = await chat_conversation_repository.get_by_id(
+            conversation_id, include_messages=False
+        )
+
+        if not conversation:
+            raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        # v2.7.0: 权限检查
+        is_admin = "admin" in current_user.roles
+        conv_owner_id = conversation.get("user_id")
+        if not is_admin and str(conv_owner_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "AUTH_005",
+                    "message": "权限不足，您只能删除自己的对话"
+                }
+            )
+
         success = await chat_conversation_repository.delete_conversation(
             conversation_id=conversation_id
         )
 
         if not success:
             raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        logger.info(f"删除对话会话成功: conv_id={conversation_id}, user_id={current_user.id}")
 
         return {"success": True, "deleted_id": conversation_id}
 
@@ -1204,24 +1404,36 @@ async def delete_conversation(conversation_id: str):
 @router.get(
     "/chat/conversations/search",
     summary="搜索对话",
-    description="按关键词搜索对话会话"
+    description="按关键词搜索对话会话。v2.7.0: 需要 Token 认证，admin 可搜索所有，普通用户只能搜索自己的"
 )
 async def search_conversations(
     q: str,
-    user_id: Optional[str] = None,
+    current_user: User = Depends(get_current_active_user),  # v2.7.0: 强制 Token 认证
     limit: int = 20
 ):
-    """搜索对话"""
+    """搜索对话
+
+    v2.7.0: 用户隔离
+    - admin 角色可搜索所有对话
+    - 普通用户只能搜索自己的对话
+    """
     try:
+        # v2.7.0: 用户隔离逻辑
+        is_admin = "admin" in current_user.roles
+        effective_user_id = None if is_admin else str(current_user.id)
+
+        logger.info(f"搜索对话: user_id={current_user.id}, is_admin={is_admin}, query='{q[:20]}...'")
+
         conversations = await chat_conversation_repository.search_conversations(
             query=q,
-            user_id=user_id,
+            user_id=effective_user_id,
             limit=limit
         )
 
         items = []
         for conv in conversations:
             last_msg = conv.get("last_message")
+            metadata = conv.get("metadata", {})
             items.append({
                 "id": conv["_id"],
                 "title": conv["title"],
@@ -1232,9 +1444,12 @@ async def search_conversations(
                     "id": last_msg["id"],
                     "role": last_msg["role"],
                     "content": last_msg["content"],
-                    "timestamp": last_msg["timestamp"]
+                    "timestamp": last_msg["timestamp"],
+                    "sources": last_msg.get("sources", []),
+                    "info_items": last_msg.get("info_items", [])
                 } if last_msg else None,
-                "created_at": conv["created_at"].isoformat() if conv.get("created_at") else ""
+                "created_at": conv["created_at"].isoformat() if conv.get("created_at") else "",
+                "is_pinned": metadata.get("is_pinned", False)
             })
 
         return {

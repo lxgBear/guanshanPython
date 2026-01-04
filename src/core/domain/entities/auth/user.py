@@ -65,15 +65,15 @@ class UserUpdate(BaseModel):
 
 class UserInDB(UserBase):
     """数据库中的用户模型"""
-    id: int
+    id: str  # MongoDB 使用字符串 ID (Snowflake)
     is_active: bool = True
     is_locked: bool = False
     lock_reason: Optional[str] = None
     last_login: Optional[datetime] = None
     login_attempts: int = 0
-    created_at: datetime
-    updated_at: datetime
-    created_by: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    created_by: Optional[str] = None  # MongoDB 使用字符串 ID
 
     class Config:
         from_attributes = True

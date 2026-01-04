@@ -15,6 +15,7 @@ class PermissionModule(str, Enum):
     REVIEW = "review"
     SEARCH = "search"
     SYSTEM = "system"
+    ARCHIVE = "archive"  # v2.7.0: 档案管理模块
 
 
 class PermissionAction(str, Enum):
@@ -68,6 +69,14 @@ class PermissionCode(str, Enum):
     SYSTEM_LOG = "system:log"
     SYSTEM_API = "system:api"
 
+    # v2.7.0: 档案管理
+    ARCHIVE_CREATE = "archive:create"      # 创建档案
+    ARCHIVE_READ = "archive:read"          # 读取档案（自己的+已审核的）
+    ARCHIVE_UPDATE = "archive:update"      # 更新档案
+    ARCHIVE_DELETE = "archive:delete"      # 删除档案
+    ARCHIVE_REVIEW = "archive:review"      # 审核档案（通过/驳回）
+    ARCHIVE_READ_ALL = "archive:read_all"  # 读取所有状态档案（含待审核）
+
 
 class PermissionBase(BaseModel):
     """权限基础模型"""
@@ -91,7 +100,7 @@ class PermissionCreate(PermissionBase):
 
 class PermissionInDB(PermissionBase):
     """数据库中的权限模型"""
-    id: int
+    id: str  # 使用字符串避免JavaScript大整数精度丢失
     is_active: bool = True
     created_at: datetime
 
@@ -111,6 +120,7 @@ class PermissionList(BaseModel):
 
 
 # 角色权限配置（用于初始化）
+# v2.7.0: 新增档案管理权限
 DEFAULT_ROLE_PERMISSIONS = {
     "admin": [
         # 所有权限
@@ -124,6 +134,9 @@ DEFAULT_ROLE_PERMISSIONS = {
         PermissionCode.REVIEW_READ,
         PermissionCode.SEARCH_BASIC, PermissionCode.SEARCH_ADVANCED, PermissionCode.SEARCH_MULTILANG,
         PermissionCode.SYSTEM_CONFIG, PermissionCode.SYSTEM_LOG, PermissionCode.SYSTEM_API,
+        # v2.7.0: 档案管理全部权限
+        PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
+        PermissionCode.ARCHIVE_DELETE, PermissionCode.ARCHIVE_REVIEW, PermissionCode.ARCHIVE_READ_ALL,
     ],
     "chief_reviewer": [
         PermissionCode.USER_CREATE, PermissionCode.USER_READ, PermissionCode.USER_UPDATE,
@@ -134,6 +147,9 @@ DEFAULT_ROLE_PERMISSIONS = {
         PermissionCode.REVIEW_READ,
         PermissionCode.SEARCH_BASIC, PermissionCode.SEARCH_ADVANCED, PermissionCode.SEARCH_MULTILANG,
         PermissionCode.SYSTEM_LOG,
+        # v2.7.0: 档案管理（含审核权限）
+        PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
+        PermissionCode.ARCHIVE_DELETE, PermissionCode.ARCHIVE_REVIEW, PermissionCode.ARCHIVE_READ_ALL,
     ],
     "direction_reviewer": [
         PermissionCode.USER_READ, PermissionCode.USER_LIST,
@@ -142,17 +158,27 @@ DEFAULT_ROLE_PERMISSIONS = {
         PermissionCode.REVIEW_ASSIGN, PermissionCode.REVIEW_EXECUTE, PermissionCode.REVIEW_APPROVE,
         PermissionCode.REVIEW_READ,
         PermissionCode.SEARCH_BASIC, PermissionCode.SEARCH_ADVANCED, PermissionCode.SEARCH_MULTILANG,
+        # v2.7.0: 档案管理（含审核权限）
+        PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
+        PermissionCode.ARCHIVE_DELETE, PermissionCode.ARCHIVE_REVIEW, PermissionCode.ARCHIVE_READ_ALL,
     ],
     "reviewer": [
         PermissionCode.INFO_CREATE, PermissionCode.INFO_READ, PermissionCode.INFO_UPDATE,
         PermissionCode.REVIEW_EXECUTE, PermissionCode.REVIEW_READ,
         PermissionCode.SEARCH_BASIC, PermissionCode.SEARCH_ADVANCED, PermissionCode.SEARCH_MULTILANG,
+        # v2.7.0: 档案管理（含审核权限）
+        PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
+        PermissionCode.ARCHIVE_REVIEW, PermissionCode.ARCHIVE_READ_ALL,
     ],
     "collector": [
         PermissionCode.INFO_CREATE, PermissionCode.INFO_READ, PermissionCode.INFO_UPDATE,
         PermissionCode.SEARCH_BASIC, PermissionCode.SEARCH_ADVANCED,
+        # v2.7.0: 档案管理（仅基本CRUD，无审核权限）
+        PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
     ],
     "customer": [
         PermissionCode.SEARCH_BASIC,
+        # v2.7.0: 档案管理（仅创建和读取自己的）
+        PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ,
     ],
 }

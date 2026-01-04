@@ -1,13 +1,11 @@
-"""用户管理API端点"""
+"""用户管理API端点 (MongoDB 版本)"""
 
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from src.api.dependencies.auth import (
-    get_db_session,
     get_current_active_user,
     require_permissions
 )
@@ -32,7 +30,7 @@ class UserListResponse(BaseModel):
 
 class UserCreateResponse(BaseModel):
     """创建用户响应"""
-    id: int
+    id: str  # MongoDB 使用字符串ID
     username: str
     message: str
 
@@ -53,8 +51,7 @@ async def list_users(
     size: int = Query(20, ge=1, le=100, description="每页数量"),
     keyword: Optional[str] = Query(None, description="搜索关键词"),
     role: Optional[str] = Query(None, description="角色代码筛选"),
-    is_active: Optional[bool] = Query(None, description="状态筛选"),
-    session: AsyncSession = Depends(get_db_session)
+    is_active: Optional[bool] = Query(None, description="状态筛选")
 ):
     """
     获取用户列表
@@ -63,7 +60,7 @@ async def list_users(
     - 支持按角色筛选
     - 支持按状态筛选
     """
-    user_service = UserService(session)
+    user_service = UserService()
     users, total = await user_service.list_users(
         page=page,
         size=size,
@@ -92,8 +89,7 @@ async def list_users(
 )
 async def create_user(
     data: UserCreate,
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     创建新用户
@@ -106,7 +102,7 @@ async def create_user(
     - **department**: 部门（选填）
     - **role_codes**: 角色代码列表（选填，支持多角色）
     """
-    user_service = UserService(session)
+    user_service = UserService()
 
     try:
         user = await user_service.create_user(data, created_by=current_user.id)
@@ -129,11 +125,10 @@ async def create_user(
     dependencies=[Depends(require_permissions("user:read"))]
 )
 async def get_user(
-    user_id: int,
-    session: AsyncSession = Depends(get_db_session)
+    user_id: str  # MongoDB 使用字符串ID
 ):
     """获取指定用户的详细信息"""
-    user_service = UserService(session)
+    user_service = UserService()
     user = await user_service.get_user(user_id)
 
     if not user:
@@ -152,17 +147,16 @@ async def get_user(
     dependencies=[Depends(require_permissions("user:update"))]
 )
 async def update_user(
-    user_id: int,
+    user_id: str,  # MongoDB 使用字符串ID
     data: UserUpdate,
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     更新用户信息
 
     支持更新：邮箱、显示名称、手机号、部门、状态、角色
     """
-    user_service = UserService(session)
+    user_service = UserService()
 
     try:
         user = await user_service.update_user(
@@ -185,9 +179,8 @@ async def update_user(
     dependencies=[Depends(require_permissions("user:delete"))]
 )
 async def delete_user(
-    user_id: int,
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db_session)
+    user_id: str,  # MongoDB 使用字符串ID
+    current_user: User = Depends(get_current_active_user)
 ):
     """删除用户"""
     # 不能删除自己
@@ -197,7 +190,7 @@ async def delete_user(
             detail={"code": "USER_004", "message": "不能删除自己"}
         )
 
-    user_service = UserService(session)
+    user_service = UserService()
     result = await user_service.delete_user(user_id)
 
     if not result:
@@ -216,17 +209,16 @@ async def delete_user(
     dependencies=[Depends(require_permissions("user:update"))]
 )
 async def reset_user_password(
-    user_id: int,
+    user_id: str,  # MongoDB 使用字符串ID
     data: PasswordReset,
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     重置用户密码（管理员操作）
 
     不需要旧密码，直接设置新密码
     """
-    auth_service = AuthService(session)
+    auth_service = AuthService()
 
     try:
         await auth_service.reset_password(
@@ -249,10 +241,9 @@ async def reset_user_password(
     dependencies=[Depends(require_permissions("user:update"))]
 )
 async def lock_user(
-    user_id: int,
+    user_id: str,  # MongoDB 使用字符串ID
     reason: str = Query(..., description="锁定原因"),
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(get_current_active_user)
 ):
     """锁定用户账户"""
     # 不能锁定自己
@@ -262,7 +253,7 @@ async def lock_user(
             detail={"code": "USER_004", "message": "不能锁定自己"}
         )
 
-    user_service = UserService(session)
+    user_service = UserService()
     user = await user_service.lock_user(user_id, reason)
 
     if not user:
@@ -281,11 +272,10 @@ async def lock_user(
     dependencies=[Depends(require_permissions("user:update"))]
 )
 async def unlock_user(
-    user_id: int,
-    session: AsyncSession = Depends(get_db_session)
+    user_id: str  # MongoDB 使用字符串ID
 ):
     """解锁用户账户"""
-    user_service = UserService(session)
+    user_service = UserService()
     user = await user_service.unlock_user(user_id)
 
     if not user:
@@ -304,10 +294,9 @@ async def unlock_user(
     dependencies=[Depends(require_permissions("role:assign"))]
 )
 async def assign_user_roles(
-    user_id: int,
+    user_id: str,  # MongoDB 使用字符串ID
     data: RoleAssign,
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     分配角色给用户
@@ -315,7 +304,7 @@ async def assign_user_roles(
     - 支持同时分配多个角色
     - 会替换用户现有的所有角色
     """
-    user_service = UserService(session)
+    user_service = UserService()
 
     try:
         user = await user_service.assign_roles(
@@ -338,13 +327,12 @@ async def assign_user_roles(
     dependencies=[Depends(require_permissions("role:assign"))]
 )
 async def add_user_role(
-    user_id: int,
+    user_id: str,  # MongoDB 使用字符串ID
     role_code: str,
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(get_current_active_user)
 ):
     """给用户添加一个角色（不影响现有角色）"""
-    user_service = UserService(session)
+    user_service = UserService()
 
     try:
         user = await user_service.add_role(
@@ -367,12 +355,11 @@ async def add_user_role(
     dependencies=[Depends(require_permissions("role:assign"))]
 )
 async def remove_user_role(
-    user_id: int,
-    role_code: str,
-    session: AsyncSession = Depends(get_db_session)
+    user_id: str,  # MongoDB 使用字符串ID
+    role_code: str
 ):
     """移除用户的一个角色"""
-    user_service = UserService(session)
+    user_service = UserService()
 
     try:
         user = await user_service.remove_role(user_id, role_code)

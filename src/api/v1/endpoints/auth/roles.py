@@ -1,13 +1,11 @@
-"""角色管理API端点"""
+"""角色管理API端点 (MongoDB 版本)"""
 
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
 from src.api.dependencies.auth import (
-    get_db_session,
     get_current_active_user,
     require_permissions,
     require_roles
@@ -45,11 +43,10 @@ class MessageResponse(BaseModel):
 )
 async def list_roles(
     is_active: Optional[bool] = Query(None, description="状态筛选"),
-    include_system: bool = Query(True, description="是否包含系统角色"),
-    session: AsyncSession = Depends(get_db_session)
+    include_system: bool = Query(True, description="是否包含系统角色")
 ):
     """获取所有角色列表"""
-    role_service = RoleService(session)
+    role_service = RoleService()
     roles = await role_service.list_roles(
         is_active=is_active,
         include_system=include_system
@@ -65,8 +62,7 @@ async def list_roles(
     dependencies=[Depends(require_permissions("role:create"))]
 )
 async def create_role(
-    data: RoleCreate,
-    session: AsyncSession = Depends(get_db_session)
+    data: RoleCreate
 ):
     """
     创建新角色
@@ -78,7 +74,7 @@ async def create_role(
     - **parent_role_code**: 父级角色代码（选填，用于权限继承）
     - **permission_codes**: 权限代码列表（选填）
     """
-    role_service = RoleService(session)
+    role_service = RoleService()
 
     try:
         role = await role_service.create_role(data)
@@ -97,11 +93,10 @@ async def create_role(
     dependencies=[Depends(require_permissions("role:read"))]
 )
 async def get_role(
-    role_id: int,
-    session: AsyncSession = Depends(get_db_session)
+    role_id: str  # MongoDB 使用字符串ID
 ):
     """获取指定角色的详细信息"""
-    role_service = RoleService(session)
+    role_service = RoleService()
     role = await role_service.get_role(role_id)
 
     if not role:
@@ -120,16 +115,15 @@ async def get_role(
     dependencies=[Depends(require_permissions("role:update"))]
 )
 async def update_role(
-    role_id: int,
-    data: RoleUpdate,
-    session: AsyncSession = Depends(get_db_session)
+    role_id: str,  # MongoDB 使用字符串ID
+    data: RoleUpdate
 ):
     """
     更新角色信息
 
     注意：系统角色的某些字段（权限级别、父级角色）不可修改
     """
-    role_service = RoleService(session)
+    role_service = RoleService()
 
     try:
         role = await role_service.update_role(role_id, data)
@@ -148,15 +142,14 @@ async def update_role(
     dependencies=[Depends(require_permissions("role:delete"))]
 )
 async def delete_role(
-    role_id: int,
-    session: AsyncSession = Depends(get_db_session)
+    role_id: str  # MongoDB 使用字符串ID
 ):
     """
     删除角色
 
     注意：系统角色不可删除
     """
-    role_service = RoleService(session)
+    role_service = RoleService()
 
     try:
         result = await role_service.delete_role(role_id)
@@ -180,16 +173,15 @@ async def delete_role(
     dependencies=[Depends(require_permissions("role:update"))]
 )
 async def update_role_permissions(
-    role_id: int,
-    data: RolePermissionUpdate,
-    session: AsyncSession = Depends(get_db_session)
+    role_id: str,  # MongoDB 使用字符串ID
+    data: RolePermissionUpdate
 ):
     """
     更新角色的权限配置
 
     会替换角色现有的所有权限
     """
-    role_service = RoleService(session)
+    role_service = RoleService()
 
     try:
         role = await role_service.update_role_permissions(role_id, data.permission_codes)
@@ -208,11 +200,10 @@ async def update_role_permissions(
     dependencies=[Depends(require_permissions("role:read"))]
 )
 async def get_role_by_code(
-    role_code: str,
-    session: AsyncSession = Depends(get_db_session)
+    role_code: str
 ):
     """根据角色代码获取角色详情"""
-    role_service = RoleService(session)
+    role_service = RoleService()
     role = await role_service.get_role_by_code(role_code)
 
     if not role:
@@ -233,14 +224,13 @@ async def get_role_by_code(
     dependencies=[Depends(require_permissions("role:read"))]
 )
 async def list_permissions(
-    module: Optional[str] = Query(None, description="按模块筛选"),
-    session: AsyncSession = Depends(get_db_session)
+    module: Optional[str] = Query(None, description="按模块筛选")
 ):
     """
     获取所有权限列表
 
     返回权限列表和模块列表
     """
-    role_service = RoleService(session)
+    role_service = RoleService()
     permissions, modules = await role_service.list_permissions(module=module)
     return PermissionListResponse(items=permissions, modules=modules)

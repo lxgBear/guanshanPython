@@ -86,6 +86,7 @@ class ChatConversationRepository:
         self,
         user_id: Optional[str] = None,
         title: Optional[str] = None,
+        info_items: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         """创建新对话会话
@@ -93,7 +94,8 @@ class ChatConversationRepository:
         Args:
             user_id: 用户ID（可选，用于隔离）
             title: 会话标题（可选，会从首条消息自动生成）
-            metadata: 元数据（可选）
+            info_items: 对话关联的信息条目（可选）v2.7.0 新增
+            metadata: 元数据（可选，可包含 is_pinned 等配置）
 
         Returns:
             str: 创建的会话ID（雪花算法ID字符串）
@@ -114,9 +116,10 @@ class ChatConversationRepository:
             "title": title or "新对话",
             "user_id": user_id,
             "messages": [],
+            "info_items": info_items or [],  # v2.7.0 新增
             "message_count": 0,
             "last_message_at": now,
-            "metadata": metadata or {},
+            "metadata": metadata or {},  # 包含 is_pinned 等配置
             "created_at": now,
             "updated_at": now
         }
@@ -135,6 +138,7 @@ class ChatConversationRepository:
         role: str,
         content: str,
         sources: Optional[List[Dict[str, Any]]] = None,
+        info_items: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         """添加消息到对话
@@ -144,6 +148,7 @@ class ChatConversationRepository:
             role: 消息角色 ("user" | "assistant")
             content: 消息内容
             sources: AI回复时的来源引用（可选）
+            info_items: 关联的信息条目（可选）v2.7.0 新增
             metadata: 消息元数据（可选）
 
         Returns:
@@ -159,12 +164,17 @@ class ChatConversationRepository:
         message_id = generate_string_id()
         now = datetime.utcnow()
 
+        # v2.7.0: 从 metadata 中提取 info_items（向后兼容）
+        if metadata and "info_items" in metadata:
+            info_items = metadata.pop("info_items")
+
         message = {
             "id": message_id,
             "role": role,
             "content": content,
             "timestamp": now.isoformat(),
             "sources": sources or [],
+            "info_items": info_items or [],  # v2.7.0 新增
             "metadata": metadata or {}
         }
 
@@ -410,6 +420,52 @@ class ChatConversationRepository:
         )
 
         return result.matched_count > 0
+
+    async def update_info_items(
+        self,
+        conversation_id: str,
+        info_items: List[Dict[str, Any]],
+        append: bool = False
+    ) -> bool:
+        """更新对话的信息条目
+
+        v2.7.0 新增
+
+        Args:
+            conversation_id: 会话ID
+            info_items: 信息条目列表
+            append: 是否追加（True=追加，False=替换）
+
+        Returns:
+            bool: 更新是否成功
+        """
+        collection = await self._get_collection()
+
+        if append:
+            # 追加模式
+            update_op = {
+                "$push": {"info_items": {"$each": info_items}},
+                "$set": {"updated_at": datetime.utcnow()}
+            }
+        else:
+            # 替换模式
+            update_op = {
+                "$set": {
+                    "info_items": info_items,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+
+        result = await collection.update_one(
+            {"_id": conversation_id},
+            update_op
+        )
+
+        success = result.matched_count > 0
+        if success:
+            logger.info(f"更新对话信息条目成功: ID={conversation_id}, count={len(info_items)}, append={append}")
+
+        return success
 
     async def delete_conversation(self, conversation_id: str) -> bool:
         """删除对话会话

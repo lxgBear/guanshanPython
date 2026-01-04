@@ -39,8 +39,8 @@ class RoleUpdate(BaseModel):
 
 class RoleInDB(RoleBase):
     """数据库中的角色模型"""
-    id: int
-    parent_role_id: Optional[int] = None
+    id: str  # 使用字符串避免JavaScript大整数精度丢失
+    parent_role_id: Optional[str] = None  # 同样使用字符串
     is_system: bool = False
     is_active: bool = True
     created_at: datetime

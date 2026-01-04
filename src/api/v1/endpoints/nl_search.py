@@ -22,7 +22,8 @@ from datetime import datetime
 import logging
 import re
 
-from src.api.dependencies.auth import require_permissions
+from src.api.dependencies.auth import require_permissions, get_current_active_user
+from src.core.domain.entities.auth import User
 
 # 导入服务层
 from src.services.nl_search.nl_search_service import nl_search_service
@@ -325,8 +326,9 @@ class CreateArchiveRequest(BaseModel):
     - archive_name 和 description 自动清理危险字符
 
     v2.6.0: 新增 search_task_id 支持定时任务关联
+    v2.7.0: 移除 user_id 参数，强制从 Token 获取用户身份（安全增强）
     """
-    user_id: int = Field(..., description="用户ID", gt=0)
+    # v2.7.0: user_id 已移除，从 Token 认证中获取
     archive_name: str = Field(..., description="档案名称", min_length=1, max_length=255)
     description: Optional[str] = Field(None, description="档案描述", max_length=2000)
     tags: Optional[List[str]] = Field(None, description="档案标签列表", max_length=20)
@@ -406,6 +408,7 @@ class ArchiveResponse(BaseModel):
     v2.5.2: 新增 generated_report 字段，返回 AI 生成的档案摘要报告
     v2.5.3: 新增 user_summary 字段，返回用户上传的内容总结
     v2.6.0: 新增 search_task_id 字段，支持定时任务关联
+    v2.7.0: 新增审核相关字段 (status, reviewer_id, reviewer_name, reviewed_at, rejection_feedback, submission_count)
     """
     archive_id: str = Field(..., description="档案ID（MongoDB ObjectId）")
     user_id: int = Field(..., description="用户ID")
@@ -418,6 +421,13 @@ class ArchiveResponse(BaseModel):
     items: Optional[List[ArchiveItemResponse]] = Field(None, description="档案条目列表（仅详情接口返回）")
     generated_report: Optional[str] = Field(None, description="AI生成的档案摘要报告（Markdown格式）")
     user_summary: Optional[str] = Field(None, description="用户上传的内容总结（用于总结items列表内容）")
+    # v2.7.0: 审核相关字段
+    status: str = Field("pending", description="审核状态: pending(待审核)/approved(已审核)/rejected(已驳回)")
+    reviewer_id: Optional[int] = Field(None, description="审核人ID")
+    reviewer_name: Optional[str] = Field(None, description="审核人姓名")
+    reviewed_at: Optional[str] = Field(None, description="审核时间")
+    rejection_feedback: Optional[str] = Field(None, description="驳回原因/改进建议")
+    submission_count: int = Field(1, description="提交次数")
     created_at: Optional[str] = Field(None, description="创建时间")
     updated_at: Optional[str] = Field(None, description="更新时间")
 
@@ -428,6 +438,85 @@ class ArchiveListResponse(BaseModel):
     items: List[ArchiveResponse] = Field(..., description="档案列表")
     page: int = Field(..., description="当前页码")
     page_size: int = Field(..., description="每页数量")
+
+
+# ==================== v2.7.0: 审核流程数据模型 ====================
+
+class ArchiveReviewRequest(BaseModel):
+    """档案审核请求
+
+    v2.7.0: 新增
+
+    用于审核员审核档案（通过或驳回）。
+    """
+    action: str = Field(
+        ...,
+        description="审核操作: approve(通过) 或 reject(驳回)",
+        pattern="^(approve|reject)$"
+    )
+    feedback: Optional[str] = Field(
+        None,
+        description="驳回原因/改进建议（驳回时必填）",
+        max_length=2000
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "action": "reject",
+                "feedback": "内容质量不符合标准，请补充更多来源"
+            }
+        }
+
+
+class ArchiveReviewResponse(BaseModel):
+    """档案审核响应
+
+    v2.7.0: 新增
+    """
+    archive_id: str = Field(..., description="档案ID")
+    action: str = Field(..., description="审核操作")
+    new_status: str = Field(..., description="审核后的状态")
+    reviewer_id: int = Field(..., description="审核人ID")
+    reviewer_name: str = Field(..., description="审核人姓名")
+    reviewed_at: str = Field(..., description="审核时间")
+    feedback: Optional[str] = Field(None, description="驳回原因")
+    message: str = Field(..., description="响应消息")
+
+
+class ArchiveResubmitResponse(BaseModel):
+    """档案重新提交响应
+
+    v2.7.0: 新增
+    """
+    archive_id: str = Field(..., description="档案ID")
+    new_status: str = Field(..., description="重新提交后的状态")
+    submission_count: int = Field(..., description="提交次数")
+    message: str = Field(..., description="响应消息")
+
+
+class ArchiveStatsResponse(BaseModel):
+    """档案统计响应
+
+    v2.7.0: 新增
+    """
+    pending: int = Field(..., description="待审核档案数量")
+    approved: int = Field(..., description="已审核档案数量")
+    rejected: int = Field(..., description="已驳回档案数量")
+    total: int = Field(..., description="档案总数")
+
+
+class ArchiveResponseWithStatus(ArchiveResponse):
+    """带审核状态的档案响应
+
+    v2.7.0: 扩展 ArchiveResponse，添加审核相关字段
+    """
+    status: str = Field("pending", description="审核状态: pending/approved/rejected")
+    reviewer_id: Optional[int] = Field(None, description="审核人ID")
+    reviewer_name: Optional[str] = Field(None, description="审核人姓名")
+    reviewed_at: Optional[str] = Field(None, description="审核时间")
+    rejection_feedback: Optional[str] = Field(None, description="驳回原因")
+    submission_count: int = Field(1, description="提交次数")
 
 
 # ==================== API端点 ====================
@@ -697,9 +786,12 @@ async def get_rag_content(mongo_id: str):
     "/user-archives",
     response_model=ArchiveResponse,
     summary="创建档案",
-    description="从搜索结果创建用户档案"
+    description="从搜索结果创建用户档案（需要认证）"
 )
-async def create_archive(request: CreateArchiveRequest):
+async def create_archive(
+    request: CreateArchiveRequest,
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
+):
     """
     创建档案
 
@@ -796,8 +888,9 @@ async def create_archive(request: CreateArchiveRequest):
 
         # 调用服务层创建档案（使用清理后的值）
         # v2.6.0: 新增 search_task_id 支持定时任务关联
+        # v2.7.0: 从 Token 获取用户身份，不再从请求参数获取
         result = await mongo_archive_service.create_archive(
-            user_id=request.user_id,
+            user_id=current_user.id,  # v2.7.0: 从 Token 获取
             archive_name=archive_name,  # v2.4.0: 使用清理后的名称
             items=items_data,
             description=description,  # v2.4.0: 使用清理后的描述
@@ -808,10 +901,10 @@ async def create_archive(request: CreateArchiveRequest):
 
         logger.info(f"档案创建成功: archive_id={result['archive_id']}")
 
-        # 返回档案信息
+        # 返回档案信息 (v2.7.0: 添加审核状态字段，从 Token 获取用户身份)
         return ArchiveResponse(
             archive_id=result["archive_id"],
-            user_id=request.user_id,
+            user_id=current_user.id,  # v2.7.0: 从 Token 获取
             archive_name=result["archive_name"],
             description=request.description,
             tags=request.tags or [],
@@ -820,7 +913,14 @@ async def create_archive(request: CreateArchiveRequest):
             items_count=result["items_count"],
             items=None,  # 创建接口不返回条目详情
             created_at=result["created_at"],
-            updated_at=None
+            updated_at=None,
+            # v2.7.0: 审核状态字段（新创建的档案默认为待审核）
+            status="pending",
+            reviewer_id=None,
+            reviewer_name=None,
+            reviewed_at=None,
+            rejection_feedback=None,
+            submission_count=1
         )
 
     except ValueError as e:
@@ -847,26 +947,28 @@ async def create_archive(request: CreateArchiveRequest):
     "/user-archives",
     response_model=ArchiveListResponse,
     summary="查询档案列表",
-    description="分页查询用户的档案列表"
+    description="分页查询用户的档案列表（v2.7.0: 支持按状态筛选，强制用户隔离）"
 )
 async def list_archives(
-    user_id: Optional[int] = Query(None, gt=0, description="用户ID（可选，不传则查询所有档案）"),
+    status: Optional[str] = Query(None, pattern="^(pending|approved|rejected)$", description="审核状态筛选（v2.7.0新增）"),
     limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
-    offset: int = Query(0, ge=0, description="分页偏移量")
+    offset: int = Query(0, ge=0, description="分页偏移量"),
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
 ):
     """
     查询档案列表
 
-    **功能**: ✅ 完整实现
+    **功能**: ✅ 完整实现 (v2.7.0: 支持按状态筛选，强制用户隔离)
 
     **功能**:
     - 分页查询档案列表
-    - 可选择按用户ID筛选，或查询所有档案
+    - v2.7.0: 强制用户隔离，普通用户只能查看自己的档案，admin 可查看所有
+    - v2.7.0: 支持按审核状态筛选 (pending/approved/rejected)
     - 返回档案基本信息（不含条目详情）
     - 按创建时间倒序排列
 
     Args:
-        user_id (Optional[int]): 用户ID（可选，不传则查询所有档案）
+        status (Optional[str]): 审核状态筛选（v2.7.0新增）
         limit (int): 返回数量限制 (1-100)
         offset (int): 分页偏移量
 
@@ -878,24 +980,33 @@ async def list_archives(
 
     Example:
         ```bash
-        # 查询所有档案
-        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives?limit=10&offset=0"
+        # v2.7.0: 查询档案（需要 Token 认证，自动根据用户角色过滤）
+        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives?limit=10&offset=0" \
+            -H "Authorization: Bearer <token>"
 
-        # 查询指定用户的档案
-        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives?user_id=1001&limit=10&offset=0"
+        # v2.7.0: 查询待审核的档案
+        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives?status=pending&limit=10&offset=0" \
+            -H "Authorization: Bearer <token>"
         ```
     """
     try:
-        logger.info(f"查询档案列表: user_id={user_id}, limit={limit}, offset={offset}")
+        # v2.7.0: 用户隔离逻辑
+        # admin 角色可查看所有档案，普通用户只能查看自己的
+        is_admin = "admin" in current_user.roles
+        effective_user_id = None if is_admin else current_user.id
 
-        # 调用服务层查询
-        archives = await mongo_archive_service.list_archives(
-            user_id=user_id,
+        logger.info(f"查询档案列表: user_id={current_user.id}, is_admin={is_admin}, effective_filter={effective_user_id}, status={status}, limit={limit}, offset={offset}")
+
+        # v2.7.0: 使用支持状态筛选的服务方法
+        archives = await mongo_archive_service.list_archives_by_status(
+            user_id=effective_user_id,  # None 表示查询所有，否则只查询该用户的
+            status=status,
             limit=limit,
             offset=offset
         )
 
         # 构建响应 (v2.5.2: 添加 generated_report, v2.5.3: 添加 user_summary, v2.6.0: 添加 search_task_id)
+        # v2.7.0: 添加审核状态字段
         items = [
             ArchiveResponse(
                 archive_id=archive["archive_id"],
@@ -910,7 +1021,14 @@ async def list_archives(
                 generated_report=archive.get("generated_report"),  # v2.5.2: AI生成的摘要报告
                 user_summary=archive.get("user_summary"),  # v2.5.3: 用户上传的内容总结
                 created_at=archive["created_at"],
-                updated_at=archive["updated_at"]
+                updated_at=archive["updated_at"],
+                # v2.7.0: 审核状态字段
+                status=archive.get("status", "pending"),
+                reviewer_id=archive.get("reviewer_id"),
+                reviewer_name=archive.get("reviewer_name"),
+                reviewed_at=archive.get("reviewed_at"),
+                rejection_feedback=archive.get("rejection_feedback"),
+                submission_count=archive.get("submission_count", 1)
             )
             for archive in archives
         ]
@@ -937,55 +1055,73 @@ async def list_archives(
     "/user-archives/{archive_id}",
     response_model=ArchiveResponse,
     summary="获取档案详情",
-    description="获取档案的完整信息（包含所有条目）"
+    description="获取档案的完整信息（包含所有条目，v2.7.0: 强制用户隔离）"
 )
 async def get_archive(
     archive_id: str,
-    user_id: Optional[int] = Query(None, description="用户ID（可选，用于权限验证）")
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
 ):
     """
     获取档案详情
 
-    **功能**: ✅ 完整实现
+    **功能**: ✅ 完整实现 (v2.7.0: 强制用户隔离)
 
     **功能**:
     - 获取档案完整信息
     - 包含所有档案条目
-    - 支持权限验证
+    - v2.7.0: 强制 Token 认证，自动验证访问权限
+    - v2.7.0: admin 可查看所有档案，普通用户只能查看自己的
 
     Args:
-        archive_id (int): 档案ID
-        user_id (Optional[int]): 用户ID（可选，用于权限验证）
+        archive_id (str): 档案ID
 
     Returns:
         ArchiveResponse: 档案详情（包含条目）
 
     Raises:
         HTTPException:
-            - 404: 档案不存在或无权访问
+            - 401: 未认证
+            - 403: 无权访问（非自己的档案且非 admin）
+            - 404: 档案不存在
             - 500: 服务错误
 
     Example:
         ```bash
-        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives/1?user_id=1001"
+        # v2.7.0: 需要 Token 认证
+        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives/abc123" \
+            -H "Authorization: Bearer <token>"
         ```
     """
     try:
-        logger.info(f"获取档案详情: archive_id={archive_id}, user_id={user_id}")
+        # v2.7.0: 用户隔离逻辑
+        is_admin = "admin" in current_user.roles
+        logger.info(f"获取档案详情: archive_id={archive_id}, user_id={current_user.id}, is_admin={is_admin}")
 
-        # 调用服务层获取档案
+        # 先获取档案（不带 user_id 过滤，用于检查归属）
         archive = await mongo_archive_service.get_archive(
             archive_id=archive_id,
-            user_id=user_id
+            user_id=None  # 先不过滤，获取后再检查权限
         )
 
         if not archive:
-            logger.warning(f"档案不存在或无权访问: archive_id={archive_id}, user_id={user_id}")
+            logger.warning(f"档案不存在: archive_id={archive_id}")
             raise HTTPException(
                 status_code=404,
                 detail={
                     "error": "档案不存在",
-                    "message": f"未找到档案或您无权访问: archive_id={archive_id}"
+                    "message": f"未找到档案: archive_id={archive_id}"
+                }
+            )
+
+        # v2.7.0: 权限检查 - 非 admin 只能访问自己的档案
+        archive_owner_id = archive.get("user_id")
+        if not is_admin and str(archive_owner_id) != str(current_user.id):
+            logger.warning(f"无权访问档案: archive_id={archive_id}, owner={archive_owner_id}, requester={current_user.id}")
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "AUTH_005",
+                    "message": "权限不足，您只能查看自己创建的档案"
                 }
             )
 
@@ -1011,6 +1147,7 @@ async def get_archive(
         # v2.5.2: 添加 generated_report 字段
         # v2.5.3: 添加 user_summary 字段
         # v2.6.0: 添加 search_task_id 字段
+        # v2.7.0: 添加审核状态字段
         return ArchiveResponse(
             archive_id=archive["archive_id"],
             user_id=archive["user_id"],
@@ -1024,7 +1161,14 @@ async def get_archive(
             generated_report=archive.get("generated_report"),  # v2.5.2: AI生成的摘要报告
             user_summary=archive.get("user_summary"),  # v2.5.3: 用户上传的内容总结
             created_at=archive["created_at"],
-            updated_at=archive["updated_at"]
+            updated_at=archive["updated_at"],
+            # v2.7.0: 审核状态字段
+            status=archive.get("status", "pending"),
+            reviewer_id=archive.get("reviewer_id"),
+            reviewer_name=archive.get("reviewer_name"),
+            reviewed_at=archive.get("reviewed_at"),
+            rejection_feedback=archive.get("rejection_feedback"),
+            submission_count=archive.get("submission_count", 1)
         )
 
     except HTTPException:
@@ -1044,20 +1188,22 @@ async def get_archive(
     "/user-archives/{archive_id}",
     response_model=ArchiveResponse,
     summary="更新档案",
-    description="更新档案的基本信息（名称、描述、标签、user_summary、generated_report）"
+    description="更新档案的基本信息（v2.7.0: 强制用户隔离，仅所有者或 admin 可更新）"
 )
 async def update_archive(
     archive_id: str,
-    request: UpdateArchiveRequest = None
+    request: UpdateArchiveRequest = None,
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
 ):
     """
     更新档案
 
-    **功能**: ✅ 完整实现
+    **功能**: ✅ 完整实现 (v2.7.0: 强制用户隔离)
 
     **功能**:
     - 更新档案名称、描述、标签
     - 自动更新 updated_at 字段
+    - v2.7.0: 强制 Token 认证，仅所有者或 admin 可更新
 
     Args:
         archive_id (str): 档案ID
@@ -1068,14 +1214,17 @@ async def update_archive(
 
     Raises:
         HTTPException:
-            - 400: 输入验证失败
+            - 401: 未认证
+            - 403: 无权更新（非所有者且非 admin）
             - 404: 档案不存在
             - 500: 服务错误
 
     Example:
         ```bash
-        curl -X PUT "http://localhost:8000/api/v1/nl-search/user-archives/{archive_id}" \\
-          -H "Content-Type: application/json" \\
+        # v2.7.0: 需要 Token 认证
+        curl -X PUT "http://localhost:8000/api/v1/nl-search/user-archives/{archive_id}" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer <token>" \
           -d '{
             "archive_name": "新档案名称",
             "description": "更新的描述",
@@ -1084,7 +1233,26 @@ async def update_archive(
         ```
     """
     try:
-        logger.info(f"更新档案: archive_id={archive_id}")
+        # v2.7.0: 用户隔离逻辑
+        is_admin = "admin" in current_user.roles
+        logger.info(f"更新档案: archive_id={archive_id}, user_id={current_user.id}, is_admin={is_admin}")
+
+        # 先获取档案检查权限
+        existing_archive = await mongo_archive_service.get_archive(archive_id=archive_id, user_id=None)
+        if not existing_archive:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "档案不存在", "message": f"未找到档案: archive_id={archive_id}"}
+            )
+
+        # v2.7.0: 权限检查 - 非 admin 只能更新自己的档案
+        archive_owner_id = existing_archive.get("user_id")
+        if not is_admin and str(archive_owner_id) != str(current_user.id):
+            logger.warning(f"无权更新档案: archive_id={archive_id}, owner={archive_owner_id}, requester={current_user.id}")
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "AUTH_005", "message": "权限不足，您只能更新自己创建的档案"}
+            )
 
         # 调用服务层更新 (v2.5.9: 支持 generated_report 字段)
         success = await mongo_archive_service.update_archive(
@@ -1154,19 +1322,20 @@ async def update_archive(
 @router.delete(
     "/user-archives/{archive_id}",
     summary="删除档案",
-    description="删除档案及其所有条目",
-    dependencies=[Depends(require_permissions("info:delete"))]
+    description="删除档案及其所有条目（v2.7.0: 强制用户隔离，仅所有者或 admin 可删除）"
 )
 async def delete_archive(
-    archive_id: str
+    archive_id: str,
+    current_user: User = Depends(get_current_active_user)  # v2.7.0: 强制 Token 认证
 ):
     """
     删除档案
 
-    **功能**: ✅ 完整实现
+    **功能**: ✅ 完整实现 (v2.7.0: 强制用户隔离)
 
     **功能**:
     - 删除档案及所有条目（级联删除）
+    - v2.7.0: 强制 Token 认证，仅所有者或 admin 可删除
 
     Args:
         archive_id (str): 档案ID (ObjectId字符串)
@@ -1176,16 +1345,39 @@ async def delete_archive(
 
     Raises:
         HTTPException:
+            - 401: 未认证
+            - 403: 无权删除（非所有者且非 admin）
             - 404: 档案不存在
             - 500: 服务错误
 
     Example:
         ```bash
-        curl -X DELETE "http://localhost:8000/api/v1/nl-search/user-archives/692825cfab7ab1dc61932133"
+        # v2.7.0: 需要 Token 认证
+        curl -X DELETE "http://localhost:8000/api/v1/nl-search/user-archives/692825cfab7ab1dc61932133" \
+            -H "Authorization: Bearer <token>"
         ```
     """
     try:
-        logger.info(f"删除档案: archive_id={archive_id}")
+        # v2.7.0: 用户隔离逻辑
+        is_admin = "admin" in current_user.roles
+        logger.info(f"删除档案: archive_id={archive_id}, user_id={current_user.id}, is_admin={is_admin}")
+
+        # 先获取档案检查权限
+        existing_archive = await mongo_archive_service.get_archive(archive_id=archive_id, user_id=None)
+        if not existing_archive:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "档案不存在", "message": f"未找到档案: archive_id={archive_id}"}
+            )
+
+        # v2.7.0: 权限检查 - 非 admin 只能删除自己的档案
+        archive_owner_id = existing_archive.get("user_id")
+        if not is_admin and str(archive_owner_id) != str(current_user.id):
+            logger.warning(f"无权删除档案: archive_id={archive_id}, owner={archive_owner_id}, requester={current_user.id}")
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "AUTH_005", "message": "权限不足，您只能删除自己创建的档案"}
+            )
 
         # 调用服务层删除
         success = await mongo_archive_service.delete_archive(
@@ -1193,12 +1385,12 @@ async def delete_archive(
         )
 
         if not success:
-            logger.warning(f"档案不存在: archive_id={archive_id}")
+            logger.warning(f"档案删除失败: archive_id={archive_id}")
             raise HTTPException(
-                status_code=404,
+                status_code=500,
                 detail={
-                    "error": "档案不存在",
-                    "message": "未找到指定的档案"
+                    "error": "删除失败",
+                    "message": "档案删除失败，请稍后重试"
                 }
             )
 
@@ -1219,6 +1411,290 @@ async def delete_archive(
             detail={
                 "error": "服务错误",
                 "message": "删除档案失败,请稍后重试"
+            }
+        )
+
+
+# ==================== v2.7.0: 审核流程 API ====================
+
+@router.get(
+    "/user-archives/stats",
+    response_model=ArchiveStatsResponse,
+    summary="获取档案统计信息",
+    description="获取各状态的档案数量统计（v2.7.0新增）"
+)
+async def get_archive_stats(
+    user_id: Optional[int] = Query(None, gt=0, description="用户ID（可选，不传则统计所有档案）")
+):
+    """
+    获取档案统计信息
+
+    **功能**: v2.7.0 新增
+
+    获取各审核状态的档案数量统计。
+
+    Args:
+        user_id (Optional[int]): 用户ID（可选）
+
+    Returns:
+        ArchiveStatsResponse: 各状态的档案数量
+
+    Example:
+        ```bash
+        # 获取所有档案统计
+        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives/stats"
+
+        # 获取指定用户的档案统计
+        curl -X GET "http://localhost:8000/api/v1/nl-search/user-archives/stats?user_id=1001"
+        ```
+    """
+    try:
+        logger.info(f"获取档案统计: user_id={user_id}")
+
+        stats = await mongo_archive_service.get_archive_stats(user_id=user_id)
+
+        return ArchiveStatsResponse(
+            pending=stats["pending"],
+            approved=stats["approved"],
+            rejected=stats["rejected"],
+            total=stats["total"]
+        )
+
+    except Exception as e:
+        logger.error(f"获取档案统计失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "获取档案统计失败，请稍后重试"
+            }
+        )
+
+
+@router.post(
+    "/user-archives/{archive_id}/review",
+    response_model=ArchiveReviewResponse,
+    summary="审核档案",
+    description="审核员审核档案（通过或驳回）（v2.7.0新增）",
+    dependencies=[Depends(require_permissions("archive:review"))]
+)
+async def review_archive(
+    archive_id: str,
+    request: ArchiveReviewRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    审核档案
+
+    **功能**: v2.7.0 新增
+
+    审核员可以通过或驳回待审核状态的档案。
+
+    **权限要求**: archive:review
+
+    **状态流转**:
+    - pending → approved (审核通过)
+    - pending → rejected (审核驳回)
+
+    Args:
+        archive_id (str): 档案ID
+        request (ArchiveReviewRequest): 审核请求（包含action和feedback）
+
+    Returns:
+        ArchiveReviewResponse: 审核结果
+
+    Raises:
+        HTTPException:
+            - 400: 输入验证失败（如驳回时未提供原因）
+            - 403: 权限不足
+            - 404: 档案不存在
+            - 500: 服务错误
+
+    Example:
+        ```bash
+        # 审核通过
+        curl -X POST "http://localhost:8000/api/v1/nl-search/user-archives/{archive_id}/review" \\
+          -H "Authorization: Bearer <token>" \\
+          -H "Content-Type: application/json" \\
+          -d '{"action": "approve"}'
+
+        # 审核驳回
+        curl -X POST "http://localhost:8000/api/v1/nl-search/user-archives/{archive_id}/review" \\
+          -H "Authorization: Bearer <token>" \\
+          -H "Content-Type: application/json" \\
+          -d '{"action": "reject", "feedback": "内容质量不符合标准"}'
+        ```
+    """
+    try:
+        logger.info(
+            f"审核档案: archive_id={archive_id}, action={request.action}, "
+            f"reviewer={current_user.username}"
+        )
+
+        # 获取审核人信息
+        reviewer_id = current_user.id
+        reviewer_name = current_user.full_name or current_user.username
+
+        if request.action == "approve":
+            # 审核通过
+            success = await mongo_archive_service.approve_archive(
+                archive_id=archive_id,
+                reviewer_id=reviewer_id,
+                reviewer_name=reviewer_name
+            )
+            new_status = "approved"
+            message = "档案审核通过"
+
+        else:  # reject
+            # 验证驳回原因
+            if not request.feedback or not request.feedback.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "输入验证失败",
+                        "message": "驳回档案时必须提供驳回原因"
+                    }
+                )
+
+            # 审核驳回
+            success = await mongo_archive_service.reject_archive(
+                archive_id=archive_id,
+                reviewer_id=reviewer_id,
+                reviewer_name=reviewer_name,
+                feedback=request.feedback
+            )
+            new_status = "rejected"
+            message = "档案已驳回"
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "审核失败",
+                    "message": "档案审核操作失败"
+                }
+            )
+
+        return ArchiveReviewResponse(
+            archive_id=archive_id,
+            action=request.action,
+            new_status=new_status,
+            reviewer_id=reviewer_id,
+            reviewer_name=reviewer_name,
+            reviewed_at=datetime.utcnow().isoformat(),
+            feedback=request.feedback if request.action == "reject" else None,
+            message=message
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.warning(f"档案审核验证失败: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "输入验证失败",
+                "message": str(e)
+            }
+        )
+    except Exception as e:
+        logger.error(f"档案审核失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "档案审核失败，请稍后重试"
+            }
+        )
+
+
+@router.post(
+    "/user-archives/{archive_id}/resubmit",
+    response_model=ArchiveResubmitResponse,
+    summary="重新提交档案",
+    description="将已驳回的档案重新提交审核（v2.7.0新增）",
+    dependencies=[Depends(require_permissions("archive:update"))]
+)
+async def resubmit_archive(
+    archive_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    重新提交档案
+
+    **功能**: v2.7.0 新增
+
+    将已驳回的档案重新提交审核。
+
+    **权限要求**: archive:update
+
+    **状态流转**:
+    - rejected → pending (重新提交)
+
+    Args:
+        archive_id (str): 档案ID
+
+    Returns:
+        ArchiveResubmitResponse: 重新提交结果
+
+    Raises:
+        HTTPException:
+            - 400: 档案状态不是已驳回
+            - 403: 权限不足
+            - 404: 档案不存在
+            - 500: 服务错误
+
+    Example:
+        ```bash
+        curl -X POST "http://localhost:8000/api/v1/nl-search/user-archives/{archive_id}/resubmit" \\
+          -H "Authorization: Bearer <token>"
+        ```
+    """
+    try:
+        logger.info(
+            f"重新提交档案: archive_id={archive_id}, user={current_user.username}"
+        )
+
+        # 重新提交
+        success = await mongo_archive_service.resubmit_archive(archive_id=archive_id)
+
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "重新提交失败",
+                    "message": "档案重新提交操作失败"
+                }
+            )
+
+        # 获取更新后的档案信息
+        archive = await mongo_archive_service.get_archive(archive_id=archive_id)
+
+        return ArchiveResubmitResponse(
+            archive_id=archive_id,
+            new_status="pending",
+            submission_count=archive.get("submission_count", 2) if archive else 2,
+            message="档案已重新提交审核"
+        )
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.warning(f"档案重新提交验证失败: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "输入验证失败",
+                "message": str(e)
+            }
+        )
+    except Exception as e:
+        logger.error(f"档案重新提交失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "服务错误",
+                "message": "档案重新提交失败，请稍后重试"
             }
         )
 
