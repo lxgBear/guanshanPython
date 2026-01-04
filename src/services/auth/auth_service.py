@@ -1,14 +1,11 @@
-"""认证服务"""
+"""认证服务 (MongoDB 版本)"""
 
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.utils.logger import get_logger
 from src.infrastructure.auth import JWTHandler, PasswordHandler, TokenData
-from src.infrastructure.persistence.auth import UserRepository
-from src.infrastructure.persistence.auth.models import UserModel, LoginHistoryModel
+from src.infrastructure.persistence.auth.mongodb import MongoUserRepository
 from src.core.domain.entities.auth import User, TokenResponse
 
 logger = get_logger(__name__)
@@ -24,16 +21,16 @@ class AuthException(Exception):
 
 
 class AuthService:
-    """认证服务"""
+    """认证服务 (MongoDB 版本)"""
 
     # 最大登录尝试次数
     MAX_LOGIN_ATTEMPTS = 5
     # 锁定时间（分钟）
     LOCKOUT_MINUTES = 30
 
-    def __init__(self, session: AsyncSession):
-        self.session = session
-        self.user_repo = UserRepository(session)
+    def __init__(self):
+        """初始化认证服务（无需 session 参数）"""
+        self.user_repo = MongoUserRepository()
         self.jwt_handler = JWTHandler()
         self.password_handler = PasswordHandler()
 
@@ -66,79 +63,79 @@ class AuthService:
             await self._record_login_attempt(None, ip_address, user_agent, "failed", "用户不存在")
             raise AuthException("AUTH_001", "用户名或密码错误")
 
+        user_id = user["_id"]
+
         # 检查账户是否被锁定
-        if user.is_locked:
-            await self._record_login_attempt(user.id, ip_address, user_agent, "locked", "账户已锁定")
-            raise AuthException("AUTH_002", f"账户已锁定: {user.lock_reason}")
+        if user.get("is_locked"):
+            await self._record_login_attempt(user_id, ip_address, user_agent, "locked", "账户已锁定")
+            raise AuthException("AUTH_002", f"账户已锁定: {user.get('lock_reason', '')}")
 
         # 检查账户是否激活
-        if not user.is_active:
-            await self._record_login_attempt(user.id, ip_address, user_agent, "failed", "账户已禁用")
+        if not user.get("is_active"):
+            await self._record_login_attempt(user_id, ip_address, user_agent, "failed", "账户已禁用")
             raise AuthException("AUTH_006", "账户已禁用")
 
         # 验证密码
-        if not self.password_handler.verify_password(password, user.password_hash):
+        if not self.password_handler.verify_password(password, user.get("password_hash", "")):
             # 增加登录尝试次数
-            attempts = await self.user_repo.increment_login_attempts(user.id)
+            attempts = await self.user_repo.increment_login_attempts(user_id)
 
             # 检查是否需要锁定
             if attempts >= self.MAX_LOGIN_ATTEMPTS:
                 await self.user_repo.lock_user(
-                    user.id,
+                    user_id,
                     f"密码错误超过{self.MAX_LOGIN_ATTEMPTS}次，账户已锁定"
                 )
-                await self._record_login_attempt(user.id, ip_address, user_agent, "locked", "密码错误次数过多")
+                await self._record_login_attempt(user_id, ip_address, user_agent, "locked", "密码错误次数过多")
                 raise AuthException("AUTH_002", "密码错误次数过多，账户已锁定")
 
-            await self._record_login_attempt(user.id, ip_address, user_agent, "failed", "密码错误")
+            await self._record_login_attempt(user_id, ip_address, user_agent, "failed", "密码错误")
             raise AuthException("AUTH_001", "用户名或密码错误")
 
         # 登录成功
-        await self.user_repo.reset_login_attempts(user.id)
-        await self.user_repo.update_last_login(user.id)
-        await self._record_login_attempt(user.id, ip_address, user_agent, "success", None)
+        await self.user_repo.reset_login_attempts(user_id)
+        await self.user_repo.update_last_login(user_id)
+        await self._record_login_attempt(user_id, ip_address, user_agent, "success", None)
 
         # 获取用户角色和权限
-        user_data = await self.user_repo.get_user_with_permissions(user.id)
+        user_data = await self.user_repo.get_user_with_permissions(user_id)
         if not user_data:
             raise AuthException("AUTH_001", "用户数据异常")
 
-        user_model, role_codes, permission_codes = user_data
+        user_doc, role_codes, permission_codes = user_data
 
         # 生成 Token
         access_token = self.jwt_handler.create_access_token(
-            user_id=user.id,
-            username=user.username,
+            user_id=user_id,
+            username=user_doc["username"],
             roles=role_codes,
             permissions=permission_codes
         )
 
         refresh_token = self.jwt_handler.create_refresh_token(
-            user_id=user.id,
-            username=user.username
+            user_id=user_id,
+            username=user_doc["username"]
         )
 
         # 构建响应
         user_response = User(
-            id=user.id,
-            username=user.username,
-            email=user.email,
-            display_name=user.display_name,
-            phone=user.phone,
-            department=user.department,
-            is_active=user.is_active,
-            is_locked=user.is_locked,
-            lock_reason=user.lock_reason,
-            last_login=user.last_login,
-            login_attempts=user.login_attempts,
-            created_at=user.created_at,
-            updated_at=user.updated_at,
-            created_by=user.created_by,
+            id=user_id,
+            username=user_doc["username"],
+            email=user_doc.get("email"),
+            display_name=user_doc.get("display_name"),
+            phone=user_doc.get("phone"),
+            department=user_doc.get("department"),
+            is_active=user_doc.get("is_active", True),
+            is_locked=user_doc.get("is_locked", False),
+            lock_reason=user_doc.get("lock_reason"),
+            last_login=user_doc.get("last_login"),
+            login_attempts=user_doc.get("login_attempts", 0),
+            created_at=user_doc.get("created_at"),
+            updated_at=user_doc.get("updated_at"),
+            created_by=user_doc.get("created_by"),
             roles=role_codes,
             permissions=permission_codes
         )
-
-        await self.session.commit()
 
         return TokenResponse(
             access_token=access_token,
@@ -185,18 +182,18 @@ class AuthService:
         if not user_data:
             raise AuthException("AUTH_004", "用户不存在")
 
-        user, role_codes, permission_codes = user_data
+        user_doc, role_codes, permission_codes = user_data
 
-        if not user.is_active:
+        if not user_doc.get("is_active"):
             raise AuthException("AUTH_006", "账户已禁用")
 
-        if user.is_locked:
+        if user_doc.get("is_locked"):
             raise AuthException("AUTH_002", "账户已锁定")
 
         # 生成新的访问令牌
         new_access_token = self.jwt_handler.create_access_token(
-            user_id=user.id,
-            username=user.username,
+            user_id=user_doc["_id"],
+            username=user_doc["username"],
             roles=role_codes,
             permissions=permission_codes
         )
@@ -233,30 +230,30 @@ class AuthService:
         if not user_data:
             return None
 
-        user, role_codes, permission_codes = user_data
+        user_doc, role_codes, permission_codes = user_data
 
         return User(
-            id=user.id,
-            username=user.username,
-            email=user.email,
-            display_name=user.display_name,
-            phone=user.phone,
-            department=user.department,
-            is_active=user.is_active,
-            is_locked=user.is_locked,
-            lock_reason=user.lock_reason,
-            last_login=user.last_login,
-            login_attempts=user.login_attempts,
-            created_at=user.created_at,
-            updated_at=user.updated_at,
-            created_by=user.created_by,
+            id=user_doc["_id"],
+            username=user_doc["username"],
+            email=user_doc.get("email"),
+            display_name=user_doc.get("display_name"),
+            phone=user_doc.get("phone"),
+            department=user_doc.get("department"),
+            is_active=user_doc.get("is_active", True),
+            is_locked=user_doc.get("is_locked", False),
+            lock_reason=user_doc.get("lock_reason"),
+            last_login=user_doc.get("last_login"),
+            login_attempts=user_doc.get("login_attempts", 0),
+            created_at=user_doc.get("created_at"),
+            updated_at=user_doc.get("updated_at"),
+            created_by=user_doc.get("created_by"),
             roles=role_codes,
             permissions=permission_codes
         )
 
     async def change_password(
         self,
-        user_id: int,
+        user_id: str,
         old_password: str,
         new_password: str
     ) -> bool:
@@ -278,16 +275,15 @@ class AuthService:
         if not user:
             raise AuthException("AUTH_001", "用户不存在")
 
-        if not self.password_handler.verify_password(old_password, user.password_hash):
+        if not self.password_handler.verify_password(old_password, user.get("password_hash", "")):
             raise AuthException("AUTH_001", "旧密码错误")
 
         new_hash = self.password_handler.hash_password(new_password)
         await self.user_repo.update(user_id, password_hash=new_hash)
-        await self.session.commit()
 
         return True
 
-    async def reset_password(self, user_id: int, new_password: str, operator_id: int) -> bool:
+    async def reset_password(self, user_id: str, new_password: str, operator_id: str) -> bool:
         """
         重置密码（管理员操作）
 
@@ -305,14 +301,13 @@ class AuthService:
 
         new_hash = self.password_handler.hash_password(new_password)
         await self.user_repo.update(user_id, password_hash=new_hash)
-        await self.session.commit()
 
         logger.info(f"管理员 {operator_id} 重置了用户 {user_id} 的密码")
         return True
 
     async def _record_login_attempt(
         self,
-        user_id: Optional[int],
+        user_id: Optional[str],
         ip_address: Optional[str],
         user_agent: Optional[str],
         status: str,
@@ -320,12 +315,10 @@ class AuthService:
     ) -> None:
         """记录登录尝试"""
         if user_id:
-            history = LoginHistoryModel(
+            await self.user_repo.record_login_history(
                 user_id=user_id,
                 ip_address=ip_address,
                 user_agent=user_agent,
                 status=status,
                 fail_reason=fail_reason
             )
-            self.session.add(history)
-            # 不在这里commit，由调用方控制事务

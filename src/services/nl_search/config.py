@@ -184,9 +184,44 @@ class NLSearchConfig(BaseSettings):
     )
 
     excluded_domains: List[str] = Field(
-        default=["wikipedia.org", "baike.baidu.com"],
-        description="需要过滤的域名列表（支持部分匹配，如 wikipedia.org 会过滤所有维基百科域名）",
+        default=[
+            # 百科类 - 仅供理解背景，不得作为报告信息源引用
+            "wikipedia.org",      # 维基百科 (所有语言版本)
+            "baike.baidu.com",    # 百度百科
+            "britannica.com",     # 大英百科全书
+            "baike.sogou.com",    # 搜狗百科
+            "baike.so.com",       # 360百科
+        ],
+        description="需要过滤的域名列表（百科类来源，仅供理解背景，不得作为报告引用）",
         env="NL_SEARCH_EXCLUDED_DOMAINS"
+    )
+
+    # ==================== 查询优化配置 ====================
+
+    enable_query_optimization: bool = Field(
+        default=True,
+        description="是否启用 Claude 查询优化（使用解析的关键词优化搜索词）",
+        env="NL_SEARCH_ENABLE_QUERY_OPTIMIZATION"
+    )
+
+    query_optimization_strategy: str = Field(
+        default="keywords",
+        description="查询优化策略: keywords=使用关键词, entities=使用实体, both=两者结合",
+        env="NL_SEARCH_QUERY_OPTIMIZATION_STRATEGY"
+    )
+
+    # ==================== 时间过滤配置 ====================
+
+    default_time_filter: str = Field(
+        default="qdr:m",
+        description="默认时间过滤 (qdr:h=1小时, qdr:d=1天, qdr:w=1周, qdr:m=1月, qdr:y=1年)",
+        env="NL_SEARCH_DEFAULT_TIME_FILTER"
+    )
+
+    enable_time_filter: bool = Field(
+        default=True,
+        description="是否启用默认时间过滤",
+        env="NL_SEARCH_ENABLE_TIME_FILTER"
     )
 
     # ==================== Scrape 配置 ====================

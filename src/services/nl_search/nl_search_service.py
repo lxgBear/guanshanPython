@@ -2,8 +2,18 @@
 NL Search 核心服务
 用于编排整个自然语言搜索流程
 
-版本: v3.1.0 (OSINT 增强)
-日期: 2025-12-24
+版本: v3.3.0 (Claude Query Optimization)
+日期: 2025-12-25
+
+v3.3.0 更新:
+- 新增 Claude 查询优化功能 (使用解析的关键词/实体优化搜索查询)
+- 可配置优化策略 (keywords / entities / both)
+- 解决 "东亚政外" 等缩写词搜索不精确问题
+
+v3.2.0 更新:
+- 新增 Firecrawl Search 适配器 (4-5x 更快)
+- 支持 location 参数实现国家媒体优先搜索
+- 可配置切换 Firecrawl / Sonar 搜索引擎
 
 v3.1.0 更新:
 - 集成 Source Tier 来源分层分类 (6级: 官方/权威/主流/专业/一般/社交)
@@ -15,6 +25,7 @@ v3.0.0 更新:
 - 添加 Claude rerank 智能重排序功能
 - 支持 Claude parse_query 查询解析
 """
+import os
 import logging
 import asyncio
 from typing import Dict, Any, List, Optional
@@ -23,6 +34,7 @@ from datetime import datetime
 from src.services.nl_search.config import nl_search_config
 from src.services.nl_search.llm_processor import LLMProcessor
 from src.services.nl_search.gpt5_search_adapter import GPT5SearchAdapter
+from src.services.nl_search.firecrawl_search_adapter import FirecrawlSearchAdapter
 from src.infrastructure.database.mongo_nl_search_repository import MongoNLSearchLogRepository
 from src.infrastructure.database.user_selection_repository import user_selection_repository
 from src.infrastructure.crawlers.firecrawl_adapter import FirecrawlAdapter
@@ -59,13 +71,30 @@ class NLSearchService:
         """初始化服务"""
         # 初始化各个组件
         self.llm_processor = LLMProcessor()
-        self.gpt5_adapter = GPT5SearchAdapter(
-            test_mode=not nl_search_config.enabled  # 功能关闭时使用测试模式
-        )
+
+        # v3.2.0: 搜索引擎选择 (firecrawl / sonar)
+        # 从环境变量读取，默认使用 firecrawl
+        self.search_engine = os.getenv("NL_SEARCH_ENGINE", "firecrawl").lower()
+
+        # 初始化搜索适配器
+        if self.search_engine == "firecrawl":
+            self.search_adapter = FirecrawlSearchAdapter(
+                test_mode=not nl_search_config.enabled
+            )
+            logger.info("✅ 使用 Firecrawl Search 引擎 (4-5x 更快, 支持 location)")
+        else:
+            self.search_adapter = GPT5SearchAdapter(
+                test_mode=not nl_search_config.enabled
+            )
+            logger.info("✅ 使用 Sonar/GPT-5 Search 引擎")
+
+        # 保留 gpt5_adapter 引用 (兼容性)
+        self.gpt5_adapter = self.search_adapter
+
         self.repository = MongoNLSearchLogRepository()
         self.selection_repository = user_selection_repository
 
-        # 初始化 Firecrawl 适配器
+        # 初始化 Firecrawl 适配器 (用于抓取内容)
         self.firecrawl_adapter = FirecrawlAdapter()
 
         # 初始化 SearchResult 仓储（用于双写到独立集合）
@@ -84,7 +113,7 @@ class NLSearchService:
 
         logger.info(
             f"NLSearchService 初始化完成 "
-            f"(MongoDB + Firecrawl + SearchResult双写, Claude={'启用' if self.use_claude else '禁用'})"
+            f"(搜索引擎={self.search_engine}, Claude={'启用' if self.use_claude else '禁用'})"
         )
 
     async def create_search(
@@ -199,6 +228,84 @@ class NLSearchService:
             logger.error(f"搜索失败: {e}", exc_info=True)
             raise
 
+    def _optimize_search_query(
+        self,
+        original_query: str,
+        analysis: Dict[str, Any]
+    ) -> str:
+        """
+        v3.3.0: 使用 Claude 解析结果优化搜索查询
+
+        根据 Claude 解析出的关键词、实体等信息，构建更精确的搜索查询。
+
+        策略:
+        - keywords: 使用解析出的关键词（默认）
+        - entities: 使用解析出的实体
+        - both: 关键词 + 实体组合
+
+        Args:
+            original_query: 用户原始查询
+            analysis: Claude 解析结果 (包含 intent, keywords, entities 等)
+
+        Returns:
+            优化后的搜索查询字符串
+        """
+        # 检查是否启用查询优化
+        if not nl_search_config.enable_query_optimization:
+            logger.debug("查询优化已禁用，使用原始查询")
+            return original_query
+
+        # 检查 analysis 是否有效
+        if not analysis:
+            logger.debug("无 Claude 解析结果，使用原始查询")
+            return original_query
+
+        strategy = nl_search_config.query_optimization_strategy
+        keywords = analysis.get("keywords", [])
+        entities = analysis.get("entities", [])
+        intent = analysis.get("intent", "")
+
+        # 过滤空值
+        keywords = [k for k in keywords if k and isinstance(k, str)]
+        entities = [e for e in entities if e and isinstance(e, str)]
+
+        # 根据策略构建优化查询
+        optimized_parts = []
+
+        if strategy in ["keywords", "both"] and keywords:
+            optimized_parts.extend(keywords)
+            logger.debug(f"添加关键词: {keywords}")
+
+        if strategy in ["entities", "both"] and entities:
+            # 避免与关键词重复
+            unique_entities = [e for e in entities if e not in optimized_parts]
+            optimized_parts.extend(unique_entities)
+            logger.debug(f"添加实体: {unique_entities}")
+
+        # 如果没有提取到任何信息，返回原始查询
+        if not optimized_parts:
+            logger.debug("未提取到关键词/实体，使用原始查询")
+            return original_query
+
+        # 构建优化后的查询
+        # 策略：关键词用空格连接，形成更精确的搜索词
+        optimized_query = " ".join(optimized_parts)
+
+        # 添加意图相关的时效性词汇（如果意图是新闻/动态类）
+        news_intents = ["新闻", "动态", "最新", "近期", "news", "recent", "latest"]
+        if intent and any(word in intent.lower() for word in news_intents):
+            if "最新" not in optimized_query and "latest" not in optimized_query.lower():
+                optimized_query += " 最新动态"
+                logger.debug("检测到新闻类意图，添加时效性词汇")
+
+        logger.info(
+            f"查询优化: strategy={strategy}, "
+            f"keywords={len(keywords)}, entities={len(entities)}, "
+            f"intent='{intent[:20]}...'" if intent else "intent=None"
+        )
+
+        return optimized_query
+
     async def _create_search_single(
         self,
         log_id: str,
@@ -206,17 +313,26 @@ class NLSearchService:
         analysis: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        单次搜索模式（优化版：直接GPT搜索+分数过滤）
+        单次搜索模式（v3.3.0: Claude 查询优化 + 分数过滤）
 
-        流程：直接GPT搜索（10条） → 分数过滤 → 只爬取高分结果
+        流程：Claude解析 → 查询优化 → GPT搜索（10条） → 分数过滤 → 只爬取高分结果
+
+        v3.3.0 更新:
+        - 使用 Claude 解析的关键词/实体优化搜索查询
+        - 可配置优化策略 (keywords / entities / both)
         """
-        # 直接使用原始查询搜索（跳过LLM refine，节省成本）
-        logger.info(f"直接GPT搜索: {query_text}")
+        # v3.3.0: 使用 Claude 解析结果优化搜索查询
+        optimized_query = self._optimize_search_query(query_text, analysis)
+
+        if optimized_query != query_text:
+            logger.info(f"🔍 查询优化: '{query_text}' → '{optimized_query}'")
+        else:
+            logger.info(f"直接搜索: {query_text}")
 
         # 执行搜索（获取10条结果）
         logger.info("开始执行单次搜索...")
         search_results = await self.gpt5_adapter.search(
-            query=query_text,  # 直接用原始查询
+            query=optimized_query,  # 使用优化后的查询
             max_results=nl_search_config.max_search_results  # 使用10条配置
         )
         logger.info(f"搜索完成: 获得{len(search_results)}个结果")

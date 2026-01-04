@@ -1,12 +1,12 @@
-"""角色管理服务"""
+"""角色管理服务 (MongoDB 版本)"""
 
 from typing import Optional, List, Tuple
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.utils.logger import get_logger
-from src.infrastructure.persistence.auth import RoleRepository
-from src.infrastructure.persistence.auth.role_repository import PermissionRepository
+from src.infrastructure.persistence.auth.mongodb import (
+    MongoRoleRepository,
+    MongoPermissionRepository
+)
 from src.core.domain.entities.auth import Role, RoleCreate, RoleUpdate, Permission
 
 logger = get_logger(__name__)
@@ -22,12 +22,11 @@ class RoleServiceException(Exception):
 
 
 class RoleService:
-    """角色管理服务"""
+    """角色管理服务 (MongoDB)"""
 
-    def __init__(self, session: AsyncSession):
-        self.session = session
-        self.role_repo = RoleRepository(session)
-        self.permission_repo = PermissionRepository(session)
+    def __init__(self):
+        self.role_repo = MongoRoleRepository()
+        self.permission_repo = MongoPermissionRepository()
 
     async def create_role(self, data: RoleCreate) -> Role:
         """
@@ -51,48 +50,45 @@ class RoleService:
         if data.parent_role_code:
             parent_role = await self.role_repo.get_by_code(data.parent_role_code)
             if parent_role:
-                parent_role_id = parent_role.id
+                parent_role_id = parent_role["_id"]
 
-        # 创建角色
+        # 创建角色（权限直接存储为代码列表）
         role = await self.role_repo.create(
             code=data.code,
             name=data.name,
             level=data.level,
             description=data.description,
-            parent_role_id=parent_role_id
+            parent_role_id=parent_role_id,
+            permissions=data.permission_codes or []
         )
 
-        # 分配权限
-        if data.permission_codes:
-            permissions = await self.permission_repo.get_by_codes(data.permission_codes)
-            if permissions:
-                permission_ids = [p.id for p in permissions]
-                await self.role_repo.assign_permissions(role.id, permission_ids)
+        return await self.get_role(role["_id"])
 
-        await self.session.commit()
-
-        return await self.get_role(role.id)
-
-    async def get_role(self, role_id: int) -> Optional[Role]:
+    async def get_role(self, role_id: str) -> Optional[Role]:
         """获取角色详情"""
         role = await self.role_repo.get_by_id(role_id)
         if not role:
             return None
 
-        permission_codes = [rp.permission.code for rp in role.role_permissions]
+        permission_codes = role.get("permissions", [])
+        parent_role_code = None
+        if role.get("parent_role_id"):
+            parent = await self.role_repo.get_by_id(role["parent_role_id"])
+            if parent:
+                parent_role_code = parent.get("code")
 
         return Role(
-            id=role.id,
-            code=role.code,
-            name=role.name,
-            level=role.level,
-            description=role.description,
-            parent_role_code=role.parent_role.code if role.parent_role else None,
-            parent_role_id=role.parent_role_id,
-            is_system=role.is_system,
-            is_active=role.is_active,
-            created_at=role.created_at,
-            updated_at=role.updated_at,
+            id=role["_id"],
+            code=role["code"],
+            name=role["name"],
+            level=role.get("level", 0),
+            description=role.get("description"),
+            parent_role_code=parent_role_code,
+            parent_role_id=role.get("parent_role_id"),
+            is_system=role.get("is_system", False),
+            is_active=role.get("is_active", True),
+            created_at=role.get("created_at"),
+            updated_at=role.get("updated_at"),
             permissions=permission_codes,
             permissions_count=len(permission_codes)
         )
@@ -103,20 +99,25 @@ class RoleService:
         if not role:
             return None
 
-        permission_codes = [rp.permission.code for rp in role.role_permissions]
+        permission_codes = role.get("permissions", [])
+        parent_role_code = None
+        if role.get("parent_role_id"):
+            parent = await self.role_repo.get_by_id(role["parent_role_id"])
+            if parent:
+                parent_role_code = parent.get("code")
 
         return Role(
-            id=role.id,
-            code=role.code,
-            name=role.name,
-            level=role.level,
-            description=role.description,
-            parent_role_code=role.parent_role.code if role.parent_role else None,
-            parent_role_id=role.parent_role_id,
-            is_system=role.is_system,
-            is_active=role.is_active,
-            created_at=role.created_at,
-            updated_at=role.updated_at,
+            id=role["_id"],
+            code=role["code"],
+            name=role["name"],
+            level=role.get("level", 0),
+            description=role.get("description"),
+            parent_role_code=parent_role_code,
+            parent_role_id=role.get("parent_role_id"),
+            is_system=role.get("is_system", False),
+            is_active=role.get("is_active", True),
+            created_at=role.get("created_at"),
+            updated_at=role.get("updated_at"),
             permissions=permission_codes,
             permissions_count=len(permission_codes)
         )
@@ -131,26 +132,32 @@ class RoleService:
 
         result = []
         for r in roles:
-            permission_codes = [rp.permission.code for rp in r.role_permissions]
+            permission_codes = r.get("permissions", [])
+            parent_role_code = None
+            if r.get("parent_role_id"):
+                parent = await self.role_repo.get_by_id(r["parent_role_id"])
+                if parent:
+                    parent_role_code = parent.get("code")
+
             result.append(Role(
-                id=r.id,
-                code=r.code,
-                name=r.name,
-                level=r.level,
-                description=r.description,
-                parent_role_code=r.parent_role.code if r.parent_role else None,
-                parent_role_id=r.parent_role_id,
-                is_system=r.is_system,
-                is_active=r.is_active,
-                created_at=r.created_at,
-                updated_at=r.updated_at,
+                id=r["_id"],
+                code=r["code"],
+                name=r["name"],
+                level=r.get("level", 0),
+                description=r.get("description"),
+                parent_role_code=parent_role_code,
+                parent_role_id=r.get("parent_role_id"),
+                is_system=r.get("is_system", False),
+                is_active=r.get("is_active", True),
+                created_at=r.get("created_at"),
+                updated_at=r.get("updated_at"),
                 permissions=permission_codes,
                 permissions_count=len(permission_codes)
             ))
 
         return result
 
-    async def update_role(self, role_id: int, data: RoleUpdate) -> Optional[Role]:
+    async def update_role(self, role_id: str, data: RoleUpdate) -> Optional[Role]:
         """
         更新角色
 
@@ -165,10 +172,8 @@ class RoleService:
         if not role:
             raise RoleServiceException("ROLE_001", "角色不存在")
 
-        # 系统角色不允许修改某些字段
-        if role.is_system:
-            if data.level is not None or data.parent_role_code is not None:
-                raise RoleServiceException("ROLE_003", "系统角色不允许修改权限级别和父级角色")
+        # 注意：系统管理员作为总管理员，可以修改所有角色的所有属性
+        # 仅保留删除保护，防止误删系统角色
 
         # 更新基本信息
         update_data = data.model_dump(exclude_unset=True, exclude={'permission_codes', 'parent_role_code'})
@@ -177,31 +182,24 @@ class RoleService:
 
         # 更新权限
         if data.permission_codes is not None:
-            permissions = await self.permission_repo.get_by_codes(data.permission_codes)
-            permission_ids = [p.id for p in permissions] if permissions else []
-            await self.role_repo.assign_permissions(role_id, permission_ids)
-
-        await self.session.commit()
+            await self.role_repo.assign_permissions(role_id, data.permission_codes)
 
         return await self.get_role(role_id)
 
-    async def delete_role(self, role_id: int) -> bool:
+    async def delete_role(self, role_id: str) -> bool:
         """删除角色（系统角色不可删除）"""
         role = await self.role_repo.get_by_id(role_id)
         if not role:
             raise RoleServiceException("ROLE_001", "角色不存在")
 
-        if role.is_system:
+        if role.get("is_system"):
             raise RoleServiceException("ROLE_003", "系统角色不可删除")
 
-        result = await self.role_repo.delete(role_id)
-        if result:
-            await self.session.commit()
-        return result
+        return await self.role_repo.delete(role_id)
 
     async def update_role_permissions(
         self,
-        role_id: int,
+        role_id: str,
         permission_codes: List[str]
     ) -> Optional[Role]:
         """更新角色权限"""
@@ -209,10 +207,7 @@ class RoleService:
         if not role:
             raise RoleServiceException("ROLE_001", "角色不存在")
 
-        permissions = await self.permission_repo.get_by_codes(permission_codes)
-        permission_ids = [p.id for p in permissions] if permissions else []
-        await self.role_repo.assign_permissions(role_id, permission_ids)
-        await self.session.commit()
+        await self.role_repo.assign_permissions(role_id, permission_codes)
 
         return await self.get_role(role_id)
 
@@ -234,13 +229,13 @@ class RoleService:
 
         result = [
             Permission(
-                id=p.id,
-                code=p.code,
-                name=p.name,
-                module=p.module,
-                description=p.description,
-                is_active=p.is_active,
-                created_at=p.created_at
+                id=p["_id"],
+                code=p["code"],
+                name=p["name"],
+                module=p["module"],
+                description=p.get("description"),
+                is_active=p.get("is_active", True),
+                created_at=p.get("created_at")
             )
             for p in permissions
         ]

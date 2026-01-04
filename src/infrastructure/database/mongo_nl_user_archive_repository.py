@@ -8,12 +8,17 @@ MongoDB 用户档案仓储层
 - 集合名称: user_archives
 - 文档结构: 扁平化设计，档案和条目在同一文档
 - 支持原子操作和事务
+
+v2.7.0: 新增审核流程支持
+- 支持档案状态管理 (pending/approved/rejected)
+- 支持审核历史记录
+- 支持按状态筛选档案
 """
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from bson import ObjectId
 
-from src.core.domain.entities.nl_search import NLUserArchive
+from src.core.domain.entities.nl_search import NLUserArchive, ArchiveStatus
 from src.infrastructure.database.connection import get_mongodb_database
 from src.utils.logger import get_logger
 
@@ -114,6 +119,7 @@ class MongoNLUserArchiveRepository:
 
             # 准备文档
             # v2.6.0: 新增 search_task_id 支持定时任务关联
+            # v2.7.0: 新增审核流程字段
             document = {
                 "user_id": user_id,
                 "archive_name": archive_name,
@@ -124,6 +130,13 @@ class MongoNLUserArchiveRepository:
                 "items": items,  # 条目列表已包含所有字段
                 "items_count": len(items),
                 "user_summary": user_summary,  # v2.5.4: 自动生成的条目汇总
+                # v2.7.0: 审核流程字段
+                "status": ArchiveStatus.PENDING.value,  # 默认待审核状态
+                "reviewer_id": None,
+                "reviewer_name": None,
+                "reviewed_at": None,
+                "rejection_feedback": None,
+                "submission_count": 1,
                 "created_at": now,
                 "updated_at": now
             }
@@ -173,14 +186,20 @@ class MongoNLUserArchiveRepository:
         self,
         user_id: Optional[int] = None,
         limit: int = 20,
-        offset: int = 0
+        offset: int = 0,
+        status: Optional[str] = None,
+        include_all_status: bool = False
     ) -> List[Dict[str, Any]]:
         """获取档案列表
+
+        v2.7.0: 新增状态过滤支持
 
         Args:
             user_id: 用户ID（可选，不传则查询所有档案）
             limit: 返回数量限制
             offset: 分页偏移量
+            status: 状态过滤（pending/approved/rejected），可选
+            include_all_status: 是否包含所有状态（审核员权限）
 
         Returns:
             List[Dict]: 档案列表
@@ -190,20 +209,34 @@ class MongoNLUserArchiveRepository:
             >>> archives = await repo.get_by_user(limit=10)
             >>> # 查询指定用户的档案
             >>> archives = await repo.get_by_user(user_id=1001, limit=10)
+            >>> # 查询待审核的档案
+            >>> archives = await repo.get_by_user(status="pending")
             >>> for archive in archives:
             ...     print(archive["archive_name"])
         """
         try:
             collection = await self._get_collection()
 
-            # 构建查询条件：如果提供了 user_id，则按用户筛选；否则查询所有
-            query = {"user_id": user_id} if user_id is not None else {}
+            # 构建查询条件
+            query = {}
+            if user_id is not None:
+                query["user_id"] = user_id
+            if status is not None:
+                query["status"] = status
+            elif not include_all_status:
+                # 默认只返回已审核的档案（兼容旧版本行为）
+                # 如果指定了 user_id，则返回该用户的所有状态档案
+                if user_id is None:
+                    query["status"] = ArchiveStatus.APPROVED.value
 
             cursor = collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
 
             archives = []
             async for doc in cursor:
                 doc["_id"] = str(doc["_id"])
+                # 确保旧数据有默认状态
+                if "status" not in doc:
+                    doc["status"] = ArchiveStatus.APPROVED.value
                 archives.append(doc)
 
             return archives
@@ -436,8 +469,167 @@ class MongoNLUserArchiveRepository:
             # 标签索引（用于按标签筛选）
             await collection.create_index("tags")
 
+            # v2.7.0: 新增状态索引
+            await collection.create_index("status")
+
             logger.info("用户档案索引创建完成")
 
         except Exception as e:
             logger.error(f"创建索引失败: {e}")
+            raise
+
+    # ==================== v2.7.0: 审核流程方法 ====================
+
+    async def update_status(
+        self,
+        archive_id: str,
+        new_status: str,
+        reviewer_id: Optional[int] = None,
+        reviewer_name: Optional[str] = None,
+        rejection_feedback: Optional[str] = None
+    ) -> bool:
+        """更新档案审核状态
+
+        v2.7.0: 新增审核状态更新
+
+        Args:
+            archive_id: 档案ID
+            new_status: 新状态（pending/approved/rejected）
+            reviewer_id: 审核人ID（可选）
+            reviewer_name: 审核人姓名（可选）
+            rejection_feedback: 驳回原因（驳回时必填）
+
+        Returns:
+            bool: 更新是否成功
+
+        Example:
+            >>> success = await repo.update_status(
+            ...     archive_id="507f1f77bcf86cd799439011",
+            ...     new_status="approved",
+            ...     reviewer_id=1001,
+            ...     reviewer_name="审核员张三"
+            ... )
+        """
+        try:
+            collection = await self._get_collection()
+
+            now = datetime.utcnow()
+
+            update_fields = {
+                "status": new_status,
+                "updated_at": now
+            }
+
+            # 审核通过或驳回时设置审核信息
+            if new_status in [ArchiveStatus.APPROVED.value, ArchiveStatus.REJECTED.value]:
+                update_fields["reviewer_id"] = reviewer_id
+                update_fields["reviewer_name"] = reviewer_name
+                update_fields["reviewed_at"] = now
+
+            # 驳回时设置驳回原因
+            if new_status == ArchiveStatus.REJECTED.value:
+                update_fields["rejection_feedback"] = rejection_feedback
+            elif new_status == ArchiveStatus.APPROVED.value:
+                # 审核通过时清除驳回原因
+                update_fields["rejection_feedback"] = None
+
+            result = await collection.update_one(
+                {"_id": ObjectId(archive_id)},
+                {"$set": update_fields}
+            )
+
+            success = result.modified_count > 0
+            if success:
+                logger.info(f"更新档案状态成功: ID={archive_id}, status={new_status}")
+            return success
+
+        except Exception as e:
+            logger.error(f"更新档案状态失败: {e}")
+            return False
+
+    async def resubmit(
+        self,
+        archive_id: str
+    ) -> bool:
+        """重新提交被驳回的档案
+
+        v2.7.0: 新增重新提交功能
+
+        将已驳回的档案重新设为待审核状态，并增加提交次数。
+
+        Args:
+            archive_id: 档案ID
+
+        Returns:
+            bool: 更新是否成功
+
+        Example:
+            >>> success = await repo.resubmit(archive_id="507f1f77bcf86cd799439011")
+        """
+        try:
+            collection = await self._get_collection()
+
+            now = datetime.utcnow()
+
+            result = await collection.update_one(
+                {
+                    "_id": ObjectId(archive_id),
+                    "status": ArchiveStatus.REJECTED.value  # 只能重新提交已驳回的
+                },
+                {
+                    "$set": {
+                        "status": ArchiveStatus.PENDING.value,
+                        "reviewer_id": None,
+                        "reviewer_name": None,
+                        "reviewed_at": None,
+                        # 保留 rejection_feedback 供参考
+                        "updated_at": now
+                    },
+                    "$inc": {"submission_count": 1}
+                }
+            )
+
+            success = result.modified_count > 0
+            if success:
+                logger.info(f"重新提交档案成功: ID={archive_id}")
+            return success
+
+        except Exception as e:
+            logger.error(f"重新提交档案失败: {e}")
+            return False
+
+    async def count_by_status(
+        self,
+        status: Optional[str] = None,
+        user_id: Optional[int] = None
+    ) -> int:
+        """统计指定状态的档案数量
+
+        v2.7.0: 新增按状态统计
+
+        Args:
+            status: 状态（pending/approved/rejected），可选
+            user_id: 用户ID（可选）
+
+        Returns:
+            int: 档案数量
+
+        Example:
+            >>> pending_count = await repo.count_by_status(status="pending")
+            >>> user_pending = await repo.count_by_status(status="pending", user_id=1001)
+        """
+        try:
+            collection = await self._get_collection()
+
+            query = {}
+            if status is not None:
+                query["status"] = status
+            if user_id is not None:
+                query["user_id"] = user_id
+
+            count = await collection.count_documents(query)
+            return count
+
+        except Exception as e:
+            logger.error(f"统计档案数失败: {e}")
             raise

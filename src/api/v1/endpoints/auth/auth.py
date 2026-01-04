@@ -1,12 +1,11 @@
-"""认证API端点"""
+"""认证API端点 (MongoDB 版本)"""
 
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
-from src.api.dependencies.auth import get_db_session, get_current_active_user
+from src.api.dependencies.auth import get_current_active_user
 from src.services.auth import AuthService, AuthException
 from src.core.domain.entities.auth import (
     User, UserLogin, TokenResponse, TokenRefresh, PasswordChange
@@ -38,8 +37,7 @@ class MessageResponse(BaseModel):
 @router.post("/login", response_model=LoginResponse, summary="用户登录")
 async def login(
     data: UserLogin,
-    request: Request,
-    session: AsyncSession = Depends(get_db_session)
+    request: Request
 ):
     """
     用户登录
@@ -52,7 +50,7 @@ async def login(
     ip_address = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
 
-    auth_service = AuthService(session)
+    auth_service = AuthService()
 
     try:
         result = await auth_service.login(
@@ -71,8 +69,7 @@ async def login(
 
 @router.post("/logout", response_model=MessageResponse, summary="用户登出")
 async def logout(
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     用户登出
@@ -85,15 +82,14 @@ async def logout(
 
 @router.post("/refresh", response_model=RefreshResponse, summary="刷新Token")
 async def refresh_token(
-    data: TokenRefresh,
-    session: AsyncSession = Depends(get_db_session)
+    data: TokenRefresh
 ):
     """
     刷新访问令牌
 
     使用 refresh_token 获取新的 access_token
     """
-    auth_service = AuthService(session)
+    auth_service = AuthService()
 
     try:
         access_token, expires_in = await auth_service.refresh_token(data.refresh_token)
@@ -120,15 +116,14 @@ async def get_current_user_info(
 @router.post("/change-password", response_model=MessageResponse, summary="修改密码")
 async def change_password(
     data: PasswordChange,
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db_session)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     修改当前用户密码
 
     需要认证，需要提供旧密码
     """
-    auth_service = AuthService(session)
+    auth_service = AuthService()
 
     try:
         await auth_service.change_password(

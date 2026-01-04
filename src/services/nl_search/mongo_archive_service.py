@@ -36,6 +36,7 @@ from bson import ObjectId
 from src.infrastructure.database.mongo_nl_user_archive_repository import MongoNLUserArchiveRepository
 from src.infrastructure.database.connection import get_mongodb_database
 from src.infrastructure.id_generator import generate_id
+from src.core.domain.entities.nl_search import ArchiveStatus
 
 logger = logging.getLogger(__name__)
 
@@ -716,6 +717,344 @@ class MongoArchiveService:
 
         except Exception as e:
             logger.error(f"删除档案失败: {e}", exc_info=True)
+            raise
+
+    # ==================== v2.7.0: 审核流程方法 ====================
+
+    async def approve_archive(
+        self,
+        archive_id: str,
+        reviewer_id: int,
+        reviewer_name: str
+    ) -> bool:
+        """审核通过档案
+
+        v2.7.0: 新增方法
+
+        将待审核状态的档案标记为已审核（通过）。
+
+        Args:
+            archive_id: 档案ID (ObjectId字符串)
+            reviewer_id: 审核人ID
+            reviewer_name: 审核人姓名
+
+        Returns:
+            bool: 操作是否成功
+
+        Raises:
+            ValueError: 档案不存在或状态不是待审核
+
+        Example:
+            >>> success = await service.approve_archive(
+            ...     archive_id="507f1f77bcf86cd799439011",
+            ...     reviewer_id=1001,
+            ...     reviewer_name="张三"
+            ... )
+        """
+        logger.info(f"审核通过档案: archive_id={archive_id}, reviewer={reviewer_name}")
+
+        try:
+            # 获取档案
+            archive = await self.archive_repo.get_by_id(archive_id)
+            if not archive:
+                raise ValueError(f"档案不存在: archive_id={archive_id}")
+
+            # 检查当前状态
+            current_status = archive.get("status", ArchiveStatus.PENDING.value)
+            if current_status != ArchiveStatus.PENDING.value:
+                raise ValueError(
+                    f"只有待审核状态的档案才能审核通过，当前状态: {current_status}"
+                )
+
+            # 更新状态
+            success = await self.archive_repo.update_status(
+                archive_id=archive_id,
+                new_status=ArchiveStatus.APPROVED.value,
+                reviewer_id=reviewer_id,
+                reviewer_name=reviewer_name
+            )
+
+            if success:
+                logger.info(f"档案审核通过成功: archive_id={archive_id}")
+            else:
+                logger.warning(f"档案审核通过失败: archive_id={archive_id}")
+
+            return success
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"审核通过档案失败: {e}", exc_info=True)
+            raise
+
+    async def reject_archive(
+        self,
+        archive_id: str,
+        reviewer_id: int,
+        reviewer_name: str,
+        feedback: str
+    ) -> bool:
+        """驳回档案
+
+        v2.7.0: 新增方法
+
+        将待审核状态的档案标记为已驳回，并记录驳回原因。
+
+        Args:
+            archive_id: 档案ID (ObjectId字符串)
+            reviewer_id: 审核人ID
+            reviewer_name: 审核人姓名
+            feedback: 驳回原因/改进建议（必填）
+
+        Returns:
+            bool: 操作是否成功
+
+        Raises:
+            ValueError: 档案不存在、状态不是待审核、或未提供驳回原因
+
+        Example:
+            >>> success = await service.reject_archive(
+            ...     archive_id="507f1f77bcf86cd799439011",
+            ...     reviewer_id=1001,
+            ...     reviewer_name="张三",
+            ...     feedback="内容质量不符合标准，请补充更多来源"
+            ... )
+        """
+        logger.info(f"驳回档案: archive_id={archive_id}, reviewer={reviewer_name}")
+
+        try:
+            # 验证驳回原因
+            if not feedback or not feedback.strip():
+                raise ValueError("驳回档案时必须提供驳回原因")
+
+            # 获取档案
+            archive = await self.archive_repo.get_by_id(archive_id)
+            if not archive:
+                raise ValueError(f"档案不存在: archive_id={archive_id}")
+
+            # 检查当前状态
+            current_status = archive.get("status", ArchiveStatus.PENDING.value)
+            if current_status != ArchiveStatus.PENDING.value:
+                raise ValueError(
+                    f"只有待审核状态的档案才能驳回，当前状态: {current_status}"
+                )
+
+            # 更新状态
+            success = await self.archive_repo.update_status(
+                archive_id=archive_id,
+                new_status=ArchiveStatus.REJECTED.value,
+                reviewer_id=reviewer_id,
+                reviewer_name=reviewer_name,
+                rejection_feedback=feedback.strip()
+            )
+
+            if success:
+                logger.info(f"档案驳回成功: archive_id={archive_id}")
+            else:
+                logger.warning(f"档案驳回失败: archive_id={archive_id}")
+
+            return success
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"驳回档案失败: {e}", exc_info=True)
+            raise
+
+    async def resubmit_archive(self, archive_id: str) -> bool:
+        """重新提交档案
+
+        v2.7.0: 新增方法
+
+        将已驳回的档案重新提交审核（状态从rejected变为pending）。
+
+        Args:
+            archive_id: 档案ID (ObjectId字符串)
+
+        Returns:
+            bool: 操作是否成功
+
+        Raises:
+            ValueError: 档案不存在或状态不是已驳回
+
+        Example:
+            >>> success = await service.resubmit_archive(
+            ...     archive_id="507f1f77bcf86cd799439011"
+            ... )
+        """
+        logger.info(f"重新提交档案: archive_id={archive_id}")
+
+        try:
+            # 获取档案
+            archive = await self.archive_repo.get_by_id(archive_id)
+            if not archive:
+                raise ValueError(f"档案不存在: archive_id={archive_id}")
+
+            # 检查当前状态
+            current_status = archive.get("status", ArchiveStatus.PENDING.value)
+            if current_status != ArchiveStatus.REJECTED.value:
+                raise ValueError(
+                    f"只有已驳回的档案才能重新提交，当前状态: {current_status}"
+                )
+
+            # 重新提交
+            success = await self.archive_repo.resubmit(archive_id)
+
+            if success:
+                logger.info(f"档案重新提交成功: archive_id={archive_id}")
+            else:
+                logger.warning(f"档案重新提交失败: archive_id={archive_id}")
+
+            return success
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"重新提交档案失败: {e}", exc_info=True)
+            raise
+
+    async def list_archives_by_status(
+        self,
+        status: Optional[str] = None,
+        user_id: Optional[int] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """按状态查询档案列表
+
+        v2.7.0: 新增方法
+
+        支持按审核状态筛选档案，用于审核员查看待审核列表。
+
+        Args:
+            status: 审核状态筛选 (pending/approved/rejected)，None 表示所有状态
+            user_id: 用户ID（可选，不传则查询所有用户的档案）
+            limit: 返回数量限制
+            offset: 分页偏移量
+
+        Returns:
+            档案列表
+
+        Example:
+            >>> # 查询所有待审核档案
+            >>> archives = await service.list_archives_by_status(status="pending")
+            >>> # 查询指定用户的已驳回档案
+            >>> archives = await service.list_archives_by_status(
+            ...     status="rejected",
+            ...     user_id=1001
+            ... )
+        """
+        logger.info(
+            f"按状态查询档案列表: status={status}, user_id={user_id}, "
+            f"limit={limit}, offset={offset}"
+        )
+
+        try:
+            archives = await self.archive_repo.get_by_user(
+                user_id=user_id,
+                status=status,
+                limit=limit,
+                offset=offset
+            )
+
+            results = []
+            for archive in archives:
+                # 处理空值字段
+                generated_report = archive.get("generated_report")
+                if generated_report is not None and isinstance(generated_report, str) and not generated_report.strip():
+                    generated_report = None
+
+                user_summary = archive.get("user_summary")
+                if user_summary is not None and isinstance(user_summary, str) and not user_summary.strip():
+                    user_summary = None
+
+                results.append({
+                    "archive_id": archive.get("_id"),
+                    "user_id": archive.get("user_id"),
+                    "archive_name": archive.get("archive_name"),
+                    "description": archive.get("description"),
+                    "tags": archive.get("tags", []),
+                    "search_log_id": archive.get("search_log_id"),
+                    "search_task_id": archive.get("search_task_id"),
+                    "items_count": archive.get("items_count", 0),
+                    "generated_report": generated_report,
+                    "user_summary": user_summary,
+                    # v2.7.0: 审核相关字段
+                    "status": archive.get("status", ArchiveStatus.PENDING.value),
+                    "reviewer_id": archive.get("reviewer_id"),
+                    "reviewer_name": archive.get("reviewer_name"),
+                    "reviewed_at": archive.get("reviewed_at").isoformat() if archive.get("reviewed_at") else None,
+                    "rejection_feedback": archive.get("rejection_feedback"),
+                    "submission_count": archive.get("submission_count", 1),
+                    "created_at": archive.get("created_at").isoformat() if archive.get("created_at") else None,
+                    "updated_at": archive.get("updated_at").isoformat() if archive.get("updated_at") else None
+                })
+
+            logger.info(f"返回 {len(results)} 个档案 (status={status})")
+            return results
+
+        except Exception as e:
+            logger.error(f"按状态查询档案列表失败: {e}", exc_info=True)
+            raise
+
+    async def get_archive_stats(
+        self,
+        user_id: Optional[int] = None
+    ) -> Dict[str, int]:
+        """获取档案统计信息
+
+        v2.7.0: 新增方法
+
+        获取各状态的档案数量统计。
+
+        Args:
+            user_id: 用户ID（可选，不传则统计所有档案）
+
+        Returns:
+            各状态的档案数量:
+            {
+                "pending": 10,
+                "approved": 50,
+                "rejected": 5,
+                "total": 65
+            }
+
+        Example:
+            >>> stats = await service.get_archive_stats()
+            >>> print(f"待审核: {stats['pending']}")
+        """
+        logger.info(f"获取档案统计: user_id={user_id}")
+
+        try:
+            pending_count = await self.archive_repo.count_by_status(
+                status=ArchiveStatus.PENDING.value,
+                user_id=user_id
+            )
+            approved_count = await self.archive_repo.count_by_status(
+                status=ArchiveStatus.APPROVED.value,
+                user_id=user_id
+            )
+            rejected_count = await self.archive_repo.count_by_status(
+                status=ArchiveStatus.REJECTED.value,
+                user_id=user_id
+            )
+            total_count = await self.archive_repo.count_by_status(
+                status=None,
+                user_id=user_id
+            )
+
+            stats = {
+                "pending": pending_count,
+                "approved": approved_count,
+                "rejected": rejected_count,
+                "total": total_count
+            }
+
+            logger.info(f"档案统计: {stats}")
+            return stats
+
+        except Exception as e:
+            logger.error(f"获取档案统计失败: {e}", exc_info=True)
             raise
 
     async def _create_snapshot(self, news_result_id: str) -> Optional[Dict[str, Any]]:

@@ -20,6 +20,7 @@ from src.api.v1.endpoints import nl_search
 from src.api.v1.endpoints import user_edits
 from src.api.v1.endpoints import chat
 from src.api.v1.endpoints import upload
+from src.api.v1.endpoints import review
 from src.api.v1.endpoints.auth import router as auth_router
 
 # 权限依赖
@@ -139,6 +140,13 @@ api_router.include_router(
     upload.router,
     tags=["📁 文件上传管理"],
     dependencies=[Depends(require_permissions("info:create"))]
+)
+
+# 档案审核管理 - 需要 archive:review 或 archive:update 权限
+api_router.include_router(
+    review.router,
+    tags=["📋 档案审核管理"],
+    dependencies=[Depends(require_permissions("archive:review", "archive:update", "search:basic"))]
 )
 
 # ==========================================

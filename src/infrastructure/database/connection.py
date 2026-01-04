@@ -390,5 +390,47 @@ async def create_indexes():
 
         logger.info("✅ 数据源存档系统索引创建完成（含防重复存档唯一索引）")
 
+        # ==================== Claude Search Session 索引 (v2.1) ====================
+
+        claude_search_sessions = db.claude_search_sessions
+
+        # 基础索引
+        await claude_search_sessions.create_index(
+            [("created_at", -1)],
+            name="idx_created_at_desc"
+        )
+
+        # 用户 + 创建时间复合索引（用户隔离查询优化）
+        await claude_search_sessions.create_index(
+            [("user_id", 1), ("created_at", -1)],
+            name="idx_user_created"
+        )
+
+        # 查询文本索引
+        await claude_search_sessions.create_index(
+            [("query", "text")],
+            name="idx_query_text"
+        )
+
+        # 版本索引
+        await claude_search_sessions.create_index(
+            [("version", 1)],
+            name="idx_version"
+        )
+
+        # 来源层级索引（用于聚合查询）
+        await claude_search_sessions.create_index(
+            [("results.source_tier", 1)],
+            name="idx_results_source_tier"
+        )
+
+        # 用户+查询复合索引（用于去重检查）
+        await claude_search_sessions.create_index(
+            [("user_id", 1), ("query", 1), ("created_at", -1)],
+            name="idx_user_query_time"
+        )
+
+        logger.info("✅ Claude Search Session 索引创建完成（v2.1 数据库存储）")
+
     except Exception as e:
         logger.warning(f"创建索引失败: {e}")

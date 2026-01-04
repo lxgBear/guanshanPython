@@ -1,13 +1,10 @@
-"""用户管理服务"""
+"""用户管理服务 (MongoDB 版本)"""
 
 from typing import Optional, List, Tuple
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.utils.logger import get_logger
 from src.infrastructure.auth import PasswordHandler
-from src.infrastructure.persistence.auth import UserRepository, RoleRepository
-from src.infrastructure.persistence.auth.role_repository import PermissionRepository
+from src.infrastructure.persistence.auth.mongodb import MongoUserRepository, MongoRoleRepository
 from src.core.domain.entities.auth import User, UserCreate, UserUpdate
 
 logger = get_logger(__name__)
@@ -23,18 +20,18 @@ class UserServiceException(Exception):
 
 
 class UserService:
-    """用户管理服务"""
+    """用户管理服务 (MongoDB 版本)"""
 
-    def __init__(self, session: AsyncSession):
-        self.session = session
-        self.user_repo = UserRepository(session)
-        self.role_repo = RoleRepository(session)
+    def __init__(self):
+        """初始化用户服务（无需 session 参数）"""
+        self.user_repo = MongoUserRepository()
+        self.role_repo = MongoRoleRepository()
         self.password_handler = PasswordHandler()
 
     async def create_user(
         self,
         data: UserCreate,
-        created_by: Optional[int] = None
+        created_by: Optional[str] = None
     ) -> User:
         """
         创建用户
@@ -61,51 +58,43 @@ class UserService:
         password_hash = self.password_handler.hash_password(data.password)
 
         # 创建用户
-        user = await self.user_repo.create(
+        user_doc = await self.user_repo.create(
             username=data.username,
             email=data.email,
             password_hash=password_hash,
             display_name=data.display_name,
             phone=data.phone,
             department=data.department,
+            roles=data.role_codes or [],  # 直接存储角色代码
             created_by=created_by
         )
 
-        # 分配角色
-        if data.role_codes:
-            roles = await self.role_repo.get_by_codes(data.role_codes)
-            if roles:
-                role_ids = [r.id for r in roles]
-                await self.user_repo.assign_roles(user.id, role_ids, created_by)
-
-        await self.session.commit()
-
         # 获取完整用户信息
-        return await self.get_user(user.id)
+        return await self.get_user(user_doc["_id"])
 
-    async def get_user(self, user_id: int) -> Optional[User]:
+    async def get_user(self, user_id: str) -> Optional[User]:
         """获取用户详情"""
         user_data = await self.user_repo.get_user_with_permissions(user_id)
         if not user_data:
             return None
 
-        user, role_codes, permission_codes = user_data
+        user_doc, role_codes, permission_codes = user_data
 
         return User(
-            id=user.id,
-            username=user.username,
-            email=user.email,
-            display_name=user.display_name,
-            phone=user.phone,
-            department=user.department,
-            is_active=user.is_active,
-            is_locked=user.is_locked,
-            lock_reason=user.lock_reason,
-            last_login=user.last_login,
-            login_attempts=user.login_attempts,
-            created_at=user.created_at,
-            updated_at=user.updated_at,
-            created_by=user.created_by,
+            id=user_doc["_id"],
+            username=user_doc["username"],
+            email=user_doc.get("email"),
+            display_name=user_doc.get("display_name"),
+            phone=user_doc.get("phone"),
+            department=user_doc.get("department"),
+            is_active=user_doc.get("is_active", True),
+            is_locked=user_doc.get("is_locked", False),
+            lock_reason=user_doc.get("lock_reason"),
+            last_login=user_doc.get("last_login"),
+            login_attempts=user_doc.get("login_attempts", 0),
+            created_at=user_doc.get("created_at"),
+            updated_at=user_doc.get("updated_at"),
+            created_by=user_doc.get("created_by"),
             roles=role_codes,
             permissions=permission_codes
         )
@@ -134,22 +123,22 @@ class UserService:
 
         result = []
         for u in users:
-            role_codes = [ur.role.code for ur in u.user_roles if ur.role.is_active]
+            role_codes = u.get("roles", [])
             result.append(User(
-                id=u.id,
-                username=u.username,
-                email=u.email,
-                display_name=u.display_name,
-                phone=u.phone,
-                department=u.department,
-                is_active=u.is_active,
-                is_locked=u.is_locked,
-                lock_reason=u.lock_reason,
-                last_login=u.last_login,
-                login_attempts=u.login_attempts,
-                created_at=u.created_at,
-                updated_at=u.updated_at,
-                created_by=u.created_by,
+                id=u["_id"],
+                username=u["username"],
+                email=u.get("email"),
+                display_name=u.get("display_name"),
+                phone=u.get("phone"),
+                department=u.get("department"),
+                is_active=u.get("is_active", True),
+                is_locked=u.get("is_locked", False),
+                lock_reason=u.get("lock_reason"),
+                last_login=u.get("last_login"),
+                login_attempts=u.get("login_attempts", 0),
+                created_at=u.get("created_at"),
+                updated_at=u.get("updated_at"),
+                created_by=u.get("created_by"),
                 roles=role_codes,
                 permissions=[]  # 列表不需要返回权限
             ))
@@ -158,9 +147,9 @@ class UserService:
 
     async def update_user(
         self,
-        user_id: int,
+        user_id: str,
         data: UserUpdate,
-        operator_id: Optional[int] = None
+        operator_id: Optional[str] = None
     ) -> Optional[User]:
         """
         更新用户
@@ -189,38 +178,29 @@ class UserService:
 
         # 更新角色
         if data.role_codes is not None:
-            roles = await self.role_repo.get_by_codes(data.role_codes)
-            role_ids = [r.id for r in roles] if roles else []
-            await self.user_repo.assign_roles(user_id, role_ids, operator_id)
-
-        await self.session.commit()
+            await self.user_repo.assign_roles(user_id, data.role_codes, operator_id)
 
         return await self.get_user(user_id)
 
-    async def delete_user(self, user_id: int) -> bool:
+    async def delete_user(self, user_id: str) -> bool:
         """删除用户"""
-        result = await self.user_repo.delete(user_id)
-        if result:
-            await self.session.commit()
-        return result
+        return await self.user_repo.delete(user_id)
 
-    async def lock_user(self, user_id: int, reason: str) -> Optional[User]:
+    async def lock_user(self, user_id: str, reason: str) -> Optional[User]:
         """锁定用户"""
         await self.user_repo.lock_user(user_id, reason)
-        await self.session.commit()
         return await self.get_user(user_id)
 
-    async def unlock_user(self, user_id: int) -> Optional[User]:
+    async def unlock_user(self, user_id: str) -> Optional[User]:
         """解锁用户"""
         await self.user_repo.unlock_user(user_id)
-        await self.session.commit()
         return await self.get_user(user_id)
 
     async def assign_roles(
         self,
-        user_id: int,
+        user_id: str,
         role_codes: List[str],
-        operator_id: Optional[int] = None
+        operator_id: Optional[str] = None
     ) -> Optional[User]:
         """
         分配角色给用户
@@ -237,39 +217,36 @@ class UserService:
         if not user:
             raise UserServiceException("USER_003", "用户不存在")
 
+        # 验证角色是否存在
         roles = await self.role_repo.get_by_codes(role_codes)
-        if not roles:
-            raise UserServiceException("ROLE_001", "角色不存在")
+        if len(roles) != len(role_codes):
+            raise UserServiceException("ROLE_001", "部分角色不存在")
 
-        role_ids = [r.id for r in roles]
-        await self.user_repo.assign_roles(user_id, role_ids, operator_id)
-        await self.session.commit()
+        await self.user_repo.assign_roles(user_id, role_codes, operator_id)
 
         return await self.get_user(user_id)
 
     async def add_role(
         self,
-        user_id: int,
+        user_id: str,
         role_code: str,
-        operator_id: Optional[int] = None
+        operator_id: Optional[str] = None
     ) -> Optional[User]:
         """给用户添加一个角色"""
         role = await self.role_repo.get_by_code(role_code)
         if not role:
             raise UserServiceException("ROLE_001", f"角色 {role_code} 不存在")
 
-        await self.user_repo.add_role(user_id, role.id, operator_id)
-        await self.session.commit()
+        await self.user_repo.add_role(user_id, role_code, operator_id)
 
         return await self.get_user(user_id)
 
-    async def remove_role(self, user_id: int, role_code: str) -> Optional[User]:
+    async def remove_role(self, user_id: str, role_code: str) -> Optional[User]:
         """移除用户的一个角色"""
         role = await self.role_repo.get_by_code(role_code)
         if not role:
             raise UserServiceException("ROLE_001", f"角色 {role_code} 不存在")
 
-        await self.user_repo.remove_role(user_id, role.id)
-        await self.session.commit()
+        await self.user_repo.remove_role(user_id, role_code)
 
         return await self.get_user(user_id)

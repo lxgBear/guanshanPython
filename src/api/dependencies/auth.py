@@ -1,12 +1,10 @@
-"""认证依赖注入"""
+"""认证依赖注入 (MongoDB 版本)"""
 
 from typing import Optional, List, Callable
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.infrastructure.database.connection import get_mariadb_session
 from src.infrastructure.auth import JWTHandler, TokenData
 from src.services.auth import AuthService
 from src.core.domain.entities.auth import User
@@ -18,18 +16,8 @@ security = HTTPBearer(auto_error=False)
 jwt_handler = JWTHandler()
 
 
-async def get_db_session() -> AsyncSession:
-    """获取数据库会话"""
-    session = await get_mariadb_session()
-    try:
-        yield session
-    finally:
-        await session.close()
-
-
 async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    session: AsyncSession = Depends(get_db_session)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Optional[User]:
     """
     获取当前用户（可选认证）
@@ -49,8 +37,8 @@ async def get_current_user(
     if token_data.token_type != "access":
         return None
 
-    # 获取完整用户信息
-    auth_service = AuthService(session)
+    # 获取完整用户信息（使用 MongoDB）
+    auth_service = AuthService()
     user = await auth_service.get_current_user(token)
 
     return user

@@ -12,7 +12,7 @@ from src.config import get_settings
 
 class TokenData(BaseModel):
     """Token 数据模型"""
-    user_id: int
+    user_id: str  # MongoDB 使用字符串 ID
     username: str
     roles: List[str] = []
     permissions: List[str] = []
@@ -34,7 +34,7 @@ class JWTHandler:
 
     def create_access_token(
         self,
-        user_id: int,
+        user_id: str,
         username: str,
         roles: List[str],
         permissions: List[str],
@@ -75,7 +75,7 @@ class JWTHandler:
 
     def create_refresh_token(
         self,
-        user_id: int,
+        user_id: str,
         username: str,
         expires_delta: Optional[timedelta] = None
     ) -> str:
@@ -121,7 +121,7 @@ class JWTHandler:
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
 
-            user_id = int(payload.get("sub"))
+            user_id = payload.get("sub")  # 保持字符串类型
             username = payload.get("username")
             token_type = payload.get("token_type", "access")
             jti = payload.get("jti", "")
