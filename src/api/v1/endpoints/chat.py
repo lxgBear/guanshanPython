@@ -21,7 +21,7 @@ v2.7.0 更新:
 """
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, AsyncGenerator, List, Dict, Any
 import json
 import logging
@@ -999,11 +999,19 @@ async def chat_sync_endpoint(request: ChatRequest):
 
 
 class InfoItemModel(BaseModel):
-    """信息条目存储模型 (v2.9.0 优化)
+    """信息条目存储模型 (v2.9.0 优化, v2.10.1 响应优化)
 
     只存储引用信息 (mongo_id + source)，查询时从原表填充完整数据。
     优化目的: 减少数据冗余，降低数据库存储压力，保证数据一致性。
+
+    v2.10.1: 添加 exclude_none 配置，列表接口不返回 null 字段。
+    前端需要完整数据时使用 POST /chat/messages/batch-sources 接口。
     """
+    model_config = ConfigDict(
+        # 不返回值为 None 的字段，让响应更干净
+        exclude_none=True
+    )
+
     id: str = Field(..., description="条目ID (同 mongo_id)")
     mongo_id: str = Field(..., description="MongoDB 数据库 ID")
     source: str = Field(..., description="来源类型 (新闻/用户上传)")
