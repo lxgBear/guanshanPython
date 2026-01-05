@@ -49,6 +49,73 @@ REMOTE_AI_SERVICE_TIMEOUT = 120.0
 router = APIRouter()
 
 
+# ==================== 工具函数 ====================
+
+async def populate_info_items(info_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """填充 info_items 的完整数据 (v2.9.0)
+
+    从原表查询完整信息，根据 source 字段路由到不同的集合:
+    - "用户上传" → file_uploads 集合
+    - 其他 → news_results 集合
+
+    Args:
+        info_items: 只包含 mongo_id + source 的引用列表
+
+    Returns:
+        填充了 title, score, preview 等完整信息的列表
+    """
+    if not info_items:
+        return []
+
+    db = await get_mongodb_database()
+    populated_items = []
+
+    for item in info_items:
+        mongo_id = item.get("mongo_id") or item.get("id")
+        source = item.get("source", "")
+
+        if not mongo_id:
+            populated_items.append(item)
+            continue
+
+        try:
+            if source == "用户上传":
+                # 从 file_uploads 集合查询
+                result = await db["file_uploads"].find_one(
+                    {"_id": ObjectId(mongo_id)},
+                    {"title": 1, "content": 1, "_id": 0}
+                )
+                if result:
+                    populated_items.append({
+                        **item,
+                        "title": result.get("title") or item.get("title", ""),
+                        "preview": (result.get("content") or "")[:200],
+                    })
+                else:
+                    populated_items.append(item)
+            else:
+                # 从 news_results 集合查询
+                result = await db["news_results"].find_one(
+                    {"_id": mongo_id},
+                    {"news_results.title_zh": 1, "news_results.summary_zh": 1, "_id": 0}
+                )
+                if result:
+                    nested = result.get("news_results", {})
+                    populated_items.append({
+                        **item,
+                        "title": nested.get("title_zh") or item.get("title", ""),
+                        "preview": (nested.get("summary_zh") or "")[:200],
+                    })
+                else:
+                    populated_items.append(item)
+
+        except Exception as e:
+            logger.warning(f"填充 info_item 失败 (mongo_id={mongo_id}): {e}")
+            populated_items.append(item)
+
+    return populated_items
+
+
 # ==================== 数据模型 ====================
 
 class HistoryMessage(BaseModel):
@@ -932,13 +999,18 @@ async def chat_sync_endpoint(request: ChatRequest):
 
 
 class InfoItemModel(BaseModel):
-    """信息条目模型 - 对应前端 InfoItem"""
-    id: str = Field(..., description="条目ID")
-    title: str = Field(..., description="标题")
-    source: Optional[str] = Field(None, description="来源")
-    mongo_id: Optional[str] = Field(None, description="MongoDB ID")
-    score: Optional[float] = Field(None, description="相关性评分")
-    preview: Optional[str] = Field(None, description="预览内容")
+    """信息条目存储模型 (v2.9.0 优化)
+
+    只存储引用信息 (mongo_id + source)，查询时从原表填充完整数据。
+    优化目的: 减少数据冗余，降低数据库存储压力，保证数据一致性。
+    """
+    id: str = Field(..., description="条目ID (同 mongo_id)")
+    mongo_id: str = Field(..., description="MongoDB 数据库 ID")
+    source: str = Field(..., description="来源类型 (新闻/用户上传)")
+    # 以下字段为可选，用于兼容旧数据和查询时填充
+    title: Optional[str] = Field(None, description="标题 (查询时填充)")
+    score: Optional[float] = Field(None, description="相关性评分 (查询时填充)")
+    preview: Optional[str] = Field(None, description="预览内容 (查询时填充)")
 
 
 class ConversationCreateRequest(BaseModel):
@@ -1160,17 +1232,27 @@ async def get_conversation(
                 }
             )
 
-        # 转换时间格式
+        # 转换时间格式 + v2.9.0: 填充 info_items 完整数据
         messages = []
         for msg in conversation.get("messages", []):
+            # v2.9.0: 填充消息中的 info_items
+            msg_info_items = msg.get("info_items", [])
+            if msg_info_items:
+                msg_info_items = await populate_info_items(msg_info_items)
+
             messages.append({
                 "id": msg["id"],
                 "role": msg["role"],
                 "content": msg["content"],
                 "timestamp": msg["timestamp"],
                 "sources": msg.get("sources", []),
-                "info_items": msg.get("info_items", [])
+                "info_items": msg_info_items
             })
+
+        # v2.9.0: 填充对话级别的 info_items
+        conv_info_items = conversation.get("info_items", [])
+        if conv_info_items:
+            conv_info_items = await populate_info_items(conv_info_items)
 
         metadata = conversation.get("metadata", {})
         return {
@@ -1182,7 +1264,7 @@ async def get_conversation(
             "last_message_at": conversation["last_message_at"].isoformat() if conversation.get("last_message_at") else "",
             "created_at": conversation["created_at"].isoformat() if conversation.get("created_at") else "",
             "is_pinned": metadata.get("is_pinned", False),
-            "info_items": conversation.get("info_items", [])
+            "info_items": conv_info_items
         }
 
     except HTTPException:
