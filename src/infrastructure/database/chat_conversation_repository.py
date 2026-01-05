@@ -579,6 +579,72 @@ class ChatConversationRepository:
 
         return conversations
 
+    async def get_messages_by_ids(
+        self,
+        message_ids: List[str],
+        user_id: Optional[str] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """根据消息ID批量查询消息 (v2.10.0)
+
+        用于根据 message_id (雪花ID) 查询消息的 info_items 等信息。
+
+        Args:
+            message_ids: 消息ID列表 (雪花ID)
+            user_id: 用户ID过滤（可选，用于权限检查）
+
+        Returns:
+            Dict[str, Dict]: message_id -> 消息数据的映射
+
+        Example:
+            >>> messages = await repo.get_messages_by_ids(
+            ...     ["msg_id_1", "msg_id_2"]
+            ... )
+            >>> for msg_id, msg_data in messages.items():
+            ...     print(msg_id, msg_data.get("info_items"))
+        """
+        collection = await self._get_collection()
+
+        if not message_ids:
+            return {}
+
+        # 构建查询条件
+        filter_query = {
+            "messages.id": {"$in": message_ids}
+        }
+
+        if user_id:
+            filter_query["user_id"] = user_id
+
+        # 使用聚合管道查询并展开消息
+        pipeline = [
+            {"$match": filter_query},
+            {"$unwind": "$messages"},
+            {"$match": {"messages.id": {"$in": message_ids}}},
+            {"$project": {
+                "_id": 0,
+                "conversation_id": "$_id",
+                "user_id": 1,
+                "message_id": "$messages.id",
+                "role": "$messages.role",
+                "content": "$messages.content",
+                "timestamp": "$messages.timestamp",
+                "sources": "$messages.sources",
+                "info_items": "$messages.info_items"
+            }}
+        ]
+
+        cursor = collection.aggregate(pipeline)
+        results = await cursor.to_list(length=len(message_ids))
+
+        # 转换为 message_id -> 消息数据 的映射
+        message_map = {}
+        for msg in results:
+            msg_id = msg.pop("message_id")
+            message_map[msg_id] = msg
+
+        logger.debug(f"批量查询消息: 请求={len(message_ids)}, 找到={len(message_map)}")
+        return message_map
+
     async def create_indexes(self):
         """创建索引以优化查询性能
 
