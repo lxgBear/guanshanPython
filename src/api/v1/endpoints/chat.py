@@ -21,7 +21,7 @@ v2.7.0 更新:
 """
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
 from typing import Optional, AsyncGenerator, List, Dict, Any
 import json
 import logging
@@ -999,19 +999,11 @@ async def chat_sync_endpoint(request: ChatRequest):
 
 
 class InfoItemModel(BaseModel):
-    """信息条目存储模型 (v2.9.0 优化, v2.10.1 响应优化)
+    """信息条目存储模型 (v2.9.0 优化)
 
     只存储引用信息 (mongo_id + source)，查询时从原表填充完整数据。
     优化目的: 减少数据冗余，降低数据库存储压力，保证数据一致性。
-
-    v2.10.1: 添加 exclude_none 配置，列表接口不返回 null 字段。
-    前端需要完整数据时使用 POST /chat/messages/batch-sources 接口。
     """
-    model_config = ConfigDict(
-        # 不返回值为 None 的字段，让响应更干净
-        exclude_none=True
-    )
-
     id: str = Field(..., description="条目ID (同 mongo_id)")
     mongo_id: str = Field(..., description="MongoDB 数据库 ID")
     source: str = Field(..., description="来源类型 (新闻/用户上传)")
@@ -1403,6 +1395,87 @@ async def get_messages(
     except Exception as e:
         logger.error(f"获取消息历史失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="获取消息历史失败")
+
+
+@router.get(
+    "/chat/conversations/{conversation_id}/messages/{message_id}",
+    summary="获取单条消息详情",
+    description="获取单条消息的完整详情，包含填充后的 info_items。v2.10.0 新增"
+)
+async def get_message_detail(
+    conversation_id: str,
+    message_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """获取单条消息详情
+
+    v2.10.0 新增 - 用于点击"查看 X 条搜索结果"时获取完整的 info_items
+
+    返回包含:
+    - 消息基本信息 (id, role, content, timestamp)
+    - sources 来源引用
+    - info_items 完整信息条目列表（已填充 title, preview 等字段）
+
+    Args:
+        conversation_id: 对话会话ID
+        message_id: 消息ID
+
+    Returns:
+        消息详情，包含填充后的 info_items
+    """
+    try:
+        # 先检查对话归属
+        conversation = await chat_conversation_repository.get_by_id(
+            conversation_id, include_messages=False
+        )
+
+        if not conversation:
+            raise HTTPException(status_code=404, detail="对话会话不存在")
+
+        # 权限检查
+        is_admin = "admin" in current_user.roles
+        conv_owner_id = conversation.get("user_id")
+        if not is_admin and str(conv_owner_id) != str(current_user.id):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "AUTH_005",
+                    "message": "权限不足，您只能获取自己的对话消息"
+                }
+            )
+
+        # 获取单条消息
+        message = await chat_conversation_repository.get_message_by_id(
+            conversation_id=conversation_id,
+            message_id=message_id
+        )
+
+        if not message:
+            raise HTTPException(status_code=404, detail="消息不存在")
+
+        # 填充 info_items 完整数据
+        msg_info_items = message.get("info_items", [])
+        if msg_info_items:
+            msg_info_items = await populate_info_items(msg_info_items)
+
+        return {
+            "conversation_id": conversation_id,
+            "message": {
+                "id": message["id"],
+                "role": message["role"],
+                "content": message["content"],
+                "timestamp": message["timestamp"],
+                "sources": message.get("sources", []),
+                "info_items": msg_info_items,
+                "info_items_count": len(msg_info_items)
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取消息详情失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取消息详情失败")
 
 
 class UpdateConversationRequest(BaseModel):
@@ -1838,220 +1911,3 @@ async def delete_search_history(
     except Exception as e:
         logger.error(f"删除搜索历史失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="删除失败")
-
-
-# ==================== 批量查询 API (v2.10.0) ====================
-
-class BatchSourcesRequest(BaseModel):
-    """批量查询来源数据请求 (v2.10.0)"""
-    message_ids: List[str] = Field(
-        ...,
-        description="消息ID列表 (雪花ID)",
-        min_length=1,
-        max_length=50  # 限制批量查询数量
-    )
-
-
-class PopulatedSourceItem(BaseModel):
-    """填充后的来源数据项"""
-    mongo_id: str = Field(..., description="MongoDB 数据库 ID")
-    source: str = Field(..., description="来源类型")
-    title: Optional[str] = Field(None, description="标题")
-    preview: Optional[str] = Field(None, description="预览内容")
-    url: Optional[str] = Field(None, description="原文链接")
-    content_zh: Optional[str] = Field(None, description="中文内容")
-    summary_zh: Optional[str] = Field(None, description="中文摘要")
-
-
-class MessageSourcesResult(BaseModel):
-    """单条消息的来源数据"""
-    message_id: str = Field(..., description="消息ID")
-    conversation_id: str = Field(..., description="对话ID")
-    sources: List[PopulatedSourceItem] = Field(default_factory=list, description="填充后的来源数据")
-
-
-class BatchSourcesResponse(BaseModel):
-    """批量查询来源数据响应"""
-    results: List[MessageSourcesResult] = Field(default_factory=list)
-    found_count: int = Field(..., description="找到的消息数量")
-    requested_count: int = Field(..., description="请求的消息数量")
-
-
-async def populate_info_items_full(info_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """填充 info_items 的完整数据 (v2.10.0 增强版)
-
-    从原表查询完整信息，包含 content_zh, summary_zh 等字段。
-
-    Args:
-        info_items: 只包含 mongo_id + source 的引用列表
-
-    Returns:
-        填充了完整信息的列表
-    """
-    if not info_items:
-        return []
-
-    db = await get_mongodb_database()
-    populated_items = []
-
-    for item in info_items:
-        mongo_id = item.get("mongo_id") or item.get("id")
-        source = item.get("source", "")
-
-        if not mongo_id:
-            populated_items.append(item)
-            continue
-
-        try:
-            if source == "用户上传":
-                # 从 file_uploads 集合查询
-                result = await db["file_uploads"].find_one(
-                    {"_id": ObjectId(mongo_id)},
-                    {"title": 1, "content": 1, "storage_url": 1, "_id": 0}
-                )
-                if result:
-                    content = result.get("content", "")
-                    populated_items.append({
-                        "mongo_id": mongo_id,
-                        "source": source,
-                        "title": result.get("title") or item.get("title", ""),
-                        "preview": content[:200] if content else "",
-                        "url": result.get("storage_url"),
-                        "content_zh": content,
-                        "summary_zh": None,
-                    })
-                else:
-                    populated_items.append({
-                        "mongo_id": mongo_id,
-                        "source": source,
-                        "title": item.get("title", ""),
-                        "preview": item.get("preview", ""),
-                    })
-            else:
-                # 从 news_results 集合查询
-                result = await db["news_results"].find_one(
-                    {"_id": mongo_id},
-                    {
-                        "url": 1,
-                        "news_results.title_zh": 1,
-                        "news_results.summary_zh": 1,
-                        "news_results.content_zh": 1,
-                        "_id": 0
-                    }
-                )
-                if result:
-                    nested = result.get("news_results", {})
-                    content_zh = nested.get("content_zh", "")
-                    populated_items.append({
-                        "mongo_id": mongo_id,
-                        "source": source,
-                        "title": nested.get("title_zh") or item.get("title", ""),
-                        "preview": content_zh[:200] if content_zh else "",
-                        "url": result.get("url"),
-                        "content_zh": content_zh,
-                        "summary_zh": nested.get("summary_zh"),
-                    })
-                else:
-                    populated_items.append({
-                        "mongo_id": mongo_id,
-                        "source": source,
-                        "title": item.get("title", ""),
-                        "preview": item.get("preview", ""),
-                    })
-
-        except Exception as e:
-            logger.warning(f"填充 info_item 完整数据失败 (mongo_id={mongo_id}): {e}")
-            populated_items.append({
-                "mongo_id": mongo_id,
-                "source": source,
-                "title": item.get("title", ""),
-                "preview": item.get("preview", ""),
-            })
-
-    return populated_items
-
-
-@router.post(
-    "/chat/messages/batch-sources",
-    response_model=BatchSourcesResponse,
-    summary="批量查询消息关联的来源数据 (v2.10.0)",
-    description="根据消息ID (雪花ID) 批量查询消息关联的 info_items 中的 mongo_id 对应的完整数据"
-)
-async def batch_get_message_sources(
-    request: BatchSourcesRequest,
-    current_user: User = Depends(get_current_active_user)
-):
-    """批量查询消息关联的来源数据
-
-    用于用户点击历史记录时，根据 message_id 查询该消息关联的所有来源数据。
-
-    **数据流**:
-    1. 根据 message_ids 从 chat_conversations 集合查询消息
-    2. 提取每条消息的 info_items
-    3. 根据 info_items 中的 mongo_id + source 从原表查询完整数据
-    4. 返回填充后的完整来源数据
-
-    Args:
-        request: 包含 message_ids 的请求体
-
-    Returns:
-        BatchSourcesResponse: 每个 message_id 对应的完整来源数据
-
-    Example:
-        ```bash
-        curl -X POST "http://localhost:8000/api/v1/chat/messages/batch-sources" \\
-          -H "Authorization: Bearer <token>" \\
-          -H "Content-Type: application/json" \\
-          -d '{"message_ids": ["msg_id_1", "msg_id_2"]}'
-        ```
-    """
-    try:
-        logger.info(f"批量查询消息来源: user_id={current_user.id}, count={len(request.message_ids)}")
-
-        # 1. 批量查询消息
-        # v2.10.0: 用户隔离 - 只能查询自己的消息（admin 可查所有）
-        is_admin = "admin" in current_user.roles
-        effective_user_id = None if is_admin else str(current_user.id)
-
-        messages = await chat_conversation_repository.get_messages_by_ids(
-            message_ids=request.message_ids,
-            user_id=effective_user_id
-        )
-
-        if not messages:
-            return BatchSourcesResponse(
-                results=[],
-                found_count=0,
-                requested_count=len(request.message_ids)
-            )
-
-        # 2. 对每条消息的 info_items 进行填充
-        results = []
-        for msg_id, msg_data in messages.items():
-            info_items = msg_data.get("info_items", [])
-
-            # 填充完整数据
-            if info_items:
-                populated_sources = await populate_info_items_full(info_items)
-            else:
-                populated_sources = []
-
-            results.append(MessageSourcesResult(
-                message_id=msg_id,
-                conversation_id=msg_data.get("conversation_id", ""),
-                sources=[
-                    PopulatedSourceItem(**s) for s in populated_sources
-                ]
-            ))
-
-        logger.info(f"批量查询完成: 请求={len(request.message_ids)}, 找到={len(results)}")
-
-        return BatchSourcesResponse(
-            results=results,
-            found_count=len(results),
-            requested_count=len(request.message_ids)
-        )
-
-    except Exception as e:
-        logger.error(f"批量查询消息来源失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="批量查询失败")
