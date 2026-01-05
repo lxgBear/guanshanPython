@@ -531,6 +531,48 @@ class ChatConversationRepository:
 
         return await collection.count_documents(filter_query)
 
+    async def get_message_by_id(
+        self,
+        conversation_id: str,
+        message_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """根据消息 ID 获取单条消息
+
+        v2.10.0 新增 - 用于获取消息的完整 info_items
+
+        Args:
+            conversation_id: 会话ID
+            message_id: 消息ID
+
+        Returns:
+            Optional[Dict]: 消息数据，不存在时返回 None
+
+        Example:
+            >>> message = await repo.get_message_by_id(
+            ...     "248728141926559744", "msg_123456"
+            ... )
+            >>> if message:
+            ...     print(message["content"], message["info_items"])
+        """
+        collection = await self._get_collection()
+
+        # 使用聚合管道来获取单条消息
+        pipeline = [
+            {"$match": {"_id": conversation_id}},
+            {"$unwind": "$messages"},
+            {"$match": {"messages.id": message_id}},
+            {"$project": {"message": "$messages", "_id": 0}}
+        ]
+
+        cursor = collection.aggregate(pipeline)
+        result = await cursor.to_list(length=1)
+
+        if not result:
+            logger.debug(f"消息不存在: conv_id={conversation_id}, msg_id={message_id}")
+            return None
+
+        return result[0].get("message")
+
     async def search_conversations(
         self,
         query: str,
@@ -578,72 +620,6 @@ class ChatConversationRepository:
             conv["last_message"] = messages[0] if messages else None
 
         return conversations
-
-    async def get_messages_by_ids(
-        self,
-        message_ids: List[str],
-        user_id: Optional[str] = None
-    ) -> Dict[str, Dict[str, Any]]:
-        """根据消息ID批量查询消息 (v2.10.0)
-
-        用于根据 message_id (雪花ID) 查询消息的 info_items 等信息。
-
-        Args:
-            message_ids: 消息ID列表 (雪花ID)
-            user_id: 用户ID过滤（可选，用于权限检查）
-
-        Returns:
-            Dict[str, Dict]: message_id -> 消息数据的映射
-
-        Example:
-            >>> messages = await repo.get_messages_by_ids(
-            ...     ["msg_id_1", "msg_id_2"]
-            ... )
-            >>> for msg_id, msg_data in messages.items():
-            ...     print(msg_id, msg_data.get("info_items"))
-        """
-        collection = await self._get_collection()
-
-        if not message_ids:
-            return {}
-
-        # 构建查询条件
-        filter_query = {
-            "messages.id": {"$in": message_ids}
-        }
-
-        if user_id:
-            filter_query["user_id"] = user_id
-
-        # 使用聚合管道查询并展开消息
-        pipeline = [
-            {"$match": filter_query},
-            {"$unwind": "$messages"},
-            {"$match": {"messages.id": {"$in": message_ids}}},
-            {"$project": {
-                "_id": 0,
-                "conversation_id": "$_id",
-                "user_id": 1,
-                "message_id": "$messages.id",
-                "role": "$messages.role",
-                "content": "$messages.content",
-                "timestamp": "$messages.timestamp",
-                "sources": "$messages.sources",
-                "info_items": "$messages.info_items"
-            }}
-        ]
-
-        cursor = collection.aggregate(pipeline)
-        results = await cursor.to_list(length=len(message_ids))
-
-        # 转换为 message_id -> 消息数据 的映射
-        message_map = {}
-        for msg in results:
-            msg_id = msg.pop("message_id")
-            message_map[msg_id] = msg
-
-        logger.debug(f"批量查询消息: 请求={len(message_ids)}, 找到={len(message_map)}")
-        return message_map
 
     async def create_indexes(self):
         """创建索引以优化查询性能
