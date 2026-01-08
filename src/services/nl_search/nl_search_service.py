@@ -34,7 +34,7 @@ from datetime import datetime
 from src.services.nl_search.config import nl_search_config
 from src.services.nl_search.llm_processor import LLMProcessor
 from src.services.nl_search.gpt5_search_adapter import GPT5SearchAdapter
-from src.services.nl_search.firecrawl_search_adapter import FirecrawlSearchAdapter
+from src.services.nl_search.firecrawl_search_adapter import FirecrawlSearchAdapter, SearchResult
 from src.infrastructure.database.mongo_nl_search_repository import MongoNLSearchLogRepository
 from src.infrastructure.database.user_selection_repository import user_selection_repository
 from src.infrastructure.crawlers.firecrawl_adapter import FirecrawlAdapter
@@ -313,14 +313,32 @@ class NLSearchService:
         analysis: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        单次搜索模式（v3.3.0: Claude 查询优化 + 分数过滤）
+        单次搜索模式（v3.3.0: Claude 查询优化 + 分数过滤 + 多语言搜索）
 
-        流程：Claude解析 → 查询优化 → GPT搜索（10条） → 分数过滤 → 只爬取高分结果
+        流程：
+        - 如果启用多语言 + Firecrawl + Claude: 多语言搜索
+        - 否则: Claude解析 → 查询优化 → GPT搜索（10条） → 分数过滤 → 只爬取高分结果
 
-        v3.3.0 更新:
-        - 使用 Claude 解析的关键词/实体优化搜索查询
-        - 可配置优化策略 (keywords / entities / both)
+        v3.4.0 更新:
+        - 多语言搜索支持（Claude 智能语言检测 + 多语言并行搜索）
         """
+        # v3.4.0: 检查是否启用多语言搜索
+        multilang_enabled = (
+            nl_search_config.multilang_enabled and
+            self.search_engine == "firecrawl" and
+            self.use_claude and
+            self.claude_client is not None
+        )
+
+        if multilang_enabled:
+            logger.info("🌐 启用多语言搜索模式")
+            return await self._create_search_multilang(
+                log_id=log_id,
+                query_text=query_text,
+                analysis=analysis
+            )
+
+        # 原有逻辑: 单语言搜索
         # v3.3.0: 使用 Claude 解析结果优化搜索查询
         optimized_query = self._optimize_search_query(query_text, analysis)
 
@@ -433,6 +451,171 @@ class NLSearchService:
             "results": valid_results,  # ← 只返回有 mongo_id 的有效结果
             "created_at": datetime.now().isoformat()
         }
+
+    async def _create_search_multilang(
+        self,
+        log_id: str,
+        query_text: str,
+        analysis: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        多语言搜索模式（v3.4.0）
+
+        流程：
+        1. Claude 检测相关语言
+        2. 生成多语言查询
+        3. 并行执行多语言搜索
+        4. 聚合去重结果
+        5. 抓取内容并返回
+        """
+        try:
+            # Step 1: Claude 智能检测相关语言
+            logger.info("🌐 使用 Claude 智能检测搜索语言...")
+            detection_result = await self.claude_client.detect_relevant_languages(
+                query=query_text,
+                context=analysis,
+                min_languages=2,
+                max_languages=5
+            )
+
+            languages = detection_result["languages"]
+            logger.info(
+                f"检测到相关语言: {languages}, "
+                f"理由: {detection_result.get('reasoning', '')[:50]}..."
+            )
+
+            # Step 2: 生成多语言查询
+            multilang_queries = await self.claude_client.generate_multilang_queries(
+                query=query_text,
+                languages=languages
+            )
+
+            logger.info(f"生成多语言查询: {list(multilang_queries.keys())} 种语言")
+
+            # Step 3: 并行执行多语言搜索
+            # 使用 FirecrawlSearchAdapter.multi_language_search()
+            multilang_result = await self.search_adapter.multi_language_search(
+                query=query_text,
+                multilang_queries=multilang_queries,
+                max_results_per_lang=nl_search_config.multilang_results_per_lang,
+                tbs=nl_search_config.default_time_filter if nl_search_config.enable_time_filter else None,
+                auto_time_filter=nl_search_config.enable_time_filter
+            )
+
+            # Step 4: 处理结果
+            all_results = multilang_result.get("all_results", [])
+            results_by_lang = multilang_result.get("results_by_lang", {})
+            stats = multilang_result.get("stats", {})
+
+            logger.info(
+                f"多语言搜索完成: 总计 {stats.get('total_results', 0)} 个结果, "
+                f"去重后 {stats.get('unique_results', 0)} 个唯一结果"
+            )
+
+            # 转换为统一的 SearchResult 格式
+            search_results = []
+            for r in all_results:
+                search_results.append(SearchResult(
+                    title=r.get("title", ""),
+                    url=r.get("url", ""),
+                    snippet=r.get("snippet", ""),
+                    position=r.get("position", 0),
+                    score=r.get("score", 0.0),
+                    source=r.get("source", "firecrawl"),
+                    markdown=r.get("markdown", ""),
+                    published_date=r.get("published_date", "")
+                ))
+
+            # 分数过滤：只保留高质量结果
+            results_dict = [r.to_dict() for r in search_results]
+            high_score_results = [
+                r for r in results_dict
+                if r.get("score", 0.0) >= nl_search_config.score_threshold
+            ]
+            logger.info(
+                f"分数过滤: {len(results_dict)}个结果 → {len(high_score_results)}个高分结果 "
+                f"(阈值: {nl_search_config.score_threshold})"
+            )
+
+            # Step 5: 并发抓取内容
+            enriched_results = await self._scrape_search_results_concurrent(
+                search_results=high_score_results,
+                max_concurrent=nl_search_config.scrape_max_concurrent,
+                log_id=log_id
+            )
+            logger.info(f"内容抓取完成: {len(enriched_results)}个结果")
+
+            # Step 6: 保存搜索结果
+            try:
+                await self.repository.update_search_results(
+                    log_id=log_id,
+                    search_results=enriched_results,
+                    results_count=len(enriched_results),
+                    total_results=len(results_dict),
+                    high_score_results=len(high_score_results),
+                    score_threshold=nl_search_config.score_threshold
+                )
+                logger.info(f"多语言搜索结果已保存: log_id={log_id}")
+            except Exception as e:
+                logger.warning(f"保存搜索结果失败: {e}")
+
+            # 双写到独立 search_results 集合
+            url_to_id = await self._write_to_search_results_collection(log_id, enriched_results)
+
+            # 将 mongo_id 添加回结果，只保留有效结果
+            valid_results = []
+            filtered_count = 0
+
+            for result in enriched_results:
+                url = result.get("url")
+                if url:
+                    normalized_url = normalize_url(url)
+                    mongo_id = url_to_id.get(normalized_url)
+
+                    if mongo_id:
+                        result["mongo_id"] = mongo_id
+                        valid_results.append(result)
+                    else:
+                        filtered_count += 1
+
+            if filtered_count > 0:
+                logger.info(
+                    f"✅ 结果过滤: {len(enriched_results)} → {len(valid_results)} 个有效结果 "
+                    f"(过滤: {filtered_count})"
+                )
+
+            # 构建返回结果
+            return {
+                "log_id": log_id,
+                "query_text": query_text,
+                "search_mode": "multilang",
+                "analysis": analysis,
+                "multilang_info": {
+                    "languages": languages,
+                    "language_detection": detection_result.get("reasoning", ""),
+                    "results_by_lang": results_by_lang,
+                    "stats": stats
+                },
+                "total_results": len(results_dict),
+                "high_score_results": len(high_score_results),
+                "score_threshold": nl_search_config.score_threshold,
+                "results": valid_results,
+                "created_at": datetime.now().isoformat()
+            }
+
+        except Exception as e:
+            logger.error(f"多语言搜索失败: {e}", exc_info=True)
+            # 失败时降级到普通单语言搜索
+            logger.info("降级到单语言搜索模式...")
+            # 这里需要递归调用，但为了避免死循环，我们临时禁用多语言
+            original_enabled = nl_search_config.multilang_enabled
+            nl_search_config.multilang_enabled = False
+            try:
+                result = await self._create_search_single(log_id, query_text, analysis)
+                result["search_mode"] = "single_fallback"
+                return result
+            finally:
+                nl_search_config.multilang_enabled = original_enabled
 
     async def _create_search_multi(
         self,
