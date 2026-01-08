@@ -47,7 +47,7 @@ class SystemSearchConfig:
     
     # API 限制
     MAX_LIMIT: int = field(default_factory=lambda: 10 if os.getenv("TEST_MODE", "false").lower() == "true" else 100)
-    DEFAULT_LIMIT: int = field(default_factory=lambda: 10 if os.getenv("TEST_MODE", "false").lower() == "true" else 20)
+    DEFAULT_LIMIT: int = field(default_factory=lambda: 10 if os.getenv("TEST_MODE", "false").lower() == "true" else 100)
     MIN_LIMIT: int = 1
     
     # 页面大小
@@ -91,7 +91,7 @@ class SearchConfigTemplate:
     description: str = ""  # 模板描述
 
     # 搜索参数
-    limit: int = 20  # 结果数量
+    limit: int = 100  # 结果数量（每个子搜索）
     sources: List[str] = field(default_factory=list)  # 搜索来源
     categories: List[str] = field(default_factory=list)  # 搜索类别
     language: str = SearchLanguage.ZH.value  # 语言

@@ -21,7 +21,7 @@ import json
 import logging
 import re
 from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 import httpx
 
@@ -690,38 +690,73 @@ class ClaudeClient:
             "en": "英语",
             "ja": "日语",
             "ko": "韩语",
-            "ru": "俄语",
             "fr": "法语",
-            "de": "德语"
+            "de": "德语",
+            "ru": "俄语",
+            "es": "西班牙语",
+            "ar": "阿拉伯语",
+            "pt": "葡萄牙语",
+            "it": "意大利语",
+            "vi": "越南语",
+            "th": "泰语",
+            "id": "印尼语"
         }
 
-        lang_desc = ", ".join([f'"{lang}": "{lang_names.get(lang, lang)}搜索查询"' for lang in languages])
+        # 构建语言列表说明
+        lang_list = ", ".join([f'"{lang}" ({lang_names.get(lang, lang)})' for lang in languages])
+
+        # 构建示例
+        example_json = {
+            lang: f"{query} 的{lang_names.get(lang, lang)}搜索词" for lang in languages[:2]  # 只展示前2个作为示例
+        }
+        example_str = json.dumps(example_json, ensure_ascii=False)
 
         prompt = f"""将以下查询翻译成多种语言，用于搜索引擎搜索。
 
 原始查询: {query}
 
-请生成以下语言的搜索查询，每个查询应该：
+请为以下语言生成搜索查询：{lang_list}
+
+要求：
 1. 保留核心搜索意图
 2. 使用该语言的常用搜索词
-3. 适合搜索引擎使用
+3. 适合搜索引擎使用（简洁、有效）
+4. 必须为所有指定的语言生成查询，不要省略
 
-以 JSON 格式返回:
-{{
-    {lang_desc}
-}}
+返回格式（严格遵循）：
+{example_str}
 
-只返回 JSON，不要其他内容。根据查询主题，只生成相关语言的查询（如果某语言不相关可以省略）。"""
+注意：
+- 必须返回 JSON 格式
+- 必须包含所有请求的语言: {languages}
+- 只返回 JSON，不要其他内容
+- 不要使用 markdown 代码块"""
 
         try:
             response = await self._call(prompt, max_tokens=500)
-            return self._parse_json_response(response)
-        except json.JSONDecodeError:
-            logger.warning("多语言查询 JSON 解析失败")
-            return {"zh": query, "en": query}
+            parsed = self._parse_json_response(response)
+
+            # 验证返回结果包含所有请求的语言
+            if not isinstance(parsed, dict):
+                raise ValueError("返回结果不是字典")
+
+            # 检查缺失的语言，使用原文补充
+            missing_langs = [lang for lang in languages if lang not in parsed]
+            if missing_langs:
+                logger.warning(f"LLM 未生成以下语言的查询: {missing_langs}，使用原文补充")
+                for lang in missing_langs:
+                    parsed[lang] = query
+
+            return parsed
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"多语言查询 JSON 解析失败: {e}")
+            # Fallback: 返回所有请求的语言，使用原文
+            return {lang: query for lang in languages}
         except Exception as e:
             logger.error(f"generate_multilang_queries 失败: {e}")
-            return {"zh": query}
+            # Fallback: 返回所有请求的语言，使用原文
+            return {lang: query for lang in languages}
 
     async def summarize_multilang_results(
         self,
@@ -774,6 +809,437 @@ class ClaudeClient:
         except Exception as e:
             logger.error(f"summarize_multilang_results 失败: {e}")
             return f"汇总失败: {e}"
+
+    async def decompose_query(
+        self,
+        query: str,
+        context: Optional[Dict[str, Any]] = None
+    ) -> "QueryDecomposition":
+        """
+        使用 Claude 分解复杂查询为多个子查询
+
+        Args:
+            query: 用户原始查询
+            context: 搜索上下文（目标网站、语言、时间范围等）
+
+        Returns:
+            QueryDecomposition: 分解结果
+        """
+        if context is None:
+            context = {}
+
+        target_domains = context.get("target_domains", "无限制")
+        language = context.get("language", "中文或英文")
+        time_range = context.get("time_range", "不限")
+
+        prompt = f"""你是一个专业的搜索查询优化专家。你的任务是将用户的复杂查询分解为多个有针对性的子查询，以便通过搜索引擎获得更全面的结果。
+
+分解原则：
+1. 覆盖性：子查询应覆盖原始查询的所有关键方面
+2. 独立性：每个子查询应该是独立的、可以单独搜索的
+3. 针对性：每个子查询应该针对一个具体的信息需求
+4. 简洁性：避免过度分解，通常2-5个子查询为宜
+5. 可搜索性：子查询应该是搜索引擎友好的
+
+原始查询："{query}"
+
+搜索上下文：
+- 目标网站：{target_domains}
+- 语言偏好：{language}
+- 时间范围：{time_range}
+
+请以 JSON 格式返回（不要使用 markdown 代码块）：
+{{
+  "decomposed_queries": [
+    {{
+      "query": "子查询文本",
+      "reasoning": "为什么需要这个子查询的解释",
+      "focus": "关注的信息维度"
+    }}
+  ],
+  "overall_strategy": "整体分解策略说明"
+}}
+
+只返回 JSON，不要其他内容。"""
+
+        try:
+            response = await self._call(prompt, max_tokens=1500)
+            parsed = self._parse_json_response(response)
+
+            # 验证返回结果
+            if "decomposed_queries" not in parsed:
+                raise ValueError("返回结果缺少 decomposed_queries 字段")
+
+            if not isinstance(parsed["decomposed_queries"], list):
+                raise ValueError("decomposed_queries 必须是列表")
+
+            if len(parsed["decomposed_queries"]) == 0:
+                raise ValueError("分解结果为空，至少需要1个子查询")
+
+            # 限制最多10个子查询
+            if len(parsed["decomposed_queries"]) > 10:
+                logger.warning(f"子查询数量过多({len(parsed['decomposed_queries'])}个)，截取前10个")
+                parsed["decomposed_queries"] = parsed["decomposed_queries"][:10]
+
+            # 构建 DecomposedQuery 对象列表
+            decomposed_queries = []
+            for q in parsed["decomposed_queries"]:
+                if not all(k in q for k in ["query", "reasoning", "focus"]):
+                    logger.warning(f"子查询缺少必要字段，跳过: {q}")
+                    continue
+
+                decomposed_queries.append(DecomposedQuery(
+                    query=q["query"],
+                    reasoning=q["reasoning"],
+                    focus=q["focus"]
+                ))
+
+            # 导入 QueryDecomposition
+            from src.infrastructure.llm.claude_client import QueryDecomposition
+
+            return QueryDecomposition(
+                decomposed_queries=decomposed_queries,
+                overall_strategy=parsed.get("overall_strategy", ""),
+                tokens_used=0,  # Claude API 不返回 token 使用量
+                model=self.config.model
+            )
+
+        except Exception as e:
+            logger.error(f"Claude 查询分解失败: {e}")
+            # 返回默认分解结果
+            return self._get_fallback_decomposition(query)
+
+    def _get_fallback_decomposition(self, query: str) -> "QueryDecomposition":
+        """获取降级分解结果"""
+        from src.infrastructure.llm.claude_client import QueryDecomposition, DecomposedQuery
+
+        decomposed_queries = [
+            DecomposedQuery(
+                query=f"{query} 最新消息",
+                reasoning="获取最新的事实性报道和新闻",
+                focus="最新动态"
+            ),
+            DecomposedQuery(
+                query=f"{query} 深度分析",
+                reasoning="获取专业分析和深度解读",
+                focus="专业分析"
+            )
+        ]
+
+        return QueryDecomposition(
+            decomposed_queries=decomposed_queries,
+            overall_strategy="降级策略：通用分解模式",
+            tokens_used=0,
+            model=f"{self.config.model}-fallback"
+        )
+
+    async def detect_relevant_languages(
+        self,
+        query: str,
+        context: Optional[Dict[str, Any]] = None,
+        min_languages: int = 2,
+        max_languages: int = 5
+    ) -> Dict[str, Any]:
+        """
+        使用 Claude 智能检测查询相关的语言
+
+        根据查询内容分析，确定哪些语言最适合搜索该主题。
+        例如：查询"法国经济"应优先选择法语和英语，查询"日本防卫白皮书"应优先选择日语和英语。
+
+        Args:
+            query: 用户查询
+            context: 搜索上下文
+            min_languages: 最少语言数量（默认2，确保至少有英语+原语言）
+            max_languages: 最多语言数量（默认5，避免过度分散）
+
+        Returns:
+            Dict: {
+                "languages": ["zh", "en", "fr", ...],  # 检测到的语言列表
+                "reasoning": "选择理由说明",
+                "confidence_scores": {"zh": 0.95, "en": 0.90, ...},  # 各语言相关性评分
+                "primary_language": "zh",  # 主要语言
+                "model": "claude-sonnet-4-20250514"
+            }
+        """
+        # 支持的语言列表及其描述
+        supported_languages = {
+            "zh": {"name": "中文", "regions": ["中国", "台湾", "香港", "澳门", "新加坡"], "keywords": ["中国", "中文", "华人", "华语"]},
+            "en": {"name": "英语", "regions": ["美国", "英国", "加拿大", "澳大利亚", "全球通用"], "keywords": ["英语", "英文", "international", "global"]},
+            "ja": {"name": "日语", "regions": ["日本"], "keywords": ["日本", "日语", "japanese", "东京"]},
+            "ko": {"name": "韩语", "regions": ["韩国", "朝鲜"], "keywords": ["韩国", "朝鲜", "韩语", "korean", "首尔"]},
+            "fr": {"name": "法语", "regions": ["法国", "比利时", "瑞士", "加拿大魁北克"], "keywords": ["法国", "法语", "french", "巴黎", "欧盟"]},
+            "de": {"name": "德语", "regions": ["德国", "奥地利", "瑞士"], "keywords": ["德国", "德语", "german", "柏林"]},
+            "ru": {"name": "俄语", "regions": ["俄罗斯", "前苏联国家"], "keywords": ["俄罗斯", "俄语", "russian", "莫斯科"]},
+            "es": {"name": "西班牙语", "regions": ["西班牙", "拉丁美洲"], "keywords": ["西班牙", "西班牙语", "spanish", "墨西哥", "拉美"]},
+            "ar": {"name": "阿拉伯语", "regions": ["中东", "北非"], "keywords": ["阿拉伯", "中东", "arabic", "沙特", "阿联酋"]},
+            "pt": {"name": "葡萄牙语", "regions": ["巴西", "葡萄牙"], "keywords": ["巴西", "葡萄牙", "portuguese", "圣保罗"]},
+            "it": {"name": "意大利语", "regions": ["意大利"], "keywords": ["意大利", "italian", "罗马"]},
+            "vi": {"name": "越南语", "regions": ["越南"], "keywords": ["越南", "vietnamese", "河内"]},
+            "th": {"name": "泰语", "regions": ["泰国"], "keywords": ["泰国", "thai", "曼谷"]},
+            "id": {"name": "印尼语", "regions": ["印度尼西亚"], "keywords": ["印尼", "indonesian", "雅加达"]}
+        }
+
+        # 构建语言描述
+        lang_descriptions = []
+        for code, info in supported_languages.items():
+            regions_str = "、".join(info["regions"][:3])  # 只显示前3个地区
+            lang_descriptions.append(f'  - "{code}": {info["name"]} ({regions_str}等)')
+
+        lang_list_str = "\n".join(lang_descriptions)
+
+        prompt = f"""你是一个专业的搜索语言分析专家。请分析以下查询，确定最适合进行搜索的语言。
+
+用户查询: {query}
+
+支持的代码及对应语言/地区:
+{lang_list_str}
+
+分析要求:
+1. 地域相关性：查询涉及的国家/地区对应的语言优先
+2. 内容相关性：查询主题的语言偏好（如经济新闻多用英语/法语）
+3. 资源丰富度：选择该语言网络资源丰富的语言
+4. 语言覆盖：确保至少包含英语（通用）和查询相关的本地语言
+
+规则:
+- 最少选择 {min_languages} 种语言
+- 最多选择 {max_languages} 种语言
+- 英语( en )通常应该包含（全球通用）
+- 如果查询明确涉及某个国家/地区，必须包含该地区的语言
+
+请以 JSON 格式返回（不要使用 markdown 代码块）:
+{{
+  "languages": ["en", "zh", "fr"],
+  "reasoning": "查询涉及法国经济，法语可获得本地视角，英语可获得国际分析",
+  "confidence_scores": {{"en": 0.9, "fr": 0.95, "zh": 0.7}},
+  "primary_language": "fr"
+}}
+
+只返回 JSON，不要其他内容。"""
+
+        try:
+            response = await self._call(prompt, max_tokens=500)
+            result = self._parse_json_response(response)
+
+            # 验证和清理返回结果
+            if not isinstance(result, dict):
+                raise ValueError("返回结果不是字典")
+
+            # 确保 languages 存在且是列表
+            if "languages" not in result or not isinstance(result["languages"], list):
+                raise ValueError("缺少 languages 字段或格式错误")
+
+            detected_languages = result["languages"]
+
+            # 验证语言代码是否有效
+            valid_languages = [lang for lang in detected_languages if lang in supported_languages]
+            if len(valid_languages) < min_languages:
+                logger.warning(f"检测到的有效语言不足{min_languages}种，使用默认补充")
+                # 确保至少有英语和中文
+                if "en" not in valid_languages:
+                    valid_languages.append("en")
+                if "zh" not in valid_languages:
+                    valid_languages.append("zh")
+
+            # 限制最大数量
+            valid_languages = valid_languages[:max_languages]
+
+            # 确保有 primary_language
+            if "primary_language" not in result or result["primary_language"] not in valid_languages:
+                result["primary_language"] = valid_languages[0]
+
+            return {
+                "languages": valid_languages,
+                "reasoning": result.get("reasoning", "基于查询内容自动检测"),
+                "confidence_scores": result.get("confidence_scores", {lang: 0.8 for lang in valid_languages}),
+                "primary_language": result["primary_language"],
+                "model": self.config.model
+            }
+
+        except Exception as e:
+            logger.warning(f"语言检测失败: {e}，使用默认语言配置")
+
+            # Fallback: 基于查询的简单关键词匹配
+            fallback_languages = ["en"]  # 英语总是默认
+
+            # 简单关键词匹配
+            query_lower = query.lower()
+            for code, info in supported_languages.items():
+                if code == "en":
+                    continue
+                if any(keyword.lower() in query_lower for keyword in info["keywords"]):
+                    fallback_languages.append(code)
+                    if len(fallback_languages) >= max_languages:
+                        break
+
+            # 确保至少有 min_languages 种语言
+            if len(fallback_languages) < min_languages:
+                fallback_languages.append("zh")  # 中文作为补充
+
+            return {
+                "languages": fallback_languages[:max_languages],
+                "reasoning": "基于关键词匹配的降级策略",
+                "confidence_scores": {lang: 0.7 for lang in fallback_languages},
+                "primary_language": fallback_languages[0],
+                "model": f"{self.config.model}-fallback"
+            }
+
+    async def decompose_query_with_multilang(
+        self,
+        query: str,
+        context: Optional[Dict[str, Any]] = None,
+        languages: Optional[List[str]] = None,
+        auto_detect_languages: bool = False,
+        min_languages: int = 2,
+        max_languages: int = 5
+    ) -> Dict[str, Any]:
+        """
+        使用 Claude 分解查询并生成多语言配置
+
+        这是方案 A 的核心方法：一站式完成查询分解和多语言配置生成
+
+        Args:
+            query: 用户原始查询
+            context: 搜索上下文
+            languages: 目标语言列表，默认 ["zh", "en", "ja", "ko"]
+                    当 auto_detect_languages=True 时，此参数作为备选
+            auto_detect_languages: 是否启用智能语言检测（默认False）
+                                  启用后 Claude 会根据查询内容智能选择相关语言
+            min_languages: 自动检测时的最少语言数量（默认2）
+            max_languages: 自动检测时的最多语言数量（默认5）
+
+        Returns:
+            Dict: 包含分解结果和多语言配置
+            {
+                "decomposed_queries": [...],  # 带 multilang_configs 的子查询
+                "overall_strategy": "...",
+                "languages": ["zh", "en", "ja", "ko"],
+                "language_detection": {  # 当 auto_detect_languages=True 时包含
+                    "reasoning": "选择理由说明",
+                    "confidence_scores": {...},
+                    "primary_language": "zh"
+                },
+                "model": "claude-sonnet-4-20250514"
+            }
+        """
+        # Step 0: 确定使用的语言
+        language_detection = None
+
+        # 优先级：明确指定的语言 > 自动检测 > 默认语言
+        if languages is not None:
+            # 明确指定了语言，直接使用（跳过自动检测）
+            pass
+        elif auto_detect_languages:
+            # 启用自动检测
+            detection_result = await self.detect_relevant_languages(
+                query=query,
+                context=context,
+                min_languages=min_languages,
+                max_languages=max_languages
+            )
+            languages = detection_result["languages"]
+            language_detection = {
+                "reasoning": detection_result["reasoning"],
+                "confidence_scores": detection_result["confidence_scores"],
+                "primary_language": detection_result["primary_language"]
+            }
+            logger.info(f"自动检测语言: {languages}, 理由: {detection_result['reasoning']}")
+        else:
+            # 使用默认语言
+            languages = ["zh", "en", "ja", "ko"]
+
+        # Step 1: 调用 Claude 分解查询
+        decomposition = await self.decompose_query(query, context)
+
+        # Step 2: 为每个子查询生成多语言配置
+        enriched_queries = []
+        for sub_query in decomposition.decomposed_queries:
+            # 调用 generate_multilang_queries
+            multilang_queries = await self.generate_multilang_queries(
+                query=sub_query.query,
+                languages=languages
+            )
+
+            enriched_queries.append({
+                "query": sub_query.query,
+                "reasoning": sub_query.reasoning,
+                "focus": sub_query.focus,
+                "multilang_configs": multilang_queries,
+                "languages": languages
+            })
+
+        result = {
+            "decomposed_queries": enriched_queries,
+            "overall_strategy": decomposition.overall_strategy,
+            "languages": languages,
+            "model": decomposition.model
+        }
+
+        # 如果启用了自动检测，添加检测信息
+        if language_detection:
+            result["language_detection"] = language_detection
+
+        return result
+
+
+# ==================== 实体类定义 ====================
+
+@dataclass
+class DecomposedQuery:
+    """分解的子查询"""
+    query: str  # 子查询文本
+    reasoning: str  # 为什么需要这个子查询的解释
+    focus: str  # 关注的信息维度
+
+
+@dataclass
+class QueryDecomposition:
+    """
+    查询分解结果实体
+
+    由 LLM Service 生成，包含分解的子查询列表和整体策略说明
+    """
+    # 分解的子查询列表
+    decomposed_queries: List[DecomposedQuery] = field(default_factory=list)
+
+    # 整体分解策略说明
+    overall_strategy: str = ""
+
+    # LLM元数据
+    tokens_used: int = 0  # 消耗的token数
+    model: str = "gpt-4"  # 使用的模型
+
+    def to_dict(self):
+        """转换为字典"""
+        return {
+            "decomposed_queries": [
+                {
+                    "query": q.query,
+                    "reasoning": q.reasoning,
+                    "focus": q.focus
+                }
+                for q in self.decomposed_queries
+            ],
+            "overall_strategy": self.overall_strategy,
+            "tokens_used": self.tokens_used,
+            "model": self.model
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "QueryDecomposition":
+        """从字典创建实例"""
+        return cls(
+            decomposed_queries=[
+                DecomposedQuery(
+                    query=q["query"],
+                    reasoning=q["reasoning"],
+                    focus=q["focus"]
+                )
+                for q in data.get("decomposed_queries", [])
+            ],
+            overall_strategy=data.get("overall_strategy", ""),
+            tokens_used=data.get("tokens_used", 0),
+            model=data.get("model", "gpt-4")
+        )
 
 
 # 工厂函数
