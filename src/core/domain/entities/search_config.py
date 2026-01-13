@@ -73,7 +73,7 @@ class SystemSearchConfig:
     LOG_LEVEL: str = field(default_factory=lambda: "DEBUG" if os.getenv("TEST_MODE", "false").lower() == "true" else "INFO")
     
     # 默认值
-    DEFAULT_SOURCES: List[str] = field(default_factory=lambda: [SearchSource.WEB.value, SearchSource.NEWS.value])
+    DEFAULT_SOURCES: List[str] = field(default_factory=lambda: [SearchSource.NEWS.value])  # v3.7.2: 限制为新闻来源
     DEFAULT_LANGUAGE: str = SearchLanguage.ZH.value
     DEFAULT_CATEGORIES: List[str] = field(default_factory=lambda: [SearchCategory.GENERAL.value])
     
@@ -202,7 +202,7 @@ class SearchConfigManager:
                 name="tech",
                 description="技术搜索配置",
                 limit=self.system_config.DEFAULT_LIMIT,
-                sources=[SearchSource.WEB.value, SearchSource.NEWS.value],
+                sources=[SearchSource.NEWS.value],  # v3.7.2: 限制为新闻来源
                 categories=[SearchCategory.TECH.value, SearchCategory.SCIENCE.value],
                 language=SearchLanguage.ZH.value,
                 enable_ai_summary=True

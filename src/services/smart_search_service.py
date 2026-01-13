@@ -48,6 +48,10 @@ from src.core.domain.entities.aggregated_search_result import AggregatedSearchRe
 from src.infrastructure.llm.openai_service import LLMService, LLMException
 from src.infrastructure.llm.claude_client import ClaudeClient, ClaudeConfig, create_claude_client
 from src.services.instant_search_service import InstantSearchService
+from src.services.query_analyzer import get_unified_analyzer, UnifiedQueryAnalyzer
+
+# v4.5.0: LangGraph QueryAnalyzerNode - 使用其优秀的 4 层组合法 Prompt
+from src.services.langgraph_search.nodes.query_analyzer import QueryAnalyzerNode
 from src.infrastructure.database.smart_search_repositories import (
     SmartSearchTaskRepository,
     QueryDecompositionCacheRepository
@@ -76,17 +80,25 @@ class SmartSearchService:
         self.aggregator = ResultAggregator()
         self.aggregated_result_repo = AggregatedSearchResultRepository()  # v1.5.2: 职责分离
 
-        # v2.2.0: 方案 A - Claude 集成支持
+        # v2.3.0: 统一查询分析器（复用 LangGraph QueryAnalyzerNode 的优秀 Prompt）
+        self.use_unified_analyzer = __import__('os').getenv("SMART_SEARCH_USE_UNIFIED_ANALYZER", "true").lower() == "true"
+        if self.use_unified_analyzer:
+            self.unified_analyzer: UnifiedQueryAnalyzer = get_unified_analyzer()
+            logger.info("SmartSearchService: 使用 UnifiedQueryAnalyzer（增强 Prompt）")
+        else:
+            self.unified_analyzer = None
+            logger.info("SmartSearchService: 使用传统 ClaudeClient/OpenAI LLMService")
+
+        # v2.2.0: 方案 A - Claude 集成支持（保留兼容）
         self.use_claude = __import__('os').getenv("SMART_SEARCH_USE_CLAUDE", "true").lower() == "true"
         self.enable_multilang = __import__('os').getenv("SMART_SEARCH_ENABLE_MULTILANG", "true").lower() == "true"
         self.default_languages = __import__('os').getenv("SMART_SEARCH_DEFAULT_LANGUAGES", "zh,en,ja,ko").split(",")
 
-        if self.use_claude:
+        if self.use_claude and not self.use_unified_analyzer:
             self.claude_client = create_claude_client()
-            logger.info(f"SmartSearchService: 使用 Claude 进行查询分解")
+            logger.info(f"SmartSearchService: 使用 ClaudeClient 进行查询分解")
         else:
             self.claude_client = None
-            logger.info(f"SmartSearchService: 使用 OpenAI 进行查询分解")
 
         # 并发控制
         self.max_concurrent_searches = int(
@@ -156,12 +168,14 @@ class SmartSearchService:
                 logger.info(f"使用缓存的分解结果: query_hash={query[:50]}...")
                 decomposition = cached_decomposition
             else:
-                # v2.2.0: 根据配置选择 LLM 服务
-                if self.use_claude:
-                    logger.info(f"调用 Claude 分解查询: {query}")
-                    claude_decomposition = await self.claude_client.decompose_query(query, context)
-                    # 转换为统一的 QueryDecomposition 格式
-                    decomposition = claude_decomposition
+                # v2.3.0: 优先使用统一查询分析器（增强 Prompt）
+                if self.unified_analyzer:
+                    logger.info(f"调用 UnifiedQueryAnalyzer 分解查询: {query}")
+                    decomposition = await self.unified_analyzer.decompose_query(query, context)
+                # v2.2.0: 根据配置选择 LLM 服务（保留兼容）
+                elif self.use_claude and self.claude_client:
+                    logger.info(f"调用 ClaudeClient 分解查询: {query}")
+                    decomposition = await self.claude_client.decompose_query(query, context)
                 else:
                     # 调用 OpenAI LLM 分解
                     logger.info(f"调用 OpenAI LLM 分解查询: {query}")
@@ -345,12 +359,13 @@ class SmartSearchService:
         languages: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
-        v2.2.0 方案 A: 创建智能搜索任务并分解查询（含多语言支持）
+        v2.3.0: 创建智能搜索任务并分解查询（含多语言支持）
 
-        这是方案 A 的核心入口方法，一站式完成：
-        1. Claude 分解查询
-        2. 为每个子查询生成多语言配置
-        3. 返回完整的搜索配置
+        使用 UnifiedQueryAnalyzer 一站式完成：
+        1. 分析查询（当事方、事件类型、时间敏感度）
+        2. 分解为多角度子查询
+        3. 为每个子查询生成多语言配置
+        4. 返回完整的搜索配置
 
         Args:
             name: 任务名称
@@ -365,12 +380,12 @@ class SmartSearchService:
                 "decomposed_queries": [...],  # 带 multilang_configs 的子查询
                 "overall_strategy": "...",
                 "languages": ["zh", "en", "ja", "ko"],
-                "model": "claude-sonnet-4-20250514"
+                "model": "claude-sonnet-4-20250514",
+                "summary": "...",  # v2.3.0 新增
+                "event_type": "...",  # v2.3.0 新增
+                "parties": [...]  # v2.3.0 新增
             }
         """
-        if not self.use_claude:
-            raise ValueError("多语言分解需要启用 Claude (设置 SMART_SEARCH_USE_CLAUDE=true)")
-
         if languages is None:
             languages = self.default_languages
 
@@ -386,12 +401,22 @@ class SmartSearchService:
                 "time_range": search_config.get("time_range", "不限") if search_config else "不限"
             }
 
-            # 调用 Claude 分解查询并生成多语言配置
-            result = await self.claude_client.decompose_query_with_multilang(
-                query=query,
-                context=context,
-                languages=languages
-            )
+            # v2.3.0: 优先使用统一查询分析器
+            if self.unified_analyzer:
+                result = await self.unified_analyzer.decompose_query_with_multilang(
+                    query=query,
+                    context=context,
+                    languages=languages
+                )
+            elif self.claude_client:
+                # 降级使用 ClaudeClient
+                result = await self.claude_client.decompose_query_with_multilang(
+                    query=query,
+                    context=context,
+                    languages=languages
+                )
+            else:
+                raise ValueError("多语言分解需要启用 UnifiedQueryAnalyzer 或 Claude (设置 SMART_SEARCH_USE_CLAUDE=true)")
 
             elapsed_time = int((time.time() - start_time) * 1000)
             total_searches = len(result["decomposed_queries"]) * len(languages)

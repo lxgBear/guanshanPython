@@ -19,7 +19,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.jobstores.memory import MemoryJobStore
 
-from src.core.domain.entities.search_task import SearchTask, TaskStatus, ScheduleInterval
+from src.core.domain.entities.search_task import SearchTask, TaskStatus, ScheduleInterval, TaskType
 from src.core.domain.entities.search_config import UserSearchConfig
 from src.core.domain.entities.search_result import SearchResult, SearchResultBatch, ResultStatus
 from src.infrastructure.database.repositories import SearchTaskRepository, SearchResultRepository
@@ -319,8 +319,18 @@ class TaskSchedulerService(ITaskScheduler):
 
             # ========================================
             # v2.0.0 新架构：使用执行器工厂创建执行器
+            # v2.1.0 多语言支持：自动选择多语言执行器
             # ========================================
             task_type = task.get_task_type()
+
+            # v2.1.0: 如果启用了多语言搜索且是关键词搜索类型，自动切换到多语言执行器
+            if task.should_use_multilang() and task_type == TaskType.SEARCH_KEYWORD:
+                task_type = TaskType.SEARCH_MULTILANG
+                logger.info(
+                    f"🌐 检测到多语言配置，自动切换执行器: "
+                    f"SEARCH_KEYWORD → SEARCH_MULTILANG (languages={task.languages})"
+                )
+
             logger.info(f"🏭 任务类型: {task_type.value}")
 
             # 创建对应的执行器

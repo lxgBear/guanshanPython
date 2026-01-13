@@ -14,7 +14,11 @@ from datetime import datetime
 from dataclasses import dataclass, field
 
 from src.infrastructure.llm.claude_client import ClaudeClient, create_claude_client
-from src.services.nl_search.config import nl_search_config
+from src.services.nl_search.config import (
+    nl_search_config,
+    DEFAULT_LANGUAGES,
+    get_supported_language_codes
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +26,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MultilangSearchConfig:
     """多语言搜索配置"""
-    # 支持的语言列表
-    languages: List[str] = field(default_factory=lambda: ["zh", "en", "ja", "ko"])
+    # 支持的语言列表 (使用集中配置的默认语言)
+    languages: List[str] = field(default_factory=lambda: DEFAULT_LANGUAGES.copy())
     # 每种语言的搜索结果数
     results_per_language: int = 5
     # 是否启用内容抓取

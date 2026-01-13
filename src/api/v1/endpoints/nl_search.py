@@ -28,7 +28,13 @@ from src.core.domain.entities.auth import User
 # 导入服务层
 from src.services.nl_search.nl_search_service import nl_search_service
 from src.services.nl_search.mongo_archive_service import mongo_archive_service  # 使用 MongoDB 版本
-from src.services.nl_search.config import nl_search_config
+from src.services.nl_search.config import (
+    nl_search_config,
+    get_languages_for_api,
+    get_languages_by_region,
+    DEFAULT_LANGUAGES,
+    SUPPORTED_LANGUAGES
+)
 from src.services.nl_search.multilang_search_service import get_multilang_search_service
 
 logger = logging.getLogger(__name__)
@@ -54,9 +60,9 @@ class NLSearchRequest(BaseModel):
         description="用户ID（可选，用于个性化和历史记录）"
     )
     search_mode: str = Field(
-        default="single",
-        description="搜索模式: single=单次搜索(快速), multi=多问题分解搜索(深度)",
-        pattern="^(single|multi)$"
+        default="multilang",
+        description="搜索模式: single=单次搜索(快速), multi=多问题分解搜索(深度), multilang=多语言搜索(全面, v3.7推荐)",
+        pattern="^(single|multi|multilang)$"
     )
 
     class Config:
@@ -64,7 +70,7 @@ class NLSearchRequest(BaseModel):
             "example": {
                 "query_text": "最近有哪些关于GPT-5的新闻",
                 "user_id": "user_12345",
-                "search_mode": "single"
+                "search_mode": "multilang"
             }
         }
 
@@ -77,8 +83,9 @@ class NLSearchResponse(BaseModel):
     results: Optional[List[Dict[str, Any]]] = Field(None, description="搜索结果列表")
     analysis: Optional[Dict[str, Any]] = Field(None, description="LLM分析结果")
     refined_query: Optional[str] = Field(None, description="精炼后的查询（single模式）")
-    search_mode: Optional[str] = Field(None, description="搜索模式（single|multi）")
+    search_mode: Optional[str] = Field(None, description="搜索模式（single|multi|multilang）")
     sub_queries: Optional[List[str]] = Field(None, description="子问题列表（multi模式）")
+    multilang_info: Optional[Dict[str, Any]] = Field(None, description="多语言搜索信息（multilang模式）")
     total_raw_results: Optional[int] = Field(None, description="原始结果总数（multi模式）")
     total_unique_results: Optional[int] = Field(None, description="去重后结果数（multi模式）")
     alternative_api: Optional[str] = Field(None, description="替代方案API")
@@ -643,7 +650,7 @@ async def create_nl_search(request: NLSearchRequest):
 
         # Single模式：返回优化指标和精炼查询
         if request.search_mode == "single":
-            response.refined_query = result.get("refined_query")  # 已废弃，保持兼容性
+            response.refined_query = result.get("refined_query")  # 已废弃���保持兼容性
             response.total_raw_results = result.get("total_results")  # GPT返回总数
             response.total_unique_results = result.get("high_score_results")  # 分数过滤后爬取数
 
@@ -652,6 +659,12 @@ async def create_nl_search(request: NLSearchRequest):
             response.sub_queries = result.get("sub_queries", [])
             response.total_raw_results = result.get("total_raw_results")
             response.total_unique_results = result.get("total_unique_results")
+
+        # Multilang模式：返回多语言搜索信息 (v3.7.1)
+        elif request.search_mode == "multilang":
+            response.multilang_info = result.get("multilang_info")
+            response.total_raw_results = result.get("total_results")
+            response.total_unique_results = result.get("high_score_results")
 
         return response
 
@@ -854,7 +867,7 @@ async def create_archive(
 
         if duplicate_count > 0:
             logger.warning(
-                f"创建档案时检测到重复条目: user={request.user_id}, "
+                f"创建档案时检测到重复条目: user={current_user.id}, "
                 f"原始数量={len(request.items)}, 去重后={len(unique_items)}, "
                 f"重复数量={duplicate_count}"
             )
@@ -870,7 +883,7 @@ async def create_archive(
         description = sanitize_text(request.description) if request.description else None
 
         logger.info(
-            f"创建档案请求: user={request.user_id}, name='{archive_name}', "
+            f"创建档案请求: user={current_user.id}, name='{archive_name}', "
             f"items={len(unique_items)} (原始={len(request.items)}, 去重={duplicate_count})"
         )
 
@@ -1533,7 +1546,7 @@ async def review_archive(
 
         # 获取审核人信息
         reviewer_id = current_user.id
-        reviewer_name = current_user.full_name or current_user.username
+        reviewer_name = current_user.display_name or current_user.username
 
         if request.action == "approve":
             # 审核通过
@@ -1956,3 +1969,64 @@ async def analyze_query(
             status_code=500,
             detail={"error": "分析失败", "message": str(e)}
         )
+
+
+# ==================== 语言配置 API ====================
+
+@router.get(
+    "/languages",
+    summary="获取支持的语言列表",
+    description="返回多语言搜索支持的所有语言列表，包含语言代码、名称和区域信息",
+    tags=["配置"]
+)
+async def get_supported_languages(
+    group_by_region: bool = Query(
+        False,
+        description="是否按区域分组返回"
+    )
+):
+    """
+    获取多语言搜索支持的语言列表
+
+    返回所有支持的语言代码、名称和元数据，供前端展示语言选择器使用。
+
+    Args:
+        group_by_region: 是否按区域分组返回
+
+    Returns:
+        语言列表或按区域分组的语言字典
+
+    Example Response (flat):
+        {
+            "total": 30,
+            "default_languages": ["zh", "en", "ja", "ko"],
+            "languages": [
+                {"code": "zh", "name": "Chinese", "native_name": "中文", "region": "East Asia", "is_default": true},
+                {"code": "en", "name": "English", "native_name": "English", "region": "Global", "is_default": true},
+                ...
+            ]
+        }
+
+    Example Response (grouped):
+        {
+            "total": 30,
+            "default_languages": ["zh", "en", "ja", "ko"],
+            "regions": {
+                "East Asia": [{"code": "zh", "name": "Chinese", "native_name": "中文"}, ...],
+                "Global": [{"code": "en", "name": "English", "native_name": "English"}],
+                ...
+            }
+        }
+    """
+    if group_by_region:
+        return {
+            "total": len(SUPPORTED_LANGUAGES),
+            "default_languages": DEFAULT_LANGUAGES,
+            "regions": get_languages_by_region()
+        }
+    else:
+        return {
+            "total": len(SUPPORTED_LANGUAGES),
+            "default_languages": DEFAULT_LANGUAGES,
+            "languages": get_languages_for_api()
+        }

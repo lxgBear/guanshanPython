@@ -14,13 +14,6 @@ class UserBase(BaseModel):
     phone: Optional[str] = Field(None, max_length=20, description="手机号")
     department: Optional[str] = Field(None, max_length=100, description="部门")
 
-    @field_validator('username')
-    @classmethod
-    def validate_username(cls, v: str) -> str:
-        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', v):
-            raise ValueError('用户名必须以字母开头，只能包含字母、数字和下划线')
-        return v
-
     @field_validator('phone')
     @classmethod
     def validate_phone(cls, v: Optional[str]) -> Optional[str]:
@@ -33,17 +26,6 @@ class UserCreate(UserBase):
     """创建用户请求模型"""
     password: str = Field(..., min_length=8, max_length=128, description="密码")
     role_codes: List[str] = Field(default_factory=list, description="角色代码列表")
-
-    @field_validator('password')
-    @classmethod
-    def validate_password(cls, v: str) -> str:
-        if not re.search(r'[A-Z]', v):
-            raise ValueError('密码必须包含至少一个大写字母')
-        if not re.search(r'[a-z]', v):
-            raise ValueError('密码必须包含至少一个小写字母')
-        if not re.search(r'\d', v):
-            raise ValueError('密码必须包含至少一个数字')
-        return v
 
 
 class UserUpdate(BaseModel):
@@ -111,31 +93,9 @@ class PasswordChange(BaseModel):
     old_password: str = Field(..., description="旧密码")
     new_password: str = Field(..., min_length=8, max_length=128, description="新密码")
 
-    @field_validator('new_password')
-    @classmethod
-    def validate_password(cls, v: str) -> str:
-        if not re.search(r'[A-Z]', v):
-            raise ValueError('密码必须包含至少一个大写字母')
-        if not re.search(r'[a-z]', v):
-            raise ValueError('密码必须包含至少一个小写字母')
-        if not re.search(r'\d', v):
-            raise ValueError('密码必须包含至少一个数字')
-        return v
-
 
 class PasswordReset(BaseModel):
     """重置密码请求模型（管理员用）"""
     new_password: str = Field(..., min_length=8, max_length=128, description="新密码")
-
-    @field_validator('new_password')
-    @classmethod
-    def validate_password(cls, v: str) -> str:
-        if not re.search(r'[A-Z]', v):
-            raise ValueError('密码必须包含至少一个大写字母')
-        if not re.search(r'[a-z]', v):
-            raise ValueError('密码必须包含至少一个小写字母')
-        if not re.search(r'\d', v):
-            raise ValueError('密码必须包含至少一个数字')
-        return v
 
 
