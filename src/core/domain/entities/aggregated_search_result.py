@@ -10,6 +10,10 @@ v1.5.2 新增实体：智能搜索聚合结果的专用存储结构
 集合映射：
 - smart_search_results: 存储 AggregatedSearchResult
 - instant_search_results: 存储 SearchResult（原始子查询结果）
+
+v2.0.0 多用户数据隔离：
+- ✅ 添加 user_id 字段支持多用户隔离
+- ✅ 添加 created_by 字段记录创建者
 """
 
 from dataclasses import dataclass, field
@@ -37,6 +41,7 @@ class AggregatedSearchResult:
     """聚合搜索结果实体
 
     v1.5.2: 智能搜索专用结果存储，包含跨查询聚合信息
+    v2.0.0: 添加多用户数据隔离支持
 
     职责分离：
     - SearchResult: 单个子搜索的原始结果（存储在 instant_search_results）
@@ -46,6 +51,10 @@ class AggregatedSearchResult:
     # ========== 核心标识 ==========
     id: str = field(default_factory=generate_string_id)
     smart_task_id: str = ""  # 智能搜索任务ID
+
+    # ========== v2.0.0: 多用户数据隔离 ==========
+    user_id: str = ""  # 所属用户ID（用于数据隔离查询）
+    created_by: str = ""  # 创建者用户ID（记录操作者）
 
     # ========== 基础搜索结果字段 ==========
     # 继承自SearchResult的核心字段
@@ -85,10 +94,15 @@ class AggregatedSearchResult:
         """转换为字典（用于MongoDB存储）
 
         v1.5.2: 支持雪花ID系统
+        v2.0.0: 支持多用户数据隔离
         """
         return {
             "id": self.id,
             "smart_task_id": self.smart_task_id,
+
+            # v2.0.0: 多用户数据隔离
+            "user_id": self.user_id,
+            "created_by": self.created_by,
 
             # 基础字段
             "title": self.title,
@@ -135,6 +149,7 @@ class AggregatedSearchResult:
         """从字典创建实体（用于MongoDB读取）
 
         v1.5.2: 支持雪花ID系统，直接使用字符串ID
+        v2.0.0: 支持多用户数据隔离
         """
         # 处理来源列表
         sources = [
@@ -168,6 +183,10 @@ class AggregatedSearchResult:
         return cls(
             id=str(data.get("id", "")),
             smart_task_id=str(data.get("smart_task_id", "")),
+
+            # v2.0.0: 多用户数据隔离
+            user_id=data.get("user_id", ""),
+            created_by=data.get("created_by", ""),
 
             # 基础字段
             title=data.get("title", ""),

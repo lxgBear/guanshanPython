@@ -48,6 +48,10 @@ class MongoTaskRepository(ITaskRepository):
             "target_website": task.target_website,
             "search_config": task.search_config,
             "crawl_config": task.crawl_config,
+            # 多语言搜索配置（v2.1.0 新增）
+            "enable_multilang": task.enable_multilang,
+            "languages": task.languages,
+            "auto_translate": task.auto_translate,
             "schedule_interval": task.schedule_interval,
             "is_active": task.is_active,
             "status": task.status.value,
@@ -86,6 +90,10 @@ class MongoTaskRepository(ITaskRepository):
             target_website=data.get("target_website"),
             search_config=search_config,
             crawl_config=crawl_config,
+            # 多语言搜索配置（v2.1.0 新增）
+            enable_multilang=data.get("enable_multilang", False),
+            languages=data.get("languages", ["zh"]),
+            auto_translate=data.get("auto_translate", True),
             schedule_interval=data["schedule_interval"],
             is_active=data["is_active"],
             status=TaskStatus(data["status"]),

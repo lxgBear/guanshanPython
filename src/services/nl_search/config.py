@@ -5,10 +5,151 @@ NL Search 功能配置
 - 使用 Pydantic Settings 进行配置管理
 - 支持环境变量覆盖
 - 功能开关默认关闭
+
+v2.2.0: 添加可扩展的语言配置架构，支持更多语言选择
 """
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pydantic_settings import BaseSettings
 from pydantic import Field
+from dataclasses import dataclass
+
+
+# ==================== 语言配置 ====================
+
+@dataclass(frozen=True)
+class LanguageInfo:
+    """语言信息元数据
+
+    用于前端展示和语言验证
+
+    Attributes:
+        code: ISO 639-1 语言代码 (如 "zh", "en")
+        name: 语言英文名称
+        native_name: 语言本地名称
+        region: 主要使用区域
+        firecrawl_supported: Firecrawl API 是否支持该语言
+    """
+    code: str
+    name: str
+    native_name: str
+    region: str
+    firecrawl_supported: bool = True
+
+
+# 支持的语言列表 (按区域分组，便于前端展示)
+# Firecrawl Search API 支持大多数主流语言
+SUPPORTED_LANGUAGES: Dict[str, LanguageInfo] = {
+    # 东亚语言 (East Asian)
+    "zh": LanguageInfo("zh", "Chinese", "中文", "East Asia"),
+    "ja": LanguageInfo("ja", "Japanese", "日本語", "East Asia"),
+    "ko": LanguageInfo("ko", "Korean", "한국어", "East Asia"),
+
+    # 西欧语言 (Western European)
+    "en": LanguageInfo("en", "English", "English", "Global"),
+    "de": LanguageInfo("de", "German", "Deutsch", "Western Europe"),
+    "fr": LanguageInfo("fr", "French", "Français", "Western Europe"),
+    "es": LanguageInfo("es", "Spanish", "Español", "Western Europe"),
+    "pt": LanguageInfo("pt", "Portuguese", "Português", "Western Europe"),
+    "it": LanguageInfo("it", "Italian", "Italiano", "Western Europe"),
+    "nl": LanguageInfo("nl", "Dutch", "Nederlands", "Western Europe"),
+
+    # 东欧语言 (Eastern European)
+    "ru": LanguageInfo("ru", "Russian", "Русский", "Eastern Europe"),
+    "pl": LanguageInfo("pl", "Polish", "Polski", "Eastern Europe"),
+    "uk": LanguageInfo("uk", "Ukrainian", "Українська", "Eastern Europe"),
+    "cs": LanguageInfo("cs", "Czech", "Čeština", "Eastern Europe"),
+
+    # 中东语言 (Middle Eastern)
+    "ar": LanguageInfo("ar", "Arabic", "العربية", "Middle East"),
+    "he": LanguageInfo("he", "Hebrew", "עברית", "Middle East"),
+    "tr": LanguageInfo("tr", "Turkish", "Türkçe", "Middle East"),
+    "fa": LanguageInfo("fa", "Persian", "فارسی", "Middle East"),
+
+    # 南亚语言 (South Asian)
+    "hi": LanguageInfo("hi", "Hindi", "हिन्दी", "South Asia"),
+    "bn": LanguageInfo("bn", "Bengali", "বাংলা", "South Asia"),
+    "ta": LanguageInfo("ta", "Tamil", "தமிழ்", "South Asia"),
+
+    # 东南亚语言 (Southeast Asian)
+    "vi": LanguageInfo("vi", "Vietnamese", "Tiếng Việt", "Southeast Asia"),
+    "th": LanguageInfo("th", "Thai", "ไทย", "Southeast Asia"),
+    "id": LanguageInfo("id", "Indonesian", "Bahasa Indonesia", "Southeast Asia"),
+    "ms": LanguageInfo("ms", "Malay", "Bahasa Melayu", "Southeast Asia"),
+    "my": LanguageInfo("my", "Burmese", "မြန်မာ", "Southeast Asia"),
+
+    # 北欧语言 (Nordic)
+    "sv": LanguageInfo("sv", "Swedish", "Svenska", "Nordic"),
+    "no": LanguageInfo("no", "Norwegian", "Norsk", "Nordic"),
+    "da": LanguageInfo("da", "Danish", "Dansk", "Nordic"),
+    "fi": LanguageInfo("fi", "Finnish", "Suomi", "Nordic"),
+}
+
+# 默认语言列表 (东亚 + 英语 - 适合OSINT情报分析)
+DEFAULT_LANGUAGES = ["zh", "en", "ja", "ko"]
+
+# 区域分组 (用于前端分组展示)
+LANGUAGE_REGIONS = {
+    "East Asia": ["zh", "ja", "ko"],
+    "Global": ["en"],
+    "Western Europe": ["de", "fr", "es", "pt", "it", "nl"],
+    "Eastern Europe": ["ru", "pl", "uk", "cs"],
+    "Middle East": ["ar", "he", "tr", "fa"],
+    "South Asia": ["hi", "bn", "ta"],
+    "Southeast Asia": ["vi", "th", "id", "ms", "my"],
+    "Nordic": ["sv", "no", "da", "fi"],
+}
+
+
+def get_supported_language_codes() -> set:
+    """获取所有支持的语言代码集合"""
+    return set(SUPPORTED_LANGUAGES.keys())
+
+
+def get_language_info(code: str) -> Optional[LanguageInfo]:
+    """获取语言信息"""
+    return SUPPORTED_LANGUAGES.get(code)
+
+
+def is_language_supported(code: str) -> bool:
+    """检查语言是否支持"""
+    return code in SUPPORTED_LANGUAGES
+
+
+def get_languages_for_api() -> List[Dict[str, Any]]:
+    """获取语言列表（用于API响应）
+
+    Returns:
+        格式化的语言列表，包含分组信息
+    """
+    result = []
+    for code, info in SUPPORTED_LANGUAGES.items():
+        result.append({
+            "code": info.code,
+            "name": info.name,
+            "native_name": info.native_name,
+            "region": info.region,
+            "is_default": code in DEFAULT_LANGUAGES
+        })
+    return result
+
+
+def get_languages_by_region() -> Dict[str, List[Dict[str, str]]]:
+    """按区域分组获取语言列表
+
+    Returns:
+        按区域分组的语言字典
+    """
+    result = {}
+    for region, codes in LANGUAGE_REGIONS.items():
+        result[region] = [
+            {
+                "code": code,
+                "name": SUPPORTED_LANGUAGES[code].name,
+                "native_name": SUPPORTED_LANGUAGES[code].native_name
+            }
+            for code in codes if code in SUPPORTED_LANGUAGES
+        ]
+    return result
 
 
 class NLSearchConfig(BaseSettings):
@@ -171,6 +312,21 @@ class NLSearchConfig(BaseSettings):
         env="NL_SEARCH_SCORE_THRESHOLD"
     )
 
+    # v3.7.2: 质量门控配置
+    min_results_for_save: int = Field(
+        default=3,
+        description="保存到数据库的最小结果数量（质量门控阈值）",
+        ge=1,
+        le=20,
+        env="NL_SEARCH_MIN_RESULTS_FOR_SAVE"
+    )
+
+    enable_quality_gate: bool = Field(
+        default=True,
+        description="是否启用质量门控（结果不足时发出警告）",
+        env="NL_SEARCH_ENABLE_QUALITY_GATE"
+    )
+
     filter_pdf_urls: bool = Field(
         default=True,
         description="是否过滤 PDF 文件 URL（.pdf结尾的链接）",
@@ -278,9 +434,15 @@ class NLSearchConfig(BaseSettings):
 
     # ==================== Claude API 配置 (多语言搜索) ====================
 
+    unified_analyzer_enabled: bool = Field(
+        default=True,
+        description="是否启用统一查询分析器 (复用 LangGraph QueryAnalyzerNode 的优秀 Prompt)",
+        env="NL_SEARCH_UNIFIED_ANALYZER_ENABLED"
+    )
+
     claude_enabled: bool = Field(
         default=False,
-        description="是否启用 Claude 多语言搜索功能",
+        description="是否启用 Claude 多语言搜索功能 (UnifiedQueryAnalyzer 未启用时使用)",
         env="NL_SEARCH_CLAUDE_ENABLED"
     )
 
@@ -321,14 +483,14 @@ class NLSearchConfig(BaseSettings):
     # ==================== 多语言搜索配置 ====================
 
     multilang_enabled: bool = Field(
-        default=False,
+        default=True,
         description="是否启用多语言搜索",
         env="NL_SEARCH_MULTILANG_ENABLED"
     )
 
     multilang_languages: List[str] = Field(
-        default=["zh", "en", "ja", "ko"],
-        description="支持的语言列表 (zh=中文, en=英语, ja=日语, ko=韩语)",
+        default=DEFAULT_LANGUAGES,
+        description="默认启用的语言列表。支持30+种语言，使用 /nl-search/languages API 获取完整列表",
         env="NL_SEARCH_MULTILANG_LANGUAGES"
     )
 

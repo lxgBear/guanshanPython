@@ -2,6 +2,8 @@
 执行器工厂
 
 根据任务类型创建对应的执行器实例
+
+v2.1.0: 添加 MultilangSearchExecutor 支持多语言搜索
 """
 
 import logging
@@ -9,7 +11,13 @@ from typing import Optional
 
 from src.core.domain.entities.search_task import TaskType
 from .base import TaskExecutor
-from .executors import CrawlExecutor, SearchExecutor, ScrapeExecutor, MapScrapeExecutor
+from .executors import (
+    CrawlExecutor,
+    SearchExecutor,
+    ScrapeExecutor,
+    MapScrapeExecutor,
+    MultilangSearchExecutor
+)
 
 
 logger = logging.getLogger(__name__)
@@ -20,6 +28,8 @@ class ExecutorFactory:
 
     根据任务类型创建对应的执行器实例
     使用工厂模式解耦任务调度与具体执行逻辑
+
+    v2.1.0: 新增 SEARCH_MULTILANG 类型支持
     """
 
     # 执行器类型映射表
@@ -27,7 +37,8 @@ class ExecutorFactory:
         TaskType.CRAWL_WEBSITE: CrawlExecutor,
         TaskType.SEARCH_KEYWORD: SearchExecutor,
         TaskType.SCRAPE_URL: ScrapeExecutor,
-        TaskType.MAP_SCRAPE_WEBSITE: MapScrapeExecutor
+        TaskType.MAP_SCRAPE_WEBSITE: MapScrapeExecutor,
+        TaskType.SEARCH_MULTILANG: MultilangSearchExecutor
     }
 
     @classmethod

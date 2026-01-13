@@ -18,6 +18,7 @@ from src.infrastructure.id_generator import generate_string_id
 class TaskType(Enum):
     """任务类型枚举"""
     SEARCH_KEYWORD = "search_keyword"        # 关键词搜索模式（Search API + Scrape API 详情页）
+    SEARCH_MULTILANG = "search_multilang"    # 多语言搜索模式（Claude 翻译 + 多语言并行搜索）
     CRAWL_WEBSITE = "crawl_website"          # 网站爬取模式（Crawl API 递归爬取整个网站）
     SCRAPE_URL = "scrape_url"                # 单页面爬取模式（Scrape API 爬取单个页面）
     MAP_SCRAPE_WEBSITE = "map_scrape_website"  # Map + Scrape 组合模式（Map API 发现 + 批量Scrape + 时间过滤）
@@ -101,6 +102,11 @@ class SearchTask:
     search_config: Dict[str, Any] = field(default_factory=dict)  # 搜索配置（JSON）
     crawl_config: Dict[str, Any] = field(default_factory=dict)  # 爬取配置（JSON，用于 CRAWL_WEBSITE 模式）
 
+    # 多语言搜索配置（v2.1.0 新增）
+    enable_multilang: bool = False  # 是否启用多语言搜索
+    languages: List[str] = field(default_factory=lambda: ["zh"])  # 搜索语言列表（支持: zh, en, ja, ko）
+    auto_translate: bool = True  # 是否使用 Claude 自动翻译查询词
+
     # 调度配置
     schedule_interval: str = "DAILY"  # 调度间隔枚举值
     is_active: bool = True  # 是否启用
@@ -147,6 +153,18 @@ class SearchTask:
     def is_map_scrape_mode(self) -> bool:
         """判断是否为 Map + Scrape 组合模式"""
         return self.get_task_type() == TaskType.MAP_SCRAPE_WEBSITE
+
+    def is_multilang_search_mode(self) -> bool:
+        """判断是否为多语言搜索模式（v2.1.0 新增）"""
+        return self.get_task_type() == TaskType.SEARCH_MULTILANG
+
+    def should_use_multilang(self) -> bool:
+        """判断是否应该使用多语言搜索（基于配置自动判断）
+
+        即使 task_type 是 SEARCH_KEYWORD，如果 enable_multilang=True，
+        也应该使用多语言执行器
+        """
+        return self.enable_multilang and len(self.languages) > 0
 
     def get_schedule_interval(self) -> ScheduleInterval:
         """获取调度间隔枚举"""

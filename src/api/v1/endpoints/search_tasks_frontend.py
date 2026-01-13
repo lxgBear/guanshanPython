@@ -55,11 +55,11 @@ class SearchTaskCreate(BaseModel):
     target_website: Optional[str] = Field(None, description="主要目标网站（例如：www.gnlm.com.mm）", max_length=200)
     crawl_url: Optional[str] = Field(None, description="爬取的URL（CRAWL_WEBSITE和SCRAPE_URL模式必填）", max_length=500)
 
-    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website
+    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website | v2.1.0: 新增 search_multilang
     task_type: Optional[str] = Field(
         None,
-        description="任务类型：search_keyword（关键词搜索）、crawl_website（网站爬取）、scrape_url（单页面爬取）、map_scrape_website（Map+Scrape组合）",
-        pattern="^(search_keyword|crawl_website|scrape_url|map_scrape_website)$"
+        description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website、search_multilang",
+        pattern="^(search_keyword|crawl_website|scrape_url|map_scrape_website|search_multilang)$"
     )
 
     # 配置字段
@@ -71,6 +71,14 @@ class SearchTaskCreate(BaseModel):
         default_factory=dict,
         description="网站爬取配置（用于CRAWL_WEBSITE模式）"
     )
+
+    # v2.1.0 新增：多语言搜索配置
+    enable_multilang: bool = Field(False, description="是否启用多语言搜索（启用后将使用Claude翻译查询词进行多语言并行搜索）")
+    languages: Optional[List[str]] = Field(
+        default=["zh"],
+        description="搜索语言列表，支持: zh（中文）、en（英语）、ja（日语）、ko（韩语）"
+    )
+    auto_translate: bool = Field(True, description="是否使用Claude自动翻译查询词（仅在enable_multilang=True时生效）")
 
     schedule_interval: str = Field("DAILY", description="调度间隔")
     is_active: bool = Field(True, description="是否启用")
@@ -134,6 +142,25 @@ class SearchTaskCreate(BaseModel):
                         "is_active": True,
                         "execute_immediately": True
                     }
+                },
+                {
+                    "name": "示例4：多语言并行搜索任务",
+                    "value": {
+                        "name": "缅甸局势多语言监控",
+                        "description": "使用Claude翻译查询词，同时搜索中英日韩四种语言的新闻",
+                        "query": "缅甸 军事政变 最新局势",
+                        "task_type": "search_keyword",
+                        "enable_multilang": True,
+                        "languages": ["zh", "en", "ja", "ko"],
+                        "auto_translate": True,
+                        "search_config": {
+                            "limit": 10,
+                            "language": "zh"
+                        },
+                        "schedule_interval": "DAILY",
+                        "is_active": True,
+                        "execute_immediately": True
+                    }
                 }
             ]
         }
@@ -147,17 +174,22 @@ class SearchTaskUpdate(BaseModel):
     target_website: Optional[str] = Field(None, max_length=200)
     crawl_url: Optional[str] = Field(None, max_length=500)
 
-    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website
+    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website | v2.1.0: 新增 search_multilang
     task_type: Optional[str] = Field(
         None,
-        description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website",
-        pattern="^(search_keyword|crawl_website|scrape_url|map_scrape_website)$"
+        description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website、search_multilang",
+        pattern="^(search_keyword|crawl_website|scrape_url|map_scrape_website|search_multilang)$"
     )
 
     search_config: Optional[Dict[str, Any]] = None
     crawl_config: Optional[Dict[str, Any]] = None
     schedule_interval: Optional[str] = None
     is_active: Optional[bool] = None
+
+    # v2.1.0 新增：多语言搜索配置
+    enable_multilang: Optional[bool] = Field(None, description="是否启用多语言搜索")
+    languages: Optional[List[str]] = Field(None, description="搜索语言列表")
+    auto_translate: Optional[bool] = Field(None, description="是否使用Claude自动翻译查询词")
 
 
 class SearchTaskStatusUpdate(BaseModel):
@@ -174,9 +206,14 @@ class SearchTaskResponse(BaseModel):
     target_website: Optional[str] = Field(None, description="主要目标网站")
     crawl_url: Optional[str] = Field(None, description="爬取的URL")
 
-    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website
-    task_type: str = Field(..., description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website")
+    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website | v2.1.0: 新增 search_multilang
+    task_type: str = Field(..., description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website、search_multilang")
     task_mode: str = Field(..., description="任务模式描述（用于前端显示）")
+
+    # v2.1.0 新增：多语言搜索配置
+    enable_multilang: bool = Field(False, description="是否启用多语言搜索")
+    languages: List[str] = Field(default_factory=lambda: ["zh"], description="搜索语言列表")
+    auto_translate: bool = Field(True, description="是否使用Claude自动翻译查询词")
 
     search_config: Dict[str, Any] = Field(..., description="搜索配置")
     crawl_config: Optional[Dict[str, Any]] = Field(None, description="网站爬取配置")
@@ -225,12 +262,13 @@ def task_to_response(task: SearchTask) -> SearchTaskResponse:
     interval = task.get_schedule_interval()
     task_type = task.get_task_type()
 
-    # 获取任务模式描述（v2.1.1: 新增 map_scrape_website）
+    # 获取任务模式描述（v2.1.1: 新增 map_scrape_website | v2.1.0: 新增 search_multilang）
     task_mode_map = {
         "search_keyword": "关键词搜索 + 详情页爬取",
         "crawl_website": "网站递归爬取",
         "scrape_url": "单页面爬取",
-        "map_scrape_website": "Map + Scrape 组合模式"
+        "map_scrape_website": "Map + Scrape 组合模式",
+        "search_multilang": "多语言并行搜索（Claude翻译）"
     }
     task_mode = task_mode_map.get(task_type.value, task_type.value)
 
@@ -243,6 +281,10 @@ def task_to_response(task: SearchTask) -> SearchTaskResponse:
         crawl_url=task.crawl_url,
         task_type=task_type.value,
         task_mode=task_mode,
+        # v2.1.0 新增：多语言搜索配置
+        enable_multilang=getattr(task, 'enable_multilang', False),
+        languages=getattr(task, 'languages', ["zh"]) or ["zh"],
+        auto_translate=getattr(task, 'auto_translate', True),
         search_config=task.search_config,
         crawl_config=task.crawl_config if hasattr(task, 'crawl_config') else {},
         schedule_interval=task.schedule_interval,
@@ -313,6 +355,10 @@ async def create_search_task(task_data: SearchTaskCreate):
             task_type=task_data.task_type,  # v2.0.0 新增
             search_config=task_data.search_config or {},
             crawl_config=task_data.crawl_config or {},  # v2.0.0 新增
+            # v2.1.0 新增：多语言搜索配置
+            enable_multilang=task_data.enable_multilang,
+            languages=task_data.languages or ["zh"],
+            auto_translate=task_data.auto_translate,
             schedule_interval=task_data.schedule_interval,
             is_active=task_data.is_active,
             created_by="current_user",  # TODO: 从JWT token获取用户信息
@@ -466,6 +512,16 @@ async def update_search_task(task_id: str, task_data: SearchTaskUpdate):
     # v2.0.0 新增：网站爬取配置
     if task_data.crawl_config is not None:
         task.crawl_config = task_data.crawl_config
+
+    # v2.1.0 新增：多语言搜索配置
+    if task_data.enable_multilang is not None:
+        task.enable_multilang = task_data.enable_multilang
+
+    if task_data.languages is not None:
+        task.languages = task_data.languages
+
+    if task_data.auto_translate is not None:
+        task.auto_translate = task_data.auto_translate
 
     if task_data.schedule_interval is not None:
         try:
