@@ -1083,6 +1083,247 @@ class ClaudeClient:
                 "model": f"{self.config.model}-fallback"
             }
 
+    async def analyze_and_generate_multilang_search(
+        self,
+        query: str,
+        context: Optional[Dict[str, Any]] = None,
+        min_languages: int = 2,
+        max_languages: int = 5
+    ) -> Dict[str, Any]:
+        """
+        v3.6.0: 统一的多语言搜索分析与查询生成函数
+
+        将原来的 detect_relevant_languages() 和 generate_multilang_queries() 合并为单一智能函数。
+        使用单次 Claude API 调用完成：
+        1. 查询类型分析（新闻报道/研究数据/政策文档/舆情分析）
+        2. 相关语言检测（基于主题而非翻译）
+        3. 多语言搜索词优化生成（非字面翻译，而是针对各语言的最佳搜索策略）
+
+        核心改进：
+        - 将多语言搜索从"翻译问题"转变为"情报检索问题"
+        - 每种语言的搜索词针对该语言的信息生态系统优化
+        - 例如：查询"西方媒体对中国事件的报道"
+          - 英语：搜索英文媒体名称 + 事件关键词
+          - 中文：搜索"外媒报道" + 事件关键词
+          而不是简单翻译
+
+        Args:
+            query: 用户原始查询
+            context: 搜索上下文（包含 intent, keywords, entities 等）
+            min_languages: 最少语言数量（默认2）
+            max_languages: 最多语言数量（默认5）
+
+        Returns:
+            Dict: {
+                "query_type": "news_coverage|research_data|policy_document|opinion_analysis",
+                "query_type_reasoning": "查询类型判断理由",
+                "languages": ["en", "zh", ...],
+                "language_reasoning": "语言选择理由",
+                "confidence_scores": {"en": 0.95, "zh": 0.85, ...},
+                "primary_language": "en",
+                "multilang_queries": {
+                    "en": "optimized English search query",
+                    "zh": "优化后的中文搜索词"
+                },
+                "search_strategy": "整体搜索策略说明",
+                "model": "claude-sonnet-4-20250514"
+            }
+        """
+        # 支持的语言列表
+        supported_languages = {
+            "zh": {"name": "中文", "regions": ["中国", "台湾", "香港", "澳门", "新加坡"]},
+            "en": {"name": "英语", "regions": ["美国", "英国", "加拿大", "澳大利亚", "全球通用"]},
+            "ja": {"name": "日语", "regions": ["日本"]},
+            "ko": {"name": "韩语", "regions": ["韩国", "朝鲜"]},
+            "fr": {"name": "法语", "regions": ["法国", "比利时", "瑞士", "加拿大魁北克"]},
+            "de": {"name": "德语", "regions": ["德国", "奥地利", "瑞士"]},
+            "ru": {"name": "俄语", "regions": ["俄罗斯", "前苏联国家"]},
+            "es": {"name": "西班牙语", "regions": ["西班牙", "拉丁美洲"]},
+            "ar": {"name": "阿拉伯语", "regions": ["中东", "北非"]},
+            "pt": {"name": "葡萄牙语", "regions": ["巴西", "葡萄牙"]},
+            "it": {"name": "意大利语", "regions": ["意大利"]},
+            "vi": {"name": "越南语", "regions": ["越南"]},
+            "th": {"name": "泰语", "regions": ["泰国"]},
+            "id": {"name": "印尼语", "regions": ["印度尼西亚"]}
+        }
+
+        # 构建语言描述
+        lang_descriptions = []
+        for code, info in supported_languages.items():
+            regions_str = "、".join(info["regions"][:3])
+            lang_descriptions.append(f'  "{code}": {info["name"]} ({regions_str})')
+        lang_list_str = "\n".join(lang_descriptions)
+
+        # 提取上下文信息
+        context_info = ""
+        if context:
+            keywords = context.get("keywords", [])
+            entities = context.get("entities", [])
+            intent = context.get("intent", "")
+            if keywords:
+                context_info += f"\n已识别关键词: {', '.join(keywords[:5])}"
+            if entities:
+                context_info += f"\n已识别实体: {', '.join(entities[:5])}"
+            if intent:
+                context_info += f"\n用户意图: {intent}"
+
+        prompt = f"""你是一名专业的开源情报(OSINT)分析师和多语言搜索策略专家。
+
+请分析以下查询，并制定最优的多语言搜索策略。
+注意：这不是简单的翻译任务，而是针对不同语言信息生态系统的搜索优化任务。
+
+用户查询: {query}
+{context_info if context_info else ""}
+
+支持的语言:
+{lang_list_str}
+
+请完成以下分析任务：
+
+1. **查询类型识别**
+   判断查询属于以下哪种类型：
+   - news_coverage: 新闻报道类（寻找媒体报道、新闻事件）
+   - research_data: 研究数据类（寻找学术论文、研究报告、统计数据）
+   - policy_document: 政策文档类（寻找政府文件、政策声明、官方立场）
+   - opinion_analysis: 舆情分析类（寻找公众反应、社交媒体讨论、评论分析）
+
+2. **语言选择**
+   基于查询主题选择最相关的 {min_languages}-{max_languages} 种语言。
+   考虑因素：
+   - 事件发生地的语言
+   - 主要信息来源的语言
+   - 国际报道的通用语言（英语）
+   - 特定领域的语言偏好
+
+3. **多语言搜索词生成**
+   为每种选定语言生成优化的搜索词。
+
+   关键原则（非常重要）：
+   - 不是简单翻译，而是针对该语言信息生态系统的最佳搜索策略
+   - 例如查询"西方媒体对X事件的报道":
+     * 英语搜索词应该是: "X event" + 具体媒体名或关键词
+     * 中文搜索词应该是: "外媒报道 X事件" 或 "西方媒体 X"
+   - 每种语言的搜索词应能最大化在该语言网络中找到相关信息的概率
+   - 搜索词应简洁有效，适合搜索引擎使用（10-50个字符为宜）
+
+请以 JSON 格式返回（不要使用 markdown 代码块）:
+{{
+  "query_type": "news_coverage",
+  "query_type_reasoning": "用户查询涉及媒体报道和新闻事件",
+  "languages": ["en", "zh", "ja"],
+  "language_reasoning": "事件涉及国际关注，需要英语获取西方媒体视角，中文获取中国视角，日语获取日本视角",
+  "confidence_scores": {{"en": 0.95, "zh": 0.90, "ja": 0.75}},
+  "primary_language": "en",
+  "multilang_queries": {{
+    "en": "optimized English search query",
+    "zh": "优化后的中文搜索词",
+    "ja": "最適化された日本語検索語"
+  }},
+  "search_strategy": "本次搜索策略：先通过英语获取国际主流媒体报道，再通过中文获取国内视角和分析..."
+}}
+
+只返回 JSON，不要其他内容。"""
+
+        try:
+            response = await self._call(prompt, max_tokens=1000)
+            result = self._parse_json_response(response)
+
+            # 验证和清理返回结果
+            if not isinstance(result, dict):
+                raise ValueError("返回结果不是字典")
+
+            # 验证必需字段
+            required_fields = ["query_type", "languages", "multilang_queries"]
+            for field in required_fields:
+                if field not in result:
+                    raise ValueError(f"缺少必需字段: {field}")
+
+            # 验证语言代码有效性
+            detected_languages = result.get("languages", [])
+            valid_languages = [lang for lang in detected_languages if lang in supported_languages]
+
+            if len(valid_languages) < min_languages:
+                logger.warning(f"检测到的有效语言不足{min_languages}种，使用默认补充")
+                if "en" not in valid_languages:
+                    valid_languages.append("en")
+                if "zh" not in valid_languages and len(valid_languages) < min_languages:
+                    valid_languages.append("zh")
+
+            valid_languages = valid_languages[:max_languages]
+
+            # 确保 multilang_queries 包含所有有效语言
+            multilang_queries = result.get("multilang_queries", {})
+            for lang in valid_languages:
+                if lang not in multilang_queries:
+                    # 对于缺失的语言，使用原始查询
+                    multilang_queries[lang] = query
+                    logger.warning(f"语言 {lang} 缺少搜索词，使用原始查询补充")
+
+            # 移除无效语言的查询
+            multilang_queries = {k: v for k, v in multilang_queries.items() if k in valid_languages}
+
+            # 验证查询类型
+            valid_query_types = ["news_coverage", "research_data", "policy_document", "opinion_analysis"]
+            query_type = result.get("query_type", "news_coverage")
+            if query_type not in valid_query_types:
+                query_type = "news_coverage"
+
+            # 确保 primary_language 有效
+            primary_language = result.get("primary_language", valid_languages[0])
+            if primary_language not in valid_languages:
+                primary_language = valid_languages[0]
+
+            logger.info(
+                f"多语言搜索分析完成: query_type={query_type}, "
+                f"languages={valid_languages}, primary={primary_language}"
+            )
+
+            return {
+                "query_type": query_type,
+                "query_type_reasoning": result.get("query_type_reasoning", "基于查询内容自动判断"),
+                "languages": valid_languages,
+                "language_reasoning": result.get("language_reasoning", "基于查询内容自动检测"),
+                "confidence_scores": result.get("confidence_scores", {lang: 0.8 for lang in valid_languages}),
+                "primary_language": primary_language,
+                "multilang_queries": multilang_queries,
+                "search_strategy": result.get("search_strategy", "使用多语言并行搜索策略"),
+                "model": self.config.model
+            }
+
+        except Exception as e:
+            logger.warning(f"统一多语言分析失败: {e}，使用降级策略")
+
+            # Fallback: 基于简单规则的降级策略
+            fallback_languages = ["en", "zh"]  # 默认英语和中文
+
+            # 简单关键词匹配扩展语言
+            query_lower = query.lower()
+            for code, info in supported_languages.items():
+                if code in fallback_languages:
+                    continue
+                # 检查地区名是否在查询中
+                if any(region.lower() in query_lower for region in info["regions"]):
+                    fallback_languages.append(code)
+                    if len(fallback_languages) >= max_languages:
+                        break
+
+            fallback_languages = fallback_languages[:max_languages]
+
+            # 生成简单的搜索词（直接使用原始查询）
+            fallback_queries = {lang: query for lang in fallback_languages}
+
+            return {
+                "query_type": "news_coverage",
+                "query_type_reasoning": "降级策略：默认为新闻报道类型",
+                "languages": fallback_languages,
+                "language_reasoning": "降级策略：基于关键词匹配",
+                "confidence_scores": {lang: 0.6 for lang in fallback_languages},
+                "primary_language": fallback_languages[0],
+                "multilang_queries": fallback_queries,
+                "search_strategy": "降级策略：使用原始查询在多语言中搜索",
+                "model": f"{self.config.model}-fallback"
+            }
+
     async def decompose_query_with_multilang(
         self,
         query: str,

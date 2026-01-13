@@ -1,28 +1,32 @@
 """
 Chat API 端点
 
-提供与前端 /chat 接口兼容的适配器，映射到 NL Search 系统。
+提供智能搜索和对话管理功能，集成 NL Search 和远程 AI 服务。
 
 **功能**:
-- 接收 question 字段，映射到 query_text
-- 返回 SSE (Server-Sent Events) 流式响应
-- 完全兼容现有 nl_search 系统
+- POST /chat/sync: 主搜索接口（支持同步/异步模式）
+- 任务管理: 创建、查询、删除后台任务
+- 对话管理: 会话创建、消息历史、置顶等
+- 搜索历史: 历史记录查询和统计
 
-**映射关系**:
-- /chat 的 question → nl_search_logs 的 query_text
+**v4.0.0 更新**:
+- 集成 LangGraph 搜索引擎
+- 通过 SearchEngineAdapter 支持多种搜索后端
+- 环境变量 SEARCH_ENGINE=langgraph 启用 LangGraph
+- 自动回退机制（LangGraph 失败时回退到 NL Search）
 
-版本: v1.0.0
-日期: 2025-11-22
+**v3.0.0 更新**:
+- 统一任务化模型，支持 wait=true/false 模式
+- 移除冗余的 SSE 流式接口和简化接口
 
-v2.7.0 更新:
+**v2.7.0 更新**:
 - 添加 Token 认证，强制从 Token 获取用户身份
 - 添加用户隔离逻辑（admin 查看所有，普通用户只能查看自己的）
 - 新增 info_items 和 is_pinned 字段支持
 """
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
 from pydantic import BaseModel, Field
-from typing import Optional, AsyncGenerator, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 import json
 import logging
 import httpx
@@ -30,12 +34,14 @@ from datetime import datetime
 from pathlib import Path
 
 from src.services.nl_search.nl_search_service import nl_search_service
-from src.services.nl_search.config import nl_search_config
 from src.services.nl_search.search_history_service import search_history_service
+from src.services.search_engine_adapter import search_engine_adapter, SearchEngine
 from src.infrastructure.database.connection import get_mongodb_database
 from src.infrastructure.database.chat_conversation_repository import (
     chat_conversation_repository
 )
+from src.infrastructure.database.chat_task_repository import chat_task_repository
+from src.services.chat_task_service import chat_task_service
 from src.core.domain.entities.auth.user import User
 from src.api.dependencies.auth import get_current_active_user
 from bson import ObjectId
@@ -44,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 # AI服务配置
 REMOTE_AI_SERVICE_URL = "http://192.168.0.5:8035/chat"
-REMOTE_AI_SERVICE_TIMEOUT = 120.0
+REMOTE_AI_SERVICE_TIMEOUT = 300.0  # 5分钟 - LangGraph 5层搜索需要更长时间
 
 router = APIRouter()
 
@@ -207,384 +213,112 @@ class ChatSyncResponse(BaseModel):
     sources_count: int = Field(..., description="来源数量")
     answer_length: int = Field(..., description="答案长度")
     status: str = Field(..., description="状态")
+    task_id: Optional[str] = Field(None, description="任务ID（v3.0.0新增）")
+
+
+# ==================== v3.0.0: 任务模式相关模型 ====================
+
+class ChatTaskCreatedResponse(BaseModel):
+    """任务创建响应（异步模式）"""
+    task_id: str = Field(..., description="任务ID")
+    status: str = Field(..., description="任务状态")
+    message: str = Field(..., description="提示消息")
+    created_at: str = Field(..., description="创建时间")
+
+
+class ChatTaskProgressModel(BaseModel):
+    """任务进度模型"""
+    current_step: str = Field(..., description="当前步骤")
+    message: str = Field(..., description="进度消息")
+    percentage: int = Field(..., description="进度百分比")
+
+
+class ChatTaskDetailResponse(BaseModel):
+    """任务详情响应"""
+    task_id: str = Field(..., description="任务ID")
+    status: str = Field(..., description="任务状态: pending/searching/processing/completed/failed")
+    progress: ChatTaskProgressModel = Field(..., description="任务进度")
+    question: str = Field(..., description="用户问题")
+    result: Optional[Dict[str, Any]] = Field(None, description="任务结果（完成后填充）")
+    error: Optional[Dict[str, Any]] = Field(None, description="错误信息（失败时填充）")
+    history_id: Optional[str] = Field(None, description="关联的历史记录ID")
+    created_at: Optional[str] = Field(None, description="创建时间")
+    completed_at: Optional[str] = Field(None, description="完成时间")
+
+
+class ChatTaskListResponse(BaseModel):
+    """任务列表响应"""
+    items: List[ChatTaskDetailResponse] = Field(..., description="任务列表")
+    total: int = Field(..., description="总数")
+    limit: int = Field(..., description="每页数量")
+    offset: int = Field(..., description="偏移量")
 
 
 # ==================== API端点 ====================
 
 @router.post(
-    "/chat",
-    summary="Chat接口（SSE流式响应）",
-    description="接收question字段，返回流式搜索结果（映射到nl_search系统）"
+    "/chat/sync",
+    summary="Chat接口（同步/异步模式）",
+    description="v3.0.0: 支持同步等待和异步任务两种模式。wait=true等待完成，wait=false立即返回任务ID。",
+    response_model=Union[ChatSyncResponse, ChatTaskCreatedResponse]
 )
-async def chat_endpoint(request: ChatRequest):
+async def chat_sync_endpoint(
+    request: ChatRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_active_user),
+    wait: bool = Query(True, description="是否等待任务完成。true=同步等待(默认)，false=立即返回任务ID"),
+    skip_summary: bool = Query(False, description="是否跳过AI总结。true=只返回搜索结果(快速模式)，false=包含AI总结(默认)")
+):
     """
-    Chat接口 - 流式返回搜索结果
+    Chat接口 - 支持同步等待和异步任务两种模式
 
-    **功能**:
-    - 接收 question 字段（自然语言查询）
-    - 映射到 nl_search_logs.query_text
-    - 返回 SSE 格式的流式响应
+    **v4.1.0 新增：skip_summary 快速模式**
+    - skip_summary=true: 只执行搜索，跳过AI总结（30-60秒）
+    - skip_summary=false: 搜索 + AI总结（90-240秒，默认）
 
-    **流式响应格式**:
-    ```
-    data: {"type": "status", "message": "正在搜索..."}
-    data: {"type": "analysis", "data": {...}}
-    data: {"type": "result", "index": 0, "data": {
-        "id": "uuid",
-        "mongo_id": "249832360786370562",
-        "title": "标题",
-        "url": "https://example.com",
-        "preview": "预览内容",
-        "source": "来源",
-        "category": {"大类": "...", "类别": "...", "地域": "..."},
-        "score": 0.95,
-        "publish_time": "2025-01-01",
-        "markdown_content": "完整Markdown内容（从news_results查询）",
-        "title_zh": "中文标题",
-        "summary_zh": "中文摘要",
-        "content_zh": "中文总结"
-    }}
-    data: {"type": "done", "log_id": "123456", "total_results": 10}
-    ```
+    **v3.0.0 新增：统一任务化**
+    - 所有请求都创建任务记录
+    - wait=true: 等待任务完成后返回结果（默认，兼容现有行为）
+    - wait=false: 立即返回任务ID，后台继续执行
+
+    **场景1 - 快速搜索模式** (skip_summary=true):
+    用户提交 → 创建任务 → LangGraph搜索 → 直接返回搜索结果
+    响应时间: 30-60秒（节省60-75%时间）
+
+    **场景2 - 异步模式** (wait=false):
+    用户提交 → 创建任务 → 立即返回task_id → 后台执行 → 保存到历史
+    用户稍后通过 GET /chat/tasks/{id} 查询结果
+
+    **场景3 - 完整模式** (wait=true, skip_summary=false, 默认):
+    用户提交 → 创建任务 → LangGraph搜索 → AI总结 → 返回完整结果
+
+    **数据流**:
+    1. 创建任务记录到 chat_tasks 集合
+    2. 调用 LangGraph/NL Search 服务执行搜索
+    3. [skip_summary=false] 调用远程 AI 服务处理
+    4. 保存结果到 search_history
+    5. 更新任务状态为 completed
 
     Args:
         request (ChatRequest): Chat请求
+        wait (bool): 是否等待完成，默认True
+        skip_summary (bool): 是否跳过AI总结，默认False
 
     Returns:
-        StreamingResponse: SSE流式响应
-
-    Raises:
-        HTTPException:
-            - 503: NL Search功能未启用
-            - 400: 输入验证失败
-            - 500: 内部错误
+        - wait=true: ChatSyncResponse 完整结果
+        - wait=false: ChatTaskCreatedResponse 任务创建信息
 
     Example:
         ```bash
-        curl -N -X POST "http://192.168.0.5:8035/api/v1/chat" \\
+        # 同步模式（默认）
+        curl -X POST "http://localhost:8000/api/v1/chat/sync" \\
+          -H "Authorization: Bearer <token>" \\
           -H "Content-Type: application/json" \\
           -d '{"question": "请介绍关于西藏的新闻"}'
-        ```
-    """
-    # 检查功能开关
-    if not nl_search_config.enabled:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "功能未启用",
-                "message": "NL Search功能已关闭。设置环境变量 NL_SEARCH_ENABLED=true 启用。",
-                "alternative_endpoint": "/api/v1/smart-search",
-                "status": "disabled"
-            }
-        )
 
-    try:
-        logger.info(f"Chat请求: question='{request.question[:50]}...', mode={request.search_mode}")
-
-        # 💾 准备保存 SSE 原始格式
-        save_dir = Path("data/chat_sse")
-        save_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        question_slug = request.question[:30].replace(" ", "_").replace("/", "_")
-        sse_filename = f"{timestamp}_{question_slug}.sse.txt"
-        sse_filepath = save_dir / sse_filename
-
-        sse_lines = []  # 收集 SSE 原始行
-
-        # 映射 question → query_text
-        async def event_generator() -> AsyncGenerator[str, None]:
-            """生成SSE事件流（集成远程AI服务）+ 保存SSE原始格式"""
-            try:
-                # 1. 发送状态：开始搜索
-                status_line = f"data: {json.dumps({'type': 'status', 'message': '正在分析您的问题...'}, ensure_ascii=False)}\n\n"
-                sse_lines.append(status_line)
-                yield status_line
-
-                # 2. 调用NL Search服务（sonar-pro + firecrawl + 入库）
-                result = await nl_search_service.create_search(
-                    query_text=request.question,
-                    user_id=request.user_id,
-                    search_mode=request.search_mode
-                )
-
-                log_id = result["log_id"]
-                logger.info(f"搜索成功: log_id={log_id}, results_count={len(result.get('results', []))}")
-
-                # 3. 调用远程 AI 服务进行处理
-                try:
-                    async with httpx.AsyncClient(timeout=REMOTE_AI_SERVICE_TIMEOUT) as client:
-                        logger.info(f"正在调用远程 AI 服务: {REMOTE_AI_SERVICE_URL}")
-
-                        async with client.stream(
-                            "POST",
-                            REMOTE_AI_SERVICE_URL,
-                            json={
-                                "question": request.question,
-                                "user_id": request.user_id,
-                                "search_mode": request.search_mode
-                            }
-                        ) as ai_response:
-                            if ai_response.status_code != 200:
-                                logger.error(f"远程 AI 服务返回错误: {ai_response.status_code}")
-                                raise Exception(f"AI服务返回状态码: {ai_response.status_code}")
-
-                            # 4. 实时处理 AI 服务的 SSE 流
-                            db = await get_mongodb_database()
-
-                            async for line in ai_response.aiter_lines():
-                                if not line.strip():
-                                    continue
-
-                                if not line.startswith("data: "):
-                                    continue
-
-                                try:
-                                    event_data = line[6:]  # 去除 "data: " 前缀
-                                    event = json.loads(event_data)
-
-                                    # 5. 检测 sources 事件，进行数据增强
-                                    if event.get("type") == "sources":
-                                        logger.info(f"收到 sources 事件，sources 数量: {len(event.get('data', []))}")
-                                        enhanced_sources = []
-
-                                        for source in event.get("data", []):
-                                            mongo_id = source.get("mongo_id")
-
-                                            if mongo_id:
-                                                try:
-                                                    # 6. ✅ v2.3.0: 从 search_results 集合查询（扁平结构）
-                                                    search_result = await db["search_results"].find_one(
-                                                        {"_id": mongo_id},
-                                                        {
-                                                            "url": 1,
-                                                            "markdown_content": 1,
-                                                            "title": 1,
-                                                            "snippet": 1,
-                                                            "_id": 0
-                                                        }
-                                                    )
-
-                                                    # 7. 合并 AI 服务数据和 search_results 数据
-                                                    if search_result:
-                                                        enhanced_source = {
-                                                            **source,  # AI 服务返回的基础字段
-                                                            "url": search_result.get("url"),
-                                                            "markdown_content": search_result.get("markdown_content"),
-                                                            # v2.3.0: search_results 是扁平结构，无嵌套字段
-                                                            "title": search_result.get("title") or source.get("title"),
-                                                            "snippet": search_result.get("snippet")
-                                                        }
-                                                        enhanced_sources.append(enhanced_source)
-                                                    else:
-                                                        logger.warning(f"未找到 mongo_id={mongo_id} 的 search_results 记录")
-                                                        enhanced_sources.append(source)
-
-                                                except Exception as e:
-                                                    logger.warning(f"查询 search_results 失败 (mongo_id={mongo_id}): {e}")
-                                                    enhanced_sources.append(source)
-                                            else:
-                                                enhanced_sources.append(source)
-
-                                        # 8. 返回增强后的 sources 事件
-                                        enhanced_event = {
-                                            "type": "sources",
-                                            "data": enhanced_sources
-                                        }
-                                        sources_line = f"data: {json.dumps(enhanced_event, ensure_ascii=False)}\n\n"
-                                        sse_lines.append(sources_line)
-                                        yield sources_line
-                                        logger.info(f"已发送增强后的 sources 事件，包含 {len(enhanced_sources)} 条记录")
-
-                                    else:
-                                        # 其他事件（answer_chunk, stream_end）直接转发
-                                        event_line = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                                        sse_lines.append(event_line)
-                                        yield event_line
-
-                                except json.JSONDecodeError as e:
-                                    logger.warning(f"解析 AI 服务响应失败: {e}, line={line}")
-                                    continue
-
-                except httpx.RequestError as e:
-                    # AI 服务不可用，使用本地数据回退
-                    logger.warning(f"远程 AI 服务不可用: {e}，使用本地数据回退")
-
-                    # 回退策略：直接返回本地搜索结果
-                    if result.get("analysis"):
-                        analysis_line = f"data: {json.dumps({'type': 'analysis', 'data': result['analysis']}, ensure_ascii=False)}\n\n"
-                        sse_lines.append(analysis_line)
-                        yield analysis_line
-
-                    db = await get_mongodb_database()
-                    for idx, item in enumerate(result.get("results", [])):
-                        mongo_id = item.get("mongo_id")
-                        url = item.get("url")
-                        markdown_content = None
-                        title_zh = None
-                        summary_zh = None
-                        content_zh = None
-
-                        if mongo_id:
-                            try:
-                                news_result = await db["news_results"].find_one(
-                                    {"_id": mongo_id},
-                                    {
-                                        "url": 1,
-                                        "markdown_content": 1,
-                                        "news_results.title_zh": 1,
-                                        "news_results.summary_zh": 1,
-                                        "news_results.content_zh": 1,
-                                        "_id": 0
-                                    }
-                                )
-
-                                if news_result:
-                                    url = news_result.get("url") or url
-                                    markdown_content = news_result.get("markdown_content")
-                                    nested = news_result.get("news_results", {})
-                                    title_zh = nested.get("title_zh")
-                                    summary_zh = nested.get("summary_zh")
-                                    content_zh = nested.get("content_zh")
-                            except Exception as e:
-                                logger.warning(f"查询 news_results 失败 (mongo_id={mongo_id}): {e}")
-
-                        result_data = {
-                            "type": "result",
-                            "index": idx,
-                            "data": {
-                                "id": item.get("id"),
-                                "mongo_id": mongo_id,
-                                "title": item.get("title"),
-                                "url": url,
-                                "preview": item.get("preview"),
-                                "source": item.get("source"),
-                                "category": item.get("category"),
-                                "score": item.get("score", 0.0),
-                                "publish_time": item.get("publish_time"),
-                                "markdown_content": markdown_content,
-                                "title_zh": title_zh,
-                                "summary_zh": summary_zh,
-                                "content_zh": content_zh
-                            }
-                        }
-                        yield f"data: {json.dumps(result_data, ensure_ascii=False)}\n\n"
-
-                    done_data = {
-                        "type": "done",
-                        "log_id": log_id,
-                        "total_results": len(result.get("results", [])),
-                        "search_mode": request.search_mode,
-                        "fallback": True  # 标记使用了回退策略
-                    }
-
-                    if request.search_mode == "single":
-                        done_data["total_raw_results"] = result.get("total_results")
-                        done_data["high_score_results"] = result.get("high_score_results")
-
-                    elif request.search_mode == "multi":
-                        done_data["sub_queries"] = result.get("sub_queries", [])
-                        done_data["total_unique_results"] = result.get("total_unique_results")
-
-                    yield f"data: {json.dumps(done_data, ensure_ascii=False)}\n\n"
-
-            except ValueError as e:
-                # 输入验证错误
-                error_data = {
-                    "type": "error",
-                    "error": "输入验证失败",
-                    "message": str(e)
-                }
-                yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
-
-            except Exception as e:
-                # 内部错误
-                logger.error(f"Chat搜索失败: {e}", exc_info=True)
-                error_data = {
-                    "type": "error",
-                    "error": "搜索失败",
-                    "message": "服务暂时不可用，请稍后重试"
-                }
-                error_line = f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
-                sse_lines.append(error_line)
-                yield error_line
-
-            finally:
-                # 💾 保存 SSE 原始格式到文件
-                try:
-                    with open(sse_filepath, 'w', encoding='utf-8') as f:
-                        f.write(f"# SSE Stream for: {request.question}\n")
-                        f.write(f"# Timestamp: {datetime.now().isoformat()}\n")
-                        f.write(f"# User ID: {request.user_id}\n")
-                        f.write(f"# Search Mode: {request.search_mode}\n")
-                        f.write("#" + "="*80 + "\n\n")
-                        f.writelines(sse_lines)
-
-                    logger.info(f"💾 SSE 原始格式已保存: {sse_filepath} ({len(sse_lines)} 行)")
-                except Exception as save_error:
-                    logger.warning(f"⚠️ 保存 SSE 原始格式失败: {save_error}")
-
-        # 返回SSE流式响应
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"  # 禁用Nginx缓冲
-            }
-        )
-
-    except HTTPException:
-        raise
-
-    except Exception as e:
-        logger.error(f"Chat端点异常: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "服务错误",
-                "message": "Chat服务暂时不可用，请稍后重试"
-            }
-        )
-
-
-@router.post(
-    "/chat/sync",
-    summary="Chat接口（同步响应，含完整内容）",
-    description="调用本地NL Search服务，自动保存到MongoDB并返回完整内容。支持多轮对话历史。",
-    response_model=ChatSyncResponse
-)
-async def chat_sync_endpoint(request: ChatRequest):
-    """
-    Chat接口 - 同步返回完整结果（含完整内容）
-
-    **功能** (v2.6.0 - 多轮对话支持):
-    1. 调用本地 NL Search 服务执行搜索（sonar-pro + firecrawl + 入库）
-    2. 自动保存搜索记录到 MongoDB nl_search_logs 集合
-    3. 调用远程 AI 服务 (http://192.168.0.5:8035/chat) 进行智能处理
-    4. 提取 AI 返回的 sources 中的 mongo_id
-    5. 查询 MongoDB news_results 获取完整内容（包含中文翻译字段）
-    6. 返回 AI 增强的响应（含完整内容和中文翻译）
-    7. 【新增】支持多轮对话历史，可传入 conversation_id 或 history
-
-    **数据流**:
-    - 用户问题 → NLSearchService.create_search() → 保存到 MongoDB
-    - 搜索结果 + 历史对话 → 远程 AI 服务 → AI 生成答案 + 智能排序来源
-    - sources[].mongo_id → news_results 查询 → 完整内容（嵌套结构 + 中文翻译）
-    - 合并数据 → 返回前端
-    - 【新增】如提供 conversation_id，自动保存对话到 chat_conversations
-
-    Args:
-        request (ChatRequest): Chat请求（支持 conversation_id 和 history）
-
-    Returns:
-        ChatSyncResponse: 包含完整内容的响应
-
-    Example:
-        ```bash
-        # 单次对话
-        curl -X POST "http://localhost:8000/api/v1/chat/sync" \\
+        # 异步模式
+        curl -X POST "http://localhost:8000/api/v1/chat/sync?wait=false" \\
+          -H "Authorization: Bearer <token>" \\
           -H "Content-Type: application/json" \\
           -d '{"question": "请介绍关于西藏的新闻"}'
 
@@ -595,7 +329,34 @@ async def chat_sync_endpoint(request: ChatRequest):
         ```
     """
     try:
-        logger.info(f"Chat同步请求: question='{request.question[:50]}...', conversation_id={request.conversation_id}")
+        logger.info(f"Chat同步请求: question='{request.question[:50]}...', wait={wait}, conversation_id={request.conversation_id}")
+
+        # v3.0.0: 创建任务记录
+        task_id = await chat_task_service.create_task(
+            user_id=current_user.id,
+            question=request.question,
+            search_mode=request.search_mode,
+            conversation_id=request.conversation_id
+        )
+        logger.info(f"任务已创建: task_id={task_id}")
+
+        # v3.0.0: 异步模式 - 立即返回任务ID，后台执行
+        if not wait:
+            # 添加后台任务
+            background_tasks.add_task(
+                chat_task_service.execute_task,
+                task_id
+            )
+            logger.info(f"异步模式: 任务已加入后台队列 task_id={task_id}")
+
+            return ChatTaskCreatedResponse(
+                task_id=task_id,
+                status="pending",
+                message="任务已创建，正在后台处理。请稍后通过 GET /chat/tasks/{task_id} 查询结果。",
+                created_at=datetime.now().isoformat()
+            )
+
+        # v3.0.0: 同步模式 - 等待任务完成（以下为原有逻辑）
 
         # 0. 处理对话历史
         conversation_history = []
@@ -623,17 +384,198 @@ async def chat_sync_endpoint(request: ChatRequest):
             ]
             logger.info(f"使用请求中的对话历史: {len(conversation_history)} 条消息")
 
-        # 1. 调用本地 NL Search 服务
-        result = await nl_search_service.create_search(
-            query_text=request.question,
-            user_id=request.user_id,
-            search_mode=request.search_mode
+        # 1. 调用搜索引擎适配器 (v4.0.0: 支持 LangGraph)
+        # v3.0.0: 更新任务状态 - 搜索中
+        await chat_task_repository.update_status(
+            task_id=task_id,
+            status=chat_task_repository.STATUS_SEARCHING,
+            progress_message="正在搜索相关信息...",
+            progress_percentage=10
         )
 
+        # v4.0.0: 使用搜索引擎适配器，支持多种搜索后端
+        result = await search_engine_adapter.search(
+            query=request.question,
+            user_id=str(current_user.id),  # 使用认证用户ID
+            search_mode=request.search_mode,
+        )
+
+        # 检查搜索是否成功
+        if not result.get("success", True):
+            error_msg = result.get("error", "搜索失败")
+            logger.error(f"搜索引擎返回错误: {error_msg}")
+            raise HTTPException(status_code=500, detail=f"搜索失败: {error_msg}")
+
         log_id = result["log_id"]
-        logger.info(f"搜索成功: log_id={log_id}, results_count={len(result.get('results', []))}")
+        engine_used = result.get("engine_used", "unknown")
+        search_results = result.get("results", [])
+        logger.info(f"搜索成功: log_id={log_id}, engine={engine_used}, results_count={len(search_results)}")
+
+        # v4.2.0: 所有搜索都保存到本地 JSON 文件（用于调试和验证）
+        try:
+            save_dir = Path("data/search_results")
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            question_slug = request.question[:30].replace(" ", "_").replace("/", "_")
+            filename = f"{timestamp}_{question_slug}.json"
+            filepath = save_dir / filename
+
+            # 构建保存数据
+            save_data = {
+                "timestamp": datetime.now().isoformat(),
+                "task_id": task_id,
+                "log_id": log_id,
+                "engine_used": engine_used,
+                "request": {
+                    "question": request.question,
+                    "user_id": str(current_user.id),
+                    "search_mode": request.search_mode,
+                    "skip_summary": skip_summary,
+                },
+                "results_count": len(search_results),
+                "search_results": search_results,
+            }
+
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(save_data, f, ensure_ascii=False, indent=2, default=str)
+
+            logger.info(f"搜索结果已保存: {filepath}")
+
+        except Exception as save_error:
+            logger.warning(f"保存搜索结果失败: {save_error}")
+
+        # v4.1.0: skip_summary 模式 - 跳过 AI 总结，直接返回搜索结果
+        if skip_summary:
+            logger.info(f"skip_summary=True: 跳过AI总结，直接返回搜索结果")
+
+            # 更新任务状态 - 跳过AI处理
+            await chat_task_repository.update_status(
+                task_id=task_id,
+                status=chat_task_repository.STATUS_PROCESSING,
+                progress_message="正在整理搜索结果...",
+                progress_percentage=80
+            )
+
+            # 直接将搜索结果转换为 SourceDetail 格式
+            enhanced_sources = []
+            for idx, sr in enumerate(search_results):
+                # 处理 category 字段
+                category_data = sr.get('category', {})
+                if not category_data or not isinstance(category_data, dict):
+                    category_data = {'大类': '未分类', '类别': '未分类', '地域': '未知'}
+
+                enhanced_sources.append(SourceDetail(
+                    id=sr.get('id', f'search-{idx}'),
+                    mongo_id=sr.get('mongo_id', sr.get('id', '')),
+                    title=sr.get('title', ''),
+                    source=sr.get('source', sr.get('source_domain', '')),
+                    score=sr.get('score', sr.get('final_score', 0.0)),
+                    category=CategoryModel(**category_data),
+                    publish_time=sr.get('publish_time', sr.get('published_date', '未知时间')),
+                    preview=sr.get('preview', sr.get('snippet', ''))[:200] if sr.get('preview') or sr.get('snippet') else '',
+                    url=sr.get('url'),
+                    markdown_content=sr.get('markdown_content'),
+                    content_length=len(sr.get('markdown_content', '')) if sr.get('markdown_content') else None
+                ))
+
+            # 生成简单的回答（不经过AI）
+            simple_answer = f"为您找到 {len(enhanced_sources)} 条关于「{request.question}」的相关信息。"
+
+            # 构建响应
+            response_data = ChatSyncResponse(
+                question=request.question,
+                answer=simple_answer,
+                sources=enhanced_sources,
+                sources_count=len(enhanced_sources),
+                answer_length=len(simple_answer),
+                status="search_only",
+                task_id=task_id
+            )
+
+            # 💾 v4.1.0: 保存搜索结果到本地 JSON 文件（用于优化分析）
+            try:
+                save_dir = Path("data/search_results")
+                save_dir.mkdir(parents=True, exist_ok=True)
+
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                question_slug = request.question[:30].replace(" ", "_").replace("/", "_")
+                filename = f"{timestamp}_{question_slug}_skip_summary.json"
+                filepath = save_dir / filename
+
+                # 构建保存数据（包含原始搜索结果和转换后的结果）
+                save_data = {
+                    "timestamp": datetime.now().isoformat(),
+                    "task_id": task_id,
+                    "engine_used": engine_used,
+                    "log_id": log_id,
+                    "request": {
+                        "question": request.question,
+                        "user_id": str(current_user.id),
+                        "search_mode": request.search_mode,
+                    },
+                    "raw_search_results": search_results,  # 原始搜索结果
+                    "converted_sources": [
+                        {
+                            "id": s.id,
+                            "mongo_id": s.mongo_id,
+                            "title": s.title,
+                            "source": s.source,
+                            "score": s.score,
+                            "category": {
+                                "大类": s.category.大类,
+                                "类别": s.category.类别,
+                                "地域": s.category.地域,
+                            },
+                            "publish_time": s.publish_time,
+                            "preview": s.preview,
+                            "url": s.url,
+                            "markdown_content": s.markdown_content,
+                            "content_length": s.content_length,
+                        }
+                        for s in enhanced_sources
+                    ],
+                    "response_summary": {
+                        "sources_count": len(enhanced_sources),
+                        "answer": simple_answer,
+                        "status": "search_only",
+                    }
+                }
+
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(save_data, f, ensure_ascii=False, indent=2)
+
+                logger.info(f"💾 搜索结果已保存: {filepath}")
+
+            except Exception as save_error:
+                logger.warning(f"⚠️ 保存搜索结果失败: {save_error}")
+
+            # 完成任务
+            result_for_task = {
+                "question": request.question,
+                "answer": simple_answer,
+                "sources_count": len(enhanced_sources),
+                "answer_length": len(simple_answer),
+                "status": "search_only",
+                "skip_summary": True
+            }
+            await chat_task_repository.complete_task(
+                task_id=task_id,
+                result=result_for_task,
+                history_id=None
+            )
+            logger.info(f"skip_summary模式完成: task_id={task_id}, sources_count={len(enhanced_sources)}")
+
+            return response_data
 
         # 2. 调用远程 AI 服务进行智能处理 (SSE 流解析)
+        # v3.0.0: 更新任务状态 - AI处理中
+        await chat_task_repository.update_status(
+            task_id=task_id,
+            status=chat_task_repository.STATUS_PROCESSING,
+            progress_message="AI正在分析和生成回答...",
+            progress_percentage=40
+        )
         logger.info("开始调用远程 AI 服务...")
 
         try:
@@ -713,16 +655,16 @@ async def chat_sync_endpoint(request: ChatRequest):
 
                     logger.info(f"✅ AI 服务调用成功: answer_length={len(ai_answer)}, sources_count={len(ai_sources)}")
 
-                    # 💾 保存 AI 服务响应到 data 文件夹
+                    # 💾 保存 AI 服务响应到 data/search_results 文件夹（调试用，上线前删除）
                     try:
                         # 创建保存目录
-                        save_dir = Path("data/ai_responses")
+                        save_dir = Path("data/search_results")
                         save_dir.mkdir(parents=True, exist_ok=True)
 
-                        # 生成文件名：时间戳 + 查询主题
+                        # 生成文件名：时间戳 + 查询主题 + _ai_response 后缀
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         question_slug = request.question[:30].replace(" ", "_").replace("/", "_")
-                        filename = f"{timestamp}_{question_slug}.json"
+                        filename = f"{timestamp}_{question_slug}_ai_response.json"
                         filepath = save_dir / filename
 
                         # 构建保存数据
@@ -927,6 +869,7 @@ async def chat_sync_endpoint(request: ChatRequest):
                 logger.warning(f"保存对话失败: {e}")
 
         # 5.5 v2.8.0: 保存搜索历史
+        history_id = None  # v3.0.0: 初始化 history_id
         if request.user_id:
             try:
                 # 将 SourceDetail 对象转换为 dict
@@ -967,8 +910,24 @@ async def chat_sync_endpoint(request: ChatRequest):
             sources=enhanced_sources,
             sources_count=len(enhanced_sources),
             answer_length=len(full_answer),
-            status=stream_status
+            status=stream_status,
+            task_id=task_id  # v3.0.0: 添加任务ID
         )
+
+        # v3.0.0: 完成任务
+        result_for_task = {
+            "question": request.question,
+            "answer": full_answer,
+            "sources_count": len(enhanced_sources),
+            "answer_length": len(full_answer),
+            "status": stream_status
+        }
+        await chat_task_repository.complete_task(
+            task_id=task_id,
+            result=result_for_task,
+            history_id=history_id
+        )
+        logger.info(f"任务已完成: task_id={task_id}, history_id={history_id}")
 
         return response_data
 
@@ -991,6 +950,146 @@ async def chat_sync_endpoint(request: ChatRequest):
                 "message": "服务暂时不可用，请稍后重试"
             }
         )
+
+
+# ==================== 任务管理 API (v3.0.0) ====================
+
+@router.get(
+    "/chat/tasks/{task_id}",
+    response_model=ChatTaskDetailResponse,
+    summary="获取任务详情",
+    description="v3.0.0 新增：获取指定任务的详情和结果"
+)
+async def get_task_detail(
+    task_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """获取任务详情
+
+    Args:
+        task_id: 任务ID
+
+    Returns:
+        任务详情，包含状态、进度、结果等
+    """
+    try:
+        result = await chat_task_service.get_task_result(
+            task_id=task_id,
+            user_id=current_user.id
+        )
+
+        if not result:
+            raise HTTPException(status_code=404, detail="任务不存在")
+
+        return ChatTaskDetailResponse(
+            task_id=result["task_id"],
+            status=result["status"],
+            progress=ChatTaskProgressModel(**result["progress"]),
+            question=result["question"],
+            result=result.get("result"),
+            error=result.get("error"),
+            history_id=result.get("history_id"),
+            created_at=result.get("created_at"),
+            completed_at=result.get("completed_at")
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取任务详情失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取任务详情失败")
+
+
+@router.get(
+    "/chat/tasks",
+    response_model=ChatTaskListResponse,
+    summary="获取任务列表",
+    description="v3.0.0 新增：获取当前用户的任务列表"
+)
+async def get_task_list(
+    current_user: User = Depends(get_current_active_user),
+    status: Optional[str] = Query(None, description="按状态过滤: pending/searching/processing/completed/failed"),
+    limit: int = Query(20, ge=1, le=100, description="返回数量"),
+    offset: int = Query(0, ge=0, description="偏移量")
+):
+    """获取用户任务列表
+
+    Args:
+        status: 可选的状态过滤
+        limit: 返回数量限制
+        offset: 偏移量
+
+    Returns:
+        任务列表和分页信息
+    """
+    try:
+        result = await chat_task_service.get_user_tasks(
+            user_id=current_user.id,
+            status=status,
+            limit=limit,
+            offset=offset
+        )
+
+        items = [
+            ChatTaskDetailResponse(
+                task_id=item["task_id"],
+                status=item["status"],
+                progress=ChatTaskProgressModel(**item["progress"]),
+                question=item["question"],
+                result=None,  # 列表中不返回完整结果
+                error=None,
+                history_id=item.get("history_id"),
+                created_at=item.get("created_at"),
+                completed_at=item.get("completed_at")
+            )
+            for item in result["items"]
+        ]
+
+        return ChatTaskListResponse(
+            items=items,
+            total=result["total"],
+            limit=result["limit"],
+            offset=result["offset"]
+        )
+
+    except Exception as e:
+        logger.error(f"获取任务列表失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="获取任务列表失败")
+
+
+@router.delete(
+    "/chat/tasks/{task_id}",
+    summary="删除任务",
+    description="v3.0.0 新增：删除指定任务"
+)
+async def delete_task(
+    task_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """删除任务
+
+    Args:
+        task_id: 任务ID
+
+    Returns:
+        删除结果
+    """
+    try:
+        success = await chat_task_repository.delete_task(
+            task_id=task_id,
+            user_id=current_user.id
+        )
+
+        if not success:
+            raise HTTPException(status_code=404, detail="任务不存在或无权删除")
+
+        return {"success": True, "deleted_id": task_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除任务失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="删除任务失败")
 
 
 # ==================== 对话历史 API ====================

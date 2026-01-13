@@ -4,6 +4,10 @@ v1.5.0 ID系统统一：
 - ✅ 统一使用雪花算法ID（替代UUID）
 - ✅ 与InstantSearchResult、DataSource保持一致
 - ✅ 支持分布式环境和高并发场景
+
+v2.0.0 多用户数据隔离：
+- ✅ 添加 user_id 字段支持多用户隔离
+- ✅ 添加 created_by 字段记录创建者
 """
 
 from dataclasses import dataclass, field
@@ -27,12 +31,17 @@ class SearchResult:
     """搜索结果实体
 
     v1.5.0 改进：统一使用雪花算法ID
+    v2.0.0 改进：添加多用户数据隔离支持
     """
     # 主键（雪花算法ID，全局唯一）
     id: str = field(default_factory=generate_string_id)
     # 关联的任务ID（雪花算法ID）
     task_id: str = ""
-    
+
+    # v2.0.0: 多用户数据隔离
+    user_id: str = ""  # 所属用户ID（用于数据隔离查询）
+    created_by: str = ""  # 创建者用户ID（记录操作者）
+
     # 搜索结果核心数据
     title: str = ""
     url: str = ""

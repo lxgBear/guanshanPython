@@ -25,7 +25,7 @@ class FirecrawlSearchAdapter:
 Firecrawl 搜索API适配器
     """
 
-    def __init__(self):
+    def __init__(self, test_mode: bool = False):
         self.api_key = settings.FIRECRAWL_API_KEY
         self.base_url = settings.FIRECRAWL_BASE_URL.rstrip('/')
         self.config_manager = SearchConfigManager()
@@ -33,8 +33,8 @@ Firecrawl 搜索API适配器
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        # 优先从settings读取TEST_MODE，fallback到环境变量
-        self.is_test_mode = getattr(settings, 'TEST_MODE',
+        # 优先使用传入的test_mode参数，否则从settings读取TEST_MODE，最后fallback到环境变量
+        self.is_test_mode = test_mode or getattr(settings, 'TEST_MODE',
                                      os.getenv("TEST_MODE", "false").lower() == "true")
 
         if self.is_test_mode:
@@ -569,3 +569,217 @@ Firecrawl 搜索API适配器
                 batches.append(result)
         
         return batches
+
+    # ============================================================================
+    # v2.0.0: 多语言搜索支持 (合并自 services/nl_search/firecrawl_search_adapter.py)
+    # ============================================================================
+
+    COUNTRY_LOCATION_MAP = {
+        # 东亚
+        "日本": "Japan", "japan": "Japan", "日本語": "Japan",
+        "韩国": "South Korea", "朝鲜": "North Korea",
+        "中国": "China", "台湾": "Taiwan", "香港": "Hong Kong",
+        # 东南亚
+        "新加坡": "Singapore", "马来西亚": "Malaysia", "泰国": "Thailand",
+        "越南": "Vietnam", "印尼": "Indonesia", "菲律宾": "Philippines",
+        # 南亚
+        "印度": "India", "巴基斯坦": "Pakistan",
+        # 中东
+        "以色列": "Israel", "伊朗": "Iran", "沙特": "Saudi Arabia",
+        "阿联酋": "United Arab Emirates", "土耳其": "Turkey",
+        # 欧洲
+        "英国": "United Kingdom", "德国": "Germany", "法国": "France",
+        "意大利": "Italy", "西班牙": "Spain", "俄罗斯": "Russia",
+        "乌克兰": "Ukraine", "波兰": "Poland", "荷兰": "Netherlands",
+        # 北美
+        "美国": "United States", "加拿大": "Canada", "墨西哥": "Mexico",
+        # 南美
+        "巴西": "Brazil", "阿根廷": "Argentina",
+        # 大洋洲
+        "澳大利亚": "Australia", "新西兰": "New Zealand",
+        # 非洲
+        "南非": "South Africa", "埃及": "Egypt", "尼日利亚": "Nigeria",
+    }
+
+    async def multi_language_search(
+        self,
+        query: str,
+        multilang_queries: Dict[str, str],
+        max_results_per_lang: int = 10,
+        tbs: Optional[str] = None,
+        auto_time_filter: bool = True,
+        task_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        多语言搜索 (v2.0.0)
+
+        使用多语言查询执行并行搜索，返回统一格式的结果
+
+        Args:
+            query: 原始查询
+            multilang_queries: 多语言查询字典 {"zh": "...", "en": "...", "ja": "...", ...}
+            max_results_per_lang: 每种语言的最大结果数
+            tbs: 时间过滤参数
+            auto_time_filter: 是否使用默认时间过滤
+            task_id: 任务ID
+
+        Returns:
+            Dict: {
+                "original_query": 原始查询,
+                "multilang_queries": 多语言查询,
+                "results_by_lang": {语言: 结果列表},
+                "all_results": 去重合并后的所有结果,
+                "stats": 统计信息
+            }
+        """
+        logger.info(f"🌐 多语言搜索: {query}, 语言: {list(multilang_queries.keys())}")
+
+        results_by_lang = {}
+        all_results = []
+        seen_urls = set()
+        lang_names = {"zh": "中文", "en": "英语", "ja": "日语", "ko": "韩语", "ru": "俄语"}
+
+        # 并行执行所有语言的搜索
+        async def search_lang(lang: str, lang_query: str):
+            try:
+                logger.info(f"🔍 [{lang.upper()}] 搜索: {lang_query}")
+                batch = await self.search(
+                    query=lang_query,
+                    user_config=None,
+                    task_id=task_id
+                )
+                results = list(batch.results)  # 转换为列表
+                logger.info(f"✅ [{lang.upper()}] 找到 {len(results)} 个结果")
+                return lang, results
+            except Exception as e:
+                logger.error(f"❌ [{lang.upper()}] 搜索失败: {e}")
+                return lang, []
+
+        # 并行执行
+        tasks = [
+            search_lang(lang, lang_query)
+            for lang, lang_query in multilang_queries.items()
+        ]
+
+        search_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 处理结果
+        for result in search_results:
+            if isinstance(result, Exception):
+                logger.error(f"多语言搜索异常: {result}")
+                continue
+
+            lang, results = result
+            results_by_lang[lang] = results
+
+            # 合并结果并去重
+            for r in results:
+                if r.url not in seen_urls:
+                    seen_urls.add(r.url)
+                    all_results.append(r)
+
+        # 统计信息
+        stats = {
+            "total_results": len(all_results),
+            "unique_results": len(seen_urls),
+            "results_per_lang": {
+                lang: len(results)
+                for lang, results in results_by_lang.items()
+            }
+        }
+
+        logger.info(f"📊 多语言搜索完成: 总计 {stats['unique_results']} 条结果")
+        for lang, count in stats["results_per_lang"].items():
+            lang_name = lang_names.get(lang, lang)
+            logger.info(f"   {lang_name}: {count} 条")
+
+        return {
+            "original_query": query,
+            "multilang_queries": multilang_queries,
+            "results_by_lang": results_by_lang,
+            "all_results": all_results,
+            "stats": stats
+        }
+
+    # ============================================================================
+    # v2.0.0: 兼容性方法 (与 services/nl_search/firecrawl_search_adapter.py 兼容)
+    # ============================================================================
+
+    def _convert_domain_result_to_dict(self, result) -> Dict[str, Any]:
+        """
+        将领域层 SearchResult 转换为字典格式 (兼容 nl_search_service)
+
+        Args:
+            result: 领域层 SearchResult 实体
+
+        Returns:
+            Dict: 兼容格式的字典
+        """
+        published_date_str = ""
+        if result.published_date:
+            if isinstance(result.published_date, str):
+                published_date_str = result.published_date
+            else:
+                published_date_str = result.published_date.isoformat() if hasattr(result.published_date, 'isoformat') else str(result.published_date)
+
+        return {
+            "title": result.title or "",
+            "url": result.url or "",
+            "snippet": result.snippet or "",
+            "score": result.relevance_score,
+            "markdown": result.markdown_content or "",
+            "published_date": published_date_str,
+            "source": result.source or "web",
+            "position": result.search_position or 0
+        }
+
+    async def search_simple(
+        self,
+        query: str,
+        max_results: int = 10,
+        location: Optional[str] = None,
+        tbs: Optional[str] = None,
+        scrape_content: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        简化的搜索方法 (兼容 services 层接口)
+
+        Args:
+            query: 搜索查询
+            max_results: 最大结果数
+            location: 地理位置
+            tbs: 时间过滤
+            scrape_content: 是否抓取完整内容
+
+        Returns:
+            List[Dict]: 搜索结果字典列表
+        """
+        # 构建用户配置
+        user_config = UserSearchConfig.from_json({
+            "limit": max_results,
+            "language": "en" if location and "United States" in location else "zh"
+        })
+
+        # 添加时间过滤
+        if tbs:
+            user_config.time_range = self._convert_time_range_from_tbs(tbs)
+
+        batch = await self.search(
+            query=query,
+            user_config=user_config,
+            task_id=None
+        )
+
+        # 转换为字典格式
+        return [self._convert_domain_result_to_dict(r) for r in batch.results]
+
+    def _convert_time_range_from_tbs(self, tbs: str) -> str:
+        """转换 tbs 格式为 time_range"""
+        mapping = {
+            "qdr:h": "hour",
+            "qdr:d": "day",
+            "qdr:w": "week",
+            "qdr:m": "month",
+            "qdr:y": "year"
+        }
+        return mapping.get(tbs, "month")
