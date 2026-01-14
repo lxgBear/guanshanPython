@@ -213,7 +213,9 @@ class ChatSyncResponse(BaseModel):
     sources_count: int = Field(..., description="来源数量")
     answer_length: int = Field(..., description="答案长度")
     status: str = Field(..., description="状态")
-    task_id: Optional[str] = Field(None, description="任务ID（v3.0.0新增）")
+    # v4.6.0: task_id 改为存储 LangGraph 工作流ID（用于查询langgraph_search_results）
+    # 数据迁移到 news_results 后，Celery任务ID不再需要，统一使用 LangGraph thread_id
+    task_id: Optional[str] = Field(None, description="LangGraph工作流ID，用于查询langgraph_search_results")
 
 
 # ==================== v3.0.0: 任务模式相关模型 ====================
@@ -490,7 +492,7 @@ async def chat_sync_endpoint(
                 sources_count=len(enhanced_sources),
                 answer_length=len(simple_answer),
                 status="search_only",
-                task_id=task_id
+                task_id=log_id  # v4.6.0: task_id 存储 LangGraph 工作流ID
             )
 
             # 💾 v4.1.0: 保存搜索结果到本地 JSON 文件（用于优化分析）
@@ -911,7 +913,7 @@ async def chat_sync_endpoint(
             sources_count=len(enhanced_sources),
             answer_length=len(full_answer),
             status=stream_status,
-            task_id=task_id  # v3.0.0: 添加任务ID
+            task_id=log_id  # v4.6.0: task_id 存储 LangGraph 工作流ID
         )
 
         # v3.0.0: 完成任务
