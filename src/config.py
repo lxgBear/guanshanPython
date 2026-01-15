@@ -5,8 +5,8 @@
 import os
 from typing import List, Optional
 from functools import lru_cache
-from pydantic_settings import BaseSettings
-from pydantic import Field, validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
 from dotenv import load_dotenv
 
 # 预先加载 .env 文件中的 NO_PROXY 配置（必须在 Settings 初始化之前）
@@ -35,23 +35,21 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(..., env="SECRET_KEY")
     JWT_ALGORITHM: str = Field(default="HS256", env="JWT_ALGORITHM")
     JWT_EXPIRATION_HOURS: int = Field(default=24, env="JWT_EXPIRATION_HOURS")
-    ALLOWED_ORIGINS: List[str] = Field(
-        default=["http://localhost:3000"],
-        env="ALLOWED_ORIGINS"
-    )
+    # 内部存储为字符串，通过属性转换为列表
+    ALLOWED_ORIGINS_STR: str = Field(default="http://localhost:3000", env="ALLOWED_ORIGINS")
     
     # 网络代理配置（VPN绕过内网IP，避免代理干扰MongoDB连接）
     NO_PROXY: Optional[str] = Field(default=None, env="NO_PROXY")
     no_proxy: Optional[str] = Field(default=None, env="no_proxy")
 
-    # MongoDB配置
-    MONGODB_URL: str = Field(..., env="MONGODB_URL")
+    # MongoDB配置（可选，不提供时使用内存模式）
+    MONGODB_URL: Optional[str] = Field(default=None, env="MONGODB_URL")
     MONGODB_DB_NAME: str = Field(default="intelligent_system", env="MONGODB_DB_NAME")
     MONGODB_MAX_POOL_SIZE: int = Field(default=100, env="MONGODB_MAX_POOL_SIZE")
     MONGODB_MIN_POOL_SIZE: int = Field(default=10, env="MONGODB_MIN_POOL_SIZE")
 
-    # MariaDB配置
-    MARIADB_URL: str = Field(..., env="MARIADB_URL")
+    # MariaDB配置（可选）
+    MARIADB_URL: Optional[str] = Field(default=None, env="MARIADB_URL")
     MARIADB_POOL_SIZE: int = Field(default=20, env="MARIADB_POOL_SIZE")
     MARIADB_MAX_OVERFLOW: int = Field(default=10, env="MARIADB_MAX_OVERFLOW")
     MARIADB_POOL_TIMEOUT: int = Field(default=30, env="MARIADB_POOL_TIMEOUT")
@@ -93,19 +91,18 @@ class Settings(BaseSettings):
     TOP_K_RETRIEVAL: int = Field(default=5, env="TOP_K_RETRIEVAL")
     RERANK_MODEL: Optional[str] = Field(default=None, env="RERANK_MODEL")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-        extra = "ignore"  # 忽略额外的环境变量（如NL_SEARCH_*由独立配置类处理）
-        
-    @validator("ALLOWED_ORIGINS", pre=True)
-    def parse_cors_origins(cls, v):
-        if isinstance(v, str):
-            return [i.strip() for i in v.split(",")]
-        return v
-    
-    @validator("FIRECRAWL_API_KEY")
+    model_config = SettingsConfigDict(
+        case_sensitive=True,
+        extra="ignore"  # 忽略额外的环境变量（如NL_SEARCH_*由独立配置类处理）
+    )
+
+    @property
+    def ALLOWED_ORIGINS(self) -> List[str]:
+        """获取 CORS 允许的源列表"""
+        return [i.strip() for i in self.ALLOWED_ORIGINS_STR.split(",")]
+
+    @field_validator("FIRECRAWL_API_KEY")
+    @classmethod
     def validate_api_key(cls, v):
         """验证API密钥格式"""
         if not v or v == "your-firecrawl-api-key-here":
@@ -116,6 +113,11 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """获取配置单例"""
+    # 从环境变量读取 ALLOWED_ORIGINS 并设置到 ALLOWED_ORIGINS_STR
+    allowed_origins = os.environ.get('ALLOWED_ORIGINS')
+    if allowed_origins:
+        os.environ['ALLOWED_ORIGINS_STR'] = allowed_origins
+
     settings = Settings()
 
     # 设置 NO_PROXY 环境变量（避免代理干扰 MongoDB 内网连接）

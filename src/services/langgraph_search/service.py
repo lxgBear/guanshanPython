@@ -176,11 +176,12 @@ class LangGraphSearchService:
             if response.get("success") and response.get("save_to_db"):
                 final_results = response.get("results", [])
                 if final_results:
-                    # 获取 task_id 用于数据库关联
+                    # v4.6.0: 获取 task_id 和 conversation_id 用于数据库关联
                     task_id_for_save = options.get("task_id") if options else None
-                    logger.info(f"[user:{user_id}] Saving {len(final_results)} results to search_results... (task_id={task_id_for_save})")
+                    conversation_id_for_save = options.get("conversation_id") if options else None
+                    logger.info(f"[user:{user_id}] Saving {len(final_results)} results to search_results... (task_id={task_id_for_save}, conversation_id={conversation_id_for_save})")
                     await self._save_results_to_search_results(
-                        final_results, user_id, task_id_for_save
+                        final_results, user_id, task_id_for_save, conversation_id_for_save
                     )
 
             return response
@@ -420,18 +421,28 @@ class LangGraphSearchService:
         Raises:
             asyncio.TimeoutError: 如果搜索超时
         """
-        # 使用配置的超时时间，默认300秒
+        # 使用配置的超时时间，默认600秒 (v4.5.3)
         timeout = self.config.search_timeout
+        query = input_state.get("query", "unknown")
+
+        logger.info(f"[LangGraph] 开始搜索: query='{query[:50]}...', timeout={timeout}s")
 
         try:
             # 使用 asyncio.wait_for 包装 ainvoke 以支持超时
+            import time
+            start_time = time.time()
+
             result = await asyncio.wait_for(
                 self.graph.ainvoke(input_state, config),
                 timeout=timeout
             )
+
+            elapsed = time.time() - start_time
+            logger.info(f"[LangGraph] 搜索完成: query='{query[:50]}...', elapsed={elapsed:.1f}s")
+
             return result
         except asyncio.TimeoutError:
-            logger.error(f"Graph execution timeout after {timeout} seconds")
+            logger.error(f"[LangGraph] ⏱️ 搜索超时: query='{query[:50]}...', timeout={timeout}s")
             raise
 
     async def _save_results_to_search_results(
@@ -439,8 +450,9 @@ class LangGraphSearchService:
         results: List[Dict[str, Any]],
         user_id: str,
         task_id: Optional[str] = None,  # v4.5.2: 传递 task_id 用于数据库关联
+        conversation_id: Optional[str] = None,  # v4.6.0: 传递 conversation_id 用于关联历史会话
     ) -> None:
-        """保存搜索结果到 search_results 表 (v4.5.2)
+        """保存搜索结果到 langgraph_search_results 表 (v4.5.2)
 
         Args:
             results: LangGraph 搜索结果列表
@@ -448,27 +460,30 @@ class LangGraphSearchService:
             task_id: 任务ID（用于数据库关联）
 
         Note:
-            mongo_id 由 AI 服务 (http://192.168.0.5:8035/chat) 填充，
-            对应 news_results 表的 _id。
+            v4.5.2: 使用专用的 langgraph_search_results 集合，
+            与 search_results 表实现数据隔离。
         """
-        from src.core.domain.entities.search_result import SearchResult, ResultStatus
-        from src.infrastructure.persistence.repositories.mongo import MongoResultRepository
+        from src.core.domain.entities.langgraph_search_result import LangGraphSearchResult, ResultStatus
+        from src.infrastructure.persistence.repositories.mongo.langgraph_result_repository import (
+            MongoLangGraphResultRepository
+        )
 
         if not results:
-            logger.warning(f"[user:{user_id}] No results to save to search_results")
+            logger.warning(f"[user:{user_id}] No results to save to langgraph_search_results")
             return
 
-        repo = MongoResultRepository()
-        search_results = []
+        repo = MongoLangGraphResultRepository()
+        langgraph_results = []
 
         for r in results:
             url = r.get("url", "")
             if not url:
                 continue
 
-            # 创建 SearchResult 实体
-            sr = SearchResult(
+            # 创建 LangGraphSearchResult 实体
+            sr = LangGraphSearchResult(
                 task_id=task_id or "",  # v4.5.2: 使用传入的 task_id
+                conversation_id=conversation_id,  # v4.6.0: 关联对话会话
                 user_id=user_id,
                 created_by=user_id,
                 title=r.get("title", "") or "",
@@ -482,30 +497,39 @@ class LangGraphSearchService:
                 source_url=r.get("source_url"),
                 http_status_code=r.get("http_status_code"),
                 search_position=r.get("search_position"),
-                relevance_score=r.get("final_score", r.get("score", 0.0)),
+                relevance_score=r.get("relevance_score", 0.0),
                 quality_score=r.get("quality_score", 0.0),
                 status=ResultStatus.PENDING,
-                # 存储额外的 LangGraph 特定字段到 metadata
+                # LangGraph 特定字段
+                layer=r.get("layer", 0),
+                layer_name=r.get("layer_name", ""),
+                source_tier=r.get("source_tier", 1),
+                credibility_score=r.get("credibility_score", 0.0),
+                final_score=r.get("final_score", 0.0),
+                category=r.get("category"),
+                multi_source_bonus=r.get("multi_source_bonus", 0.0),
+                recency_bonus=r.get("recency_bonus", 0.0),
+                layer_weight=r.get("layer_weight", 0.0),
+                # 存储额外的元数据
                 metadata={
-                    "layer": r.get("layer"),
-                    "layer_name": r.get("layer_name"),
-                    "category": r.get("category"),
+                    "publish_date": r.get("publish_date"),
+                    "mongo_id": r.get("mongo_id"),
                 },
             )
             # 生成 content_hash 用于去重
             sr.ensure_content_hash()
-            search_results.append(sr)
+            langgraph_results.append(sr)
 
         try:
             # 批量保存（自动去重）
-            stats = await repo.save_results(search_results, enable_dedup=True)
+            stats = await repo.save_results(langgraph_results, enable_dedup=True)
             logger.info(
-                f"[user:{user_id}] Saved to search_results: "
+                f"[user:{user_id}] Saved to langgraph_search_results: "
                 f"saved={stats['saved']}, duplicates={stats['duplicates']}, "
                 f"total={stats['total']}"
             )
         except Exception as e:
-            logger.error(f"[user:{user_id}] Failed to save results to search_results: {e}")
+            logger.error(f"[user:{user_id}] Failed to save results to langgraph_search_results: {e}")
             # 不抛出异常，允许搜索流程继续
 
     def _build_response(

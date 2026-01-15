@@ -70,7 +70,7 @@ class LangGraphSearchConfig:
 
     # ===== 性能配置 =====
     max_concurrent_searches: int = 5
-    search_timeout: int = 300  # 5分钟 - 5层搜索+质量门控需要更长时间
+    search_timeout: int = 600  # 10分钟 - v4.5.3: 增加超时时间以适应复杂的5层搜索
     enable_parallel_layers: bool = True  # 启用5层并行执行
 
     # ===== 预定义来源 =====
@@ -166,7 +166,7 @@ class LangGraphSearchConfig:
             enable_human_review=os.getenv("ENABLE_HUMAN_REVIEW", "false").lower() == "true",
             checkpoint_type=os.getenv("CHECKPOINT_TYPE", "sqlite"),
             max_concurrent_searches=int(os.getenv("MAX_CONCURRENT_SEARCHES", "5")),
-            search_timeout=int(os.getenv("SEARCH_TIMEOUT", "300")),  # 默认5分钟
+            search_timeout=int(os.getenv("SEARCH_TIMEOUT", "600")),  # 默认10分钟 (v4.5.3)
         )
 
     def get_enabled_layers(self) -> List[int]:

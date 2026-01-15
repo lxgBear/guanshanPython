@@ -5,8 +5,12 @@
 
 from .result_converter import ResultConverter
 from .aggregated_converter import AggregatedResultConverter
+from .output_adapter import OutputAdapter, LegacyOutputAdapter, create_output_adapter
 
 __all__ = [
     "ResultConverter",
     "AggregatedResultConverter",
+    "OutputAdapter",
+    "LegacyOutputAdapter",
+    "create_output_adapter",
 ]
