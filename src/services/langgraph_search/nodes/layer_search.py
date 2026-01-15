@@ -291,6 +291,8 @@ class LayerSearchNode:
     ) -> List[str]:
         """构建搜索查询 (保留兼容性)
 
+        v4.6.0: 过滤用户意图词
+
         Args:
             keywords: 关键词列表
             domains: 域名列表
@@ -301,8 +303,31 @@ class LayerSearchNode:
         if not keywords:
             return []
 
-        # 合并关键词
-        base_query = " ".join(keywords[:5])  # 最多使用 5 个关键词
+        # v4.6.0: 过滤意图词
+        intent_words = [
+            "西方媒体", "西方主流媒体", "欧美媒体", "西方新闻", "国际媒体", "海外媒体",
+            "西方国家", "美英", "欧美", "西方世界", "西方国家报道", "欧美新闻",
+            "亚洲媒体", "亚洲新闻", "东亚媒体", "东南亚媒体", "亚洲国家", "邻国媒体",
+            "亚洲视角", "东亚报道", "当地媒体", "国内媒体", "中国媒体", "中文媒体",
+            "本地媒体", "欧洲媒体", "欧盟媒体", "欧洲新闻", "欧洲报道", "中东媒体",
+            "阿拉伯媒体", "中东新闻", "拉美媒体", "拉丁美洲媒体", "西班牙语媒体",
+            "葡萄牙语媒体", "报道", "反应", "整理", "检索", "搜索", "查找",
+        ]
+
+        # 过滤关键词
+        filtered_keywords = []
+        for kw in keywords:
+            if kw not in intent_words:
+                # 同时检查关键词是否包含意图词
+                is_intent = any(intent in kw for intent in intent_words)
+                if not is_intent:
+                    filtered_keywords.append(kw)
+
+        if not filtered_keywords:
+            return []
+
+        # 合并过滤后的关键词
+        base_query = " ".join(filtered_keywords[:5])  # 最多使用 5 个关键词
 
         queries = []
 
@@ -325,6 +350,8 @@ class LayerSearchNode:
     ) -> List[str]:
         """构建多语言搜索查询 (v4.3.1)
 
+        v4.6.0: 在构建查询时过滤掉用户意图词
+
         根据目标语言生成多种语言的搜索查询，确保能获取到不同语言的媒体内容。
 
         Args:
@@ -336,16 +363,55 @@ class LayerSearchNode:
         Returns:
             多语言查询列表
         """
+        # v4.6.0: 意图词过滤 - 过滤掉不应作为搜索词的意图词
+        intent_words_zh = [
+            "西方媒体", "西方主流媒体", "欧美媒体", "西方新闻", "国际媒体", "海外媒体",
+            "西方国家", "美英", "欧美", "西方世界", "西方国家报道", "欧美新闻",
+            "亚洲媒体", "亚洲新闻", "东亚媒体", "东南亚媒体", "亚洲国家", "邻国媒体",
+            "亚洲视角", "东亚报道", "当地媒体", "国内媒体", "中国媒体", "中文媒体",
+            "本地媒体", "欧洲媒体", "欧盟媒体", "欧洲新闻", "欧洲报道", "中东媒体",
+            "阿拉伯媒体", "中东新闻", "拉美媒体", "拉丁美洲媒体", "西班牙语媒体",
+            "葡萄牙语媒体", "报道", "反应", "整理", "检索", "搜索", "查找",
+        ]
+
+        intent_words_en = [
+            "western media", "western news", "international media", "overseas media",
+            "western countries", "us european", "western world", "asian media", "asia news",
+            "east asian media", "asian perspective", "domestic media", "chinese media",
+            "local media", "european media", "eu media", "europe news", "middle east media",
+            "arab media", "middle east news", "latin american media", "hispanic media",
+            "report", "coverage", "reaction", "response", "collect", "search", "find",
+        ]
+
+        # 过滤中文关键词
+        filtered_keywords = []
+        for kw in keywords:
+            if kw not in intent_words_zh:
+                # 同时检查关键词是否包含意图词
+                is_intent = any(intent in kw for intent in intent_words_zh)
+                if not is_intent:
+                    filtered_keywords.append(kw)
+
+        # 过滤英文关键词
+        filtered_keywords_en = []
+        for kw in keywords_en:
+            if kw.lower() not in intent_words_en:
+                # 同时检查关键词是否包含意图词
+                kw_lower = kw.lower()
+                is_intent = any(intent.lower() in kw_lower for intent in intent_words_en)
+                if not is_intent:
+                    filtered_keywords_en.append(kw)
+
         queries = []
 
-        if not keywords and not keywords_en:
+        if not filtered_keywords and not filtered_keywords_en:
             return []
 
-        # 构建中文查询
-        zh_query = " ".join(keywords[:5]) if keywords else ""
+        # 构建中文查询（使用过滤后的关键词）
+        zh_query = " ".join(filtered_keywords[:5]) if filtered_keywords else ""
 
-        # 构建英文查询
-        en_query = " ".join(keywords_en[:5]) if keywords_en else ""
+        # 构建英文查询（使用过滤后的关键词）
+        en_query = " ".join(filtered_keywords_en[:5]) if filtered_keywords_en else ""
 
         # 如果没有英文关键词但目标语言包含英语，使用中文关键词
         if not en_query and "en" in target_languages:
@@ -357,7 +423,7 @@ class LayerSearchNode:
         if is_multilingual:
             logger.info(
                 f"Building multilingual queries for languages: {target_languages}, "
-                f"zh_keywords={keywords[:3]}, en_keywords={keywords_en[:3]}"
+                f"zh_keywords={filtered_keywords[:3]}, en_keywords={filtered_keywords_en[:3]}"
             )
 
         # 根据目标语言构建查询
@@ -563,8 +629,9 @@ class LayerSearchNode:
                 logger.info(f"Target languages: {target_languages} (query-based multilingual)")
 
             # 添加内容抓取选项 (Firecrawl SDK 使用 snake_case)
+            # v4.5.4: 同时请求 markdown 和 html 格式
             search_params["scrape_options"] = {
-                "formats": ["markdown"],
+                "formats": ["markdown", "html"],
                 "only_main_content": True,
             }
 
@@ -598,6 +665,7 @@ class LayerSearchNode:
                             "title": getattr(metadata, 'title', ''),
                             "description": getattr(metadata, 'description', ''),
                             "markdown": getattr(item, 'markdown', ''),
+                            "html": getattr(item, 'html', ''),  # v4.5.4: 添加 html 字段
                             "publishedDate": getattr(metadata, 'published_time', None),
                         }
                     else:
@@ -607,6 +675,7 @@ class LayerSearchNode:
                             "title": getattr(item, 'title', ''),
                             "description": getattr(item, 'snippet', '') or getattr(item, 'description', ''),
                             "markdown": getattr(item, 'markdown', ''),
+                            "html": getattr(item, 'html', ''),  # v4.5.4: 添加 html 字段
                             "publishedDate": getattr(item, 'date', None) or getattr(item, 'published_date', None),
                         }
                     # 只添加有效的结果（至少有 URL 或 title）
@@ -626,6 +695,7 @@ class LayerSearchNode:
                             "title": getattr(metadata, 'title', ''),
                             "description": getattr(metadata, 'description', ''),
                             "markdown": getattr(item, 'markdown', ''),
+                            "html": getattr(item, 'html', ''),  # v4.5.4: 添加 html 字段
                             "publishedDate": getattr(metadata, 'published_time', None),
                         }
                     else:
@@ -635,6 +705,7 @@ class LayerSearchNode:
                             "title": getattr(item, 'title', ''),
                             "description": getattr(item, 'description', ''),
                             "markdown": getattr(item, 'markdown', ''),
+                            "html": getattr(item, 'html', ''),  # v4.5.4: 添加 html 字段
                             "publishedDate": getattr(item, 'published_date', None),
                         }
                     results.append(result_dict)
@@ -646,6 +717,7 @@ class LayerSearchNode:
                         "title": getattr(item, 'title', ''),
                         "description": getattr(item, 'description', ''),
                         "markdown": getattr(item, 'markdown', ''),
+                        "html": getattr(item, 'html', ''),  # v4.5.4: 添加 html 字段
                         "publishedDate": getattr(item, 'publishedDate', None),
                     }
                     results.append(result_dict)
@@ -705,6 +777,13 @@ class LayerSearchNode:
             # 使用目标语言中的主要语言作为默认值
             result_language = target_languages[0] if target_languages else "en"
 
+        # v4.5.5: 检查 firecrawl 返回的内容是否为空
+        # 如果内容为空或仅包含空白字符，则不保存（设为 None）
+        markdown_raw = raw.get("markdown", raw.get("content", ""))
+        html_raw = raw.get("html", "")
+        markdown_content = markdown_raw.strip() if markdown_raw and markdown_raw.strip() else None
+        html_content = html_raw.strip() if html_raw and html_raw.strip() else None
+
         return SearchResult(
             url=url,
             title=raw.get("title", ""),
@@ -716,7 +795,8 @@ class LayerSearchNode:
             relevance_score=base_relevance,
             credibility_score=credibility,
             final_score=final_score,
-            markdown_content=raw.get("markdown", raw.get("content", "")),
+            markdown_content=markdown_content,  # v4.5.5: 空内容检查
+            html_content=html_content,  # v4.5.5: 空内容检查
             language=result_language or "en",
             published_date=raw.get("publishedDate"),
             fetched_at=datetime.utcnow(),

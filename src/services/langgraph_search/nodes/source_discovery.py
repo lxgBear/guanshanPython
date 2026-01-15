@@ -275,3 +275,53 @@ class SourceDiscoveryNode:
                 ).to_dict()
 
         return fallback_sources
+
+    def _get_generic_sources(self) -> Dict[str, Dict[str, Any]]:
+        """获取通用权威来源（v4.5.2）
+
+        当没有识别到当事方时，使用一组通用的权威新闻来源。
+        这些来源覆盖全球主要媒体，确保搜索结果的多样性和可信度。
+
+        Returns:
+            通用来源字典
+        """
+        # 通用全球权威来源（不限于特定国家）
+        generic_sources = {
+            "global_mainstream": {
+                "party_name": "全球主流媒体",
+                "party_type": "global",
+                "party_code": "GLOBAL",
+                "official_gov": ["un.org", "europa.eu"],
+                "official_agency": ["reuters.com", "apnews.com", "afp.com"],
+                "local_mainstream": [
+                    "bbc.com",
+                    "cnn.com",
+                    "nytimes.com",
+                    "theguardian.com",
+                    "xinhuanet.com",
+                    "france24.com",
+                    "dw.com",
+                    "rferl.org",
+                ],
+                "primary_language": "en",
+                "confidence": 0.85,
+            },
+            "international": {
+                "party_name": "国际媒体",
+                "party_type": "international",
+                "party_code": "INTL",
+                "official_gov": [],
+                "official_agency": ["reuters.com", "apnews.com", "afp.com"],
+                "local_mainstream": [
+                    "bbc.com",
+                    "france24.com",
+                    "aljazeera.com",
+                    "dw.com",
+                    "rferl.org",
+                ],
+                "primary_language": "en",
+                "confidence": 0.80,
+            },
+        }
+
+        return generic_sources

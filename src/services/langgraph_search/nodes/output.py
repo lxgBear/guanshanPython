@@ -126,7 +126,9 @@ class OutputNode:
                 "relevance_score": round(result.relevance_score, 4),
                 "credibility_score": round(result.credibility_score, 4),
                 "final_score": round(result.final_score, 4),
-                # 内容
+                # 内容 (v4.5.4: 保留完整内容用于数据库存储)
+                "markdown_content": result.markdown_content,
+                "html_content": result.html_content,
                 "has_content": bool(result.markdown_content),
                 "content_length": len(result.markdown_content or ""),
                 # 元数据

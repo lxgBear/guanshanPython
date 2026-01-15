@@ -1,0 +1,281 @@
+"""LangGraph 搜索结果实体模型
+
+v4.5.2 新增：专用于 LangGraph 智能搜索系统的结果实体
+
+与 SearchResult 的关系：
+- 继承 SearchResult 的所有基础字段
+- 新增 LangGraph 特定的字段：layer, layer_name, source_tier, credibility_score, final_score, category
+- 使用独立的 MongoDB 集合：langgraph_search_results
+- 实现智能搜索数据与常规搜索结果的数据隔离
+
+v4.5.5 更新：
+- 新增 translator_status: AI 翻译状态 (pending/processing/completed/failed)
+- 新增 translator_dict: AI 翻译总结内容
+- 新增 transferred_to_news: 是否已转移到 news_results 表
+- 新增 transferred_at: 转移时间
+"""
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Optional, Dict, Any
+
+from src.core.domain.entities.search_result import SearchResult, ResultStatus
+from src.infrastructure.id_generator import generate_string_id
+
+
+@dataclass
+class LangGraphSearchResult(SearchResult):
+    """LangGraph 智能搜索结果实体
+
+    v4.5.2 新增：用于存储 LangGraph 7节点智能搜索系统的结果
+
+    继承 SearchResult 的所有字段：
+    - id, task_id, user_id, created_by
+    - title, url, snippet, source
+    - markdown_content, html_content, article_tag, article_published_time
+    - relevance_score, quality_score
+    - content_hash, metadata, status, created_at, processed_at
+
+    新增 LangGraph 特定字段：
+    - layer: 搜索层级 (0-4)
+    - layer_name: 层级名称
+    - source_tier: 来源可信度等级 (1-6)
+    - credibility_score: 可信度分数 (0.0-1.0)
+    - final_score: 综合分数
+    - category: 分类信息 {"大类": "", "类别": "", "地域": ""}
+    """
+
+    # ==================== 关联字段 ====================
+
+    # v4.6.0: 关联对话会话（用于前端查询历史会话的搜索结果）
+    conversation_id: Optional[str] = None  # 关联 chat_conversations._id
+
+    # ==================== LangGraph 特定字段 ====================
+
+    # 搜索层级信息
+    layer: int = 0  # 搜索层级 (0=官方来源, 1=主流媒体, 2=区域媒体, 3=国际媒体, 4=智库机构)
+    layer_name: str = ""  # 层级名称: "官方来源", "主流媒体", "区域媒体", "国际媒体", "智库机构"
+
+    # 来源可信度
+    source_tier: int = 1  # 来源可信度等级 (1=最高, 6=最低)
+    credibility_score: float = 0.0  # 可信度分数 (0.0-1.0)，独立于 quality_score
+
+    # 综合评分
+    final_score: float = 0.0  # 综合分数 = relevance_score + credibility_score + layer_weight + recency_bonus
+
+    # 分类信息
+    category: Optional[Dict[str, str]] = None  # 分类信息: {"大类": "", "类别": "", "地域": ""}
+
+    # 额外的 LangGraph 元数据
+    multi_source_bonus: float = 0.0  # 多来源加分
+    recency_bonus: float = 0.0  # 时效性加分
+    layer_weight: float = 0.0  # 层级权重
+
+    # v4.5.3: 数据来源分类
+    data_source_type: str = "langgraph"  # 数据来源: langgraph, nl_search, manual_upload, api_import
+
+    # v4.5.3: AI 处理状态标记
+    ai_processed: bool = False  # 是否已被 AI 微服务处理
+    ai_processed_at: Optional[datetime] = None  # AI 处理时间
+    ai_model: Optional[str] = None  # 处理使用的 AI 模型
+
+    # v4.5.5: AI 翻译状态与内容
+    translator_status: Optional[str] = None  # AI 翻译状态: pending/processing/completed/failed
+    translator_dict: Optional[Dict[str, Any]] = None  # AI 翻译总结内容
+
+    # v4.5.5: 数据转移标记
+    transferred_to_news: bool = False  # 是否已转移到 news_results 表
+    transferred_at: Optional[datetime] = None  # 转移时间
+
+    def __post_init__(self):
+        """初始化后处理"""
+        # 确保父类的 content_hash 已生成
+        if not self.content_hash:
+            self.ensure_content_hash()
+
+        # 设置默认分类
+        if self.category is None:
+            self.category = {"大类": "未分类", "类别": "未分类", "地域": "未知"}
+
+    def to_summary(self) -> Dict[str, Any]:
+        """返回摘要信息（包含 LangGraph 特定字段）"""
+        base_summary = super().to_summary()
+        base_summary.update({
+            # v4.6.0: 关联字段
+            "conversation_id": self.conversation_id,
+            # LangGraph 特定字段
+            "layer": self.layer,
+            "layer_name": self.layer_name,
+            "source_tier": self.source_tier,
+            "credibility_score": self.credibility_score,
+            "final_score": self.final_score,
+            "category": self.category,
+            # v4.5.5: 新增字段
+            "translator_status": self.translator_status,
+            "translator_dict": self.translator_dict,
+            "transferred_to_news": self.transferred_to_news,
+            "transferred_at": self.transferred_at,
+        })
+        return base_summary
+
+    def get_layer_config(self) -> Dict[str, Any]:
+        """获取层级配置信息
+
+        Returns:
+            层级配置字典: {name, weight, tier, description}
+        """
+        layer_configs = {
+            0: {
+                "name": "官方来源",
+                "weight": 1.0,
+                "tier_range": (1, 2),
+                "description": "政府网站、官方机构、中央通讯社"
+            },
+            1: {
+                "name": "主流媒体",
+                "weight": 0.9,
+                "tier_range": (2, 3),
+                "description": "国家级主流媒体、权威新闻机构"
+            },
+            2: {
+                "name": "区域媒体",
+                "weight": 0.8,
+                "tier_range": (3, 4),
+                "description": "地区性媒体、行业媒体"
+            },
+            3: {
+                "name": "国际媒体",
+                "weight": 0.7,
+                "tier_range": (3, 4),
+                "description": "国际新闻机构、外国媒体"
+            },
+            4: {
+                "name": "智库机构",
+                "weight": 0.85,
+                "tier_range": (2, 4),
+                "description": "研究机构、智库、学术组织"
+            },
+        }
+
+        return layer_configs.get(
+            self.layer,
+            {
+                "name": "未知来源",
+                "weight": 0.5,
+                "tier_range": (5, 6),
+                "description": "未知或未分类来源"
+            }
+        )
+
+    def calculate_final_score(
+        self,
+        relevance_weight: float = 1.0,
+        credibility_weight: float = 0.8,
+        layer_weight: float = 0.5
+    ) -> float:
+        """重新计算综合分数
+
+        Args:
+            relevance_weight: 相关性权重
+            credibility_weight: 可信度权重
+            layer_weight: 层级权重
+
+        Returns:
+            综合分数
+        """
+        layer_config = self.get_layer_config()
+
+        # 基础分数
+        base_score = (
+            self.relevance_score * relevance_weight +
+            self.credibility_score * credibility_weight
+        )
+
+        # 层级加权
+        layer_bonus = layer_config["weight"] * layer_weight
+
+        # 综合分数
+        self.final_score = base_score + layer_bonus + self.multi_source_bonus + self.recency_bonus
+
+        # 确保分数在 0-1 范围内
+        self.final_score = max(0.0, min(1.0, self.final_score))
+
+        return self.final_score
+
+
+@dataclass
+class LangGraphSearchResultBatch:
+    """LangGraph 搜索结果批次
+
+    v4.5.2 新增：用于批量存储 LangGraph 搜索结果
+    """
+    # 批次ID（雪花算法ID）
+    id: str = field(default_factory=generate_string_id)
+
+    # 关联信息
+    task_id: str = ""
+    user_id: str = ""
+    thread_id: str = ""  # LangGraph 线程 ID
+
+    # 搜索查询
+    query: str = ""
+    search_mode: str = "single"  # single/multi
+
+    # 结果数据
+    results: list = field(default_factory=list)
+    total_count: int = 0
+
+    # LangGraph 统计信息
+    statistics: Dict[str, Any] = field(default_factory=dict)
+
+    # 状态与时间
+    success: bool = True
+    error_message: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+    def add_result(self, result: LangGraphSearchResult) -> None:
+        """添加结果"""
+        self.results.append(result)
+        self.total_count = len(self.results)
+
+    def get_layer_distribution(self) -> Dict[int, int]:
+        """获取层级分布统计
+
+        Returns:
+            各层级结果数量: {0: 5, 1: 10, ...}
+        """
+        distribution = {}
+        for result in self.results:
+            layer = result.layer if isinstance(result, LangGraphSearchResult) else 0
+            distribution[layer] = distribution.get(layer, 0) + 1
+        return distribution
+
+    def get_average_scores(self) -> Dict[str, float]:
+        """获取平均分数
+
+        Returns:
+            平均分数字典: {relevance: 0.75, credibility: 0.80, final: 0.78}
+        """
+        if not self.results:
+            return {"relevance": 0.0, "credibility": 0.0, "final": 0.0}
+
+        total_relevance = 0.0
+        total_credibility = 0.0
+        total_final = 0.0
+        count = 0
+
+        for result in self.results:
+            if isinstance(result, LangGraphSearchResult):
+                total_relevance += result.relevance_score
+                total_credibility += result.credibility_score
+                total_final += result.final_score
+                count += 1
+
+        if count == 0:
+            return {"relevance": 0.0, "credibility": 0.0, "final": 0.0}
+
+        return {
+            "relevance": round(total_relevance / count, 3),
+            "credibility": round(total_credibility / count, 3),
+            "final": round(total_final / count, 3),
+        }

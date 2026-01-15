@@ -23,6 +23,11 @@ async def get_mongodb_database() -> AsyncIOMotorDatabase:
     global _mongodb_client, _mongodb_database
 
     if _mongodb_database is None:
+        # 检查是否配置了 MongoDB URL
+        if not settings.MONGODB_URL:
+            logger.warning("MONGODB_URL 未配置，使用内存存储模式")
+            raise ConnectionError("MongoDB URL 未配置")
+
         try:
             # 检测远程MongoDB (hancens.top) 需要 TLS/SSL
             is_remote_db = 'hancens.top' in settings.MONGODB_URL
@@ -431,6 +436,71 @@ async def create_indexes():
         )
 
         logger.info("✅ Claude Search Session 索引创建完成（v2.1 数据库存储）")
+
+        # ==================== LangGraph 搜索结果索引 (v4.5.2) ====================
+
+        langgraph_search_results = db.langgraph_search_results
+
+        # 基础索引
+        await langgraph_search_results.create_index("task_id", name="idx_lg_task_id")
+        await langgraph_search_results.create_index("user_id", name="idx_lg_user_id")
+        await langgraph_search_results.create_index("created_by", name="idx_lg_created_by")
+        await langgraph_search_results.create_index("created_at", name="idx_lg_created_at")
+        await langgraph_search_results.create_index("status", name="idx_lg_status")
+        # v4.6.0: conversation_id 索引（用于前端查询历史会话的搜索结果）
+        await langgraph_search_results.create_index("conversation_id", name="idx_lg_conversation_id")
+
+        # LangGraph 特定字段索引
+        await langgraph_search_results.create_index("layer", name="idx_lg_layer")
+        await langgraph_search_results.create_index("source_tier", name="idx_lg_source_tier")
+        await langgraph_search_results.create_index("final_score", name="idx_lg_final_score")
+
+        # v4.5.3: 数据来源分类和 AI 处理状态索引
+        await langgraph_search_results.create_index("data_source_type", name="idx_lg_data_source_type")
+        await langgraph_search_results.create_index("ai_processed", name="idx_lg_ai_processed")
+        await langgraph_search_results.create_index("ai_processed_at", name="idx_lg_ai_processed_at")
+
+        # 复合索引（常用查询组合）
+        await langgraph_search_results.create_index(
+            [("task_id", 1), ("layer", 1)],
+            name="idx_lg_task_layer"
+        )
+        await langgraph_search_results.create_index(
+            [("task_id", 1), ("final_score", -1)],
+            name="idx_lg_task_score"
+        )
+        await langgraph_search_results.create_index(
+            [("user_id", 1), ("created_at", -1)],
+            name="idx_lg_user_created"
+        )
+
+        # v4.5.3: AI 处理查询索引
+        await langgraph_search_results.create_index(
+            [("data_source_type", 1), ("ai_processed", 1)],
+            name="idx_lg_source_ai_processed"
+        )
+        await langgraph_search_results.create_index(
+            [("ai_processed", 1), ("created_at", -1)],
+            name="idx_lg_ai_processed_created"
+        )
+
+        # 去重索引
+        await langgraph_search_results.create_index(
+            "content_hash",
+            name="idx_lg_content_hash"
+        )
+        await langgraph_search_results.create_index(
+            [("task_id", 1), ("url", 1)],
+            name="idx_lg_task_url"
+        )
+
+        # v4.6.0: conversation_id 复合索引（用于历史会话查询）
+        await langgraph_search_results.create_index(
+            [("conversation_id", 1), ("created_at", -1)],
+            name="idx_lg_conversation_created"
+        )
+
+        logger.info("✅ LangGraph 搜索结果索引创建完成（v4.5.2 数据隔离 + v4.5.3 AI处理状态 + v4.6.0 会话关联）")
 
     except Exception as e:
         logger.warning(f"创建索引失败: {e}")

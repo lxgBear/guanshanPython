@@ -19,8 +19,10 @@ from src.api.v1.endpoints import firecrawl_utils
 from src.api.v1.endpoints import nl_search
 from src.api.v1.endpoints import user_edits
 from src.api.v1.endpoints import chat
+from src.api.v1.endpoints import chat_v2  # V2 层分离架构
 from src.api.v1.endpoints import upload
 from src.api.v1.endpoints import review
+from src.api.v1.endpoints import langgraph_transfer
 from src.api.v1.endpoints.auth import router as auth_router
 
 # 权限依赖
@@ -135,6 +137,14 @@ api_router.include_router(
     dependencies=[Depends(require_permissions("search:basic", "search:multilang"))]
 )
 
+# Chat V2 接口（层分离架构） - 需要 search:basic 或 search:multilang 权限
+api_router.include_router(
+    chat_v2.router,
+    prefix="/chat/v2",
+    tags=["💬 Chat V2 (层分离架构)"],
+    dependencies=[Depends(require_permissions("search:basic", "search:multilang"))]
+)
+
 # 文件上传管理 - 需要 info:create 权限
 api_router.include_router(
     upload.router,
@@ -147,6 +157,13 @@ api_router.include_router(
     review.router,
     tags=["📋 档案审核管理"],
     dependencies=[Depends(require_permissions("archive:review", "archive:update", "search:basic"))]
+)
+
+# LangGraph 转移管理 - 需要 langgraph:transfer 权限
+api_router.include_router(
+    langgraph_transfer.router,
+    tags=["🔄 LangGraph 转移管理"],
+    dependencies=[Depends(require_permissions("langgraph:transfer", "info:create"))]
 )
 
 # ==========================================

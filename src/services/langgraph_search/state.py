@@ -3,7 +3,7 @@
 定义 SearchState 和相关数据结构，支持多用户隔离
 """
 
-from typing import TypedDict, List, Dict, Optional, Annotated
+from typing import TypedDict, List, Dict, Optional, Annotated, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -172,8 +172,8 @@ class LayerSearchResult:
     execution_time_ms: int = 0
     error: Optional[str] = None
 
-    def to_dict(self) -> Dict:
-        """转换为字典"""
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
         return {
             "layer": self.layer,
             "layer_name": self.layer_name,
@@ -183,17 +183,95 @@ class LayerSearchResult:
             "error": self.error,
         }
 
+
+# ==============================================================================
+# v4.7.0: OSINT 架构迁移 - 新增类型
+# ==============================================================================
+
+@dataclass
+class ParsedIntent:
+    """解析后的意图 (v4.7.0)
+
+    OSINT 架构中独立的意图解析结果，包含：
+    - investigation_target: 调查对象（核心事件/实体）
+    - source_type_constraint: 信息源类型约束（西方媒体、当地媒体等）
+    - time_range: 时间范围
+    - investigation_type: 调查类型
+
+    关键设计原则：source_type_constraint 只决定搜索哪些媒体，不作为搜索关键词。
+    """
+    investigation_target: str         # 调查对象（事件核心），用于生成搜索关键词
+    source_type_constraint: Optional[str] = None  # 信息源类型约束，仅用于域名过滤
+    time_range: Optional[str] = None
+    investigation_type: str = "event"  # event | situation_awareness | entity_profile
+    user_intent_raw: Optional[str] = None  # 原始用户意图描述（用于日志）
+
+    def to_dict(self) -> Dict:
+        """转换为字典"""
+        return {
+            "investigation_target": self.investigation_target,
+            "source_type_constraint": self.source_type_constraint,
+            "time_range": self.time_range,
+            "investigation_type": self.investigation_type,
+            "user_intent_raw": self.user_intent_raw,
+        }
+
     @classmethod
-    def from_dict(cls, data: Dict) -> "LayerSearchResult":
+    def from_dict(cls, data: Dict) -> "ParsedIntent":
         """从字典创建"""
         return cls(
-            layer=data.get("layer", 0),
-            layer_name=data.get("layer_name", ""),
-            queries_executed=data.get("queries_executed", []),
-            results=[SearchResult.from_dict(r) for r in data.get("results", [])],
-            execution_time_ms=data.get("execution_time_ms", 0),
-            error=data.get("error"),
+            investigation_target=data.get("investigation_target", ""),
+            source_type_constraint=data.get("source_type_constraint"),
+            time_range=data.get("time_range"),
+            investigation_type=data.get("investigation_type", "event"),
+            user_intent_raw=data.get("user_intent_raw"),
         )
+
+
+@dataclass
+class KeywordGroup:
+    """关键词组 (v4.7.0)
+
+    OSINT 架构中结构化的关键词输出：
+    - keywords: 该层级的搜索关键词（不含任何意图词）
+    - layer: 层级 ID (0-4)
+    - language: 搜索语言 (zh/en/mixed)
+    - search_type: 搜索类型 (web/news)
+
+    关键设计原则：keywords 纯粹包含事件内容，不含任何媒体类型词或意图动词。
+    """
+    keywords: List[str] = field(default_factory=list)
+    layer: int = 0                    # 0=官方来源, 1=主流媒体, 2=周边地区, 3=国际权威, 4=智库分析
+    language: str = "en"               # zh | en | mixed
+    search_type: str = "news"           # web | news
+    description: Optional[str] = None    # 该层级的描述
+
+    def to_dict(self) -> Dict:
+        """转换为字典"""
+        return {
+            "keywords": self.keywords,
+            "layer": self.layer,
+            "language": self.language,
+            "search_type": self.search_type,
+            "description": self.description,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "KeywordGroup":
+        """从字典创建"""
+        return cls(
+            keywords=data.get("keywords", []),
+            layer=data.get("layer", 0),
+            language=data.get("language", "en"),
+            search_type=data.get("search_type", "news"),
+            description=data.get("description"),
+        )
+
+
+# OSINT 架构迁移 - 状态字段版本控制
+OSINT_MIGRATION_VERSION = "4.7.0"  # 标记 OSINT 架构迁移版本
+
+
 
 
 class SearchState(TypedDict, total=False):
@@ -212,13 +290,26 @@ class SearchState(TypedDict, total=False):
     search_options: Dict                      # 搜索选项
 
     # === 查询分析 ===
-    analysis: Dict                            # Claude 分析结果
-    parties: List[str]                        # 识别的当事方
-    keywords: List[str]                       # 提取的关键词
-    keywords_en: List[str]                    # 英文关键词 (v4.4.0)
+    analysis: Dict                            # Claude 分析结果 (v4.6.0 保留兼容）
+    parties: List[str]                        # 识别的���事方
+    keywords: List[str]                       # 提取的关键词 (v4.6.0 保留兼容）
+    keywords_en: List[str]                    # 英文关键词 (v4.6.0 保留兼容）
     time_range: str                           # 时间范围 (qdr:d, qdr:w, qdr:m)
     target_languages: List[str]               # 目标语言 (支持17种: zh, en, ja, ko, fr, de, es, it, pt, nl, ru, ar, tr, hi, ur, vi, th, id, ms)
     search_domains: List[str]                 # 意图检测的搜索域名
+
+    # === v4.7.0: OSINT 架构新增字段 ===
+    # 意图解析（独立于关键词生成）
+    parsed_intent: Optional[Dict]            # ParsedIntent 的字典表示，独立字段
+    # 关键词组（结构化，替代 keywords/keywords_en）
+    keyword_groups: Annotated[
+        List[Dict],                           # KeywordGroup 列表 (JSON序列化)
+        operator.add,                            # 自动聚合多个节点生成
+    ]
+    # 媒体类型约束（独立字段，用于域名过滤，不作为关键词）
+    source_type_constraint: Optional[str]         # "西方主流媒体", "当地媒体" 等
+    # 架构版本控制
+    osint_migration_version: Optional[str]          # OSINT_MIGRATION_VERSION
 
     # === 分层搜索配置 (v4.4.0: 由 Claude 分析生成) ===
     layer_search_config: Dict[str, Dict]      # 每层的语言和关键词配置
@@ -248,6 +339,7 @@ class SearchState(TypedDict, total=False):
     # === 验证结果 ===
     validation_scores: Dict[str, float]       # URL → 验证分数
     cross_validation_done: bool
+    filtered_count: Optional[int]              # v4.6.0: 相关性过滤掉的结果数量
 
     # === 质量门控 (v3.7.2) ===
     quality_metrics: Dict                      # 质量指标
@@ -320,10 +412,16 @@ def create_initial_state(
         analysis={},
         parties=[],
         keywords=[],
-        keywords_en=[],              # v4.4.0: 英文关键词
+        keywords_en=[],              # v4.6.0: 英文关键词 (保留兼容）
         time_range="qdr:m",
         target_languages=initial_languages,    # 使用传入的语言配置
         search_domains=[],           # 意图检测域名
+
+        # v4.7.0: OSINT 架构新增字段 (初始化)
+        parsed_intent=None,         # 待 IntentParserNode 填充
+        keyword_groups=[],          # 待 KeywordGeneratorNode 填充
+        source_type_constraint=None,  # 待 IntentParserNode 填充
+        osint_migration_version=OSINT_MIGRATION_VERSION,
 
         # 分层搜索配置 (v4.4.0: 由 QueryAnalyzer 填充)
         layer_search_config={},
@@ -343,6 +441,7 @@ def create_initial_state(
         # 验证 (待填充)
         validation_scores={},
         cross_validation_done=False,
+        filtered_count=None,  # v4.6.0: 相关性过滤掉的结果数量
 
         # 质量门控 (v3.7.2, 待填充)
         quality_metrics={},
