@@ -15,7 +15,8 @@ from typing import List, Optional, Dict, Any
 from src.core.domain.entities.langgraph_search_result import (
     LangGraphSearchResult,
     LangGraphSearchResultBatch,
-    ResultStatus
+    ResultStatus,
+    LangGraphResultStatus  # v4.7.0: 结果处理状态枚举
 )
 from src.infrastructure.database.connection import get_mongodb_database
 from src.utils.logger import get_logger
@@ -96,6 +97,8 @@ class MongoLangGraphResultRepository:
             # v4.5.5: 数据转移标记
             "transferred_to_news": result.transferred_to_news,
             "transferred_at": result.transferred_at,
+            # v4.7.0: 结果处理状态
+            "langgraph_status": result.langgraph_status,
         }
         return base_dict
 
@@ -167,6 +170,8 @@ class MongoLangGraphResultRepository:
             # v4.5.5: 数据转移标记
             transferred_to_news=data.get("transferred_to_news", False),
             transferred_at=data.get("transferred_at"),
+            # v4.7.0: 结果处理状态
+            langgraph_status=data.get("langgraph_status", "pending"),
         )
 
     # ==================== 基础 CRUD 方法 ====================
@@ -236,6 +241,176 @@ class MongoLangGraphResultRepository:
 
         except Exception as e:
             logger.error(f"❌ 删除 LangGraph 搜索结果失败: {e}")
+            raise
+
+    # ==================== v4.7.0: 部分更新方法 ====================
+
+    async def update_partial(
+        self,
+        result_id: str,
+        updates: Dict[str, Any]
+    ) -> bool:
+        """部分更新搜索结果字段
+
+        v4.7.0 新增：支持只更新指定字段，而不是整个实体
+
+        Args:
+            result_id: 结果 ID
+            updates: 要更新的字段字典，支持的字段包括：
+                - title: 标题
+                - snippet: 摘要
+                - markdown_content: Markdown 内容
+                - langgraph_status: 处理状态 (pending/transferred/discarded)
+                - category: 分类信息
+
+        Returns:
+            是否更新成功（找到并修改了记录返回 True）
+
+        Raises:
+            ValueError: 如果 updates 为空或包含不允许更新的字段
+        """
+        if not updates:
+            logger.warning("⚠️ update_partial 调用但 updates 为空")
+            return False
+
+        # 允许更新的字段白名单
+        allowed_fields = {
+            "title", "snippet", "markdown_content",
+            "langgraph_status", "category"
+        }
+
+        # 验证字段
+        invalid_fields = set(updates.keys()) - allowed_fields
+        if invalid_fields:
+            raise ValueError(f"不允许更新的字段: {invalid_fields}")
+
+        # 验证 langgraph_status 值
+        if "langgraph_status" in updates:
+            status_value = updates["langgraph_status"]
+            valid_statuses = {s.value for s in LangGraphResultStatus}
+            if status_value not in valid_statuses:
+                raise ValueError(
+                    f"无效的 langgraph_status 值: {status_value}, "
+                    f"有效值: {valid_statuses}"
+                )
+
+        try:
+            collection = await self._get_collection()
+
+            result = await collection.update_one(
+                {"_id": result_id},
+                {"$set": updates}
+            )
+
+            if result.matched_count > 0:
+                updated_fields = list(updates.keys())
+                logger.info(
+                    f"✅ 部分更新 LangGraph 结果 (ID: {result_id}): "
+                    f"更新字段 {updated_fields}"
+                )
+                return result.modified_count > 0
+
+            logger.warning(f"⚠️ 未找到要更新的结果 (ID: {result_id})")
+            return False
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"❌ 部分更新 LangGraph 结果失败 (ID: {result_id}): {e}")
+            raise
+
+    async def batch_update_status(
+        self,
+        result_ids: List[str],
+        langgraph_status: str
+    ) -> Dict[str, Any]:
+        """批量更新结果处理状态
+
+        v4.7.0 新增：支持批量修改多个结果的处理状态
+
+        Args:
+            result_ids: 结果 ID 列表 (最多 100 条)
+            langgraph_status: 新状态 (pending/transferred/discarded)
+
+        Returns:
+            更新结果统计: {
+                "success": True/False,
+                "updated": 更新成功数量,
+                "failed": 更新失败数量,
+                "total": 总请求数量,
+                "updated_ids": 成功更新的 ID 列表,
+                "failed_ids": 失败的 ID 列表
+            }
+
+        Raises:
+            ValueError: 如果 result_ids 为空、超过 100 条或状态值无效
+        """
+        # 参数验证
+        if not result_ids:
+            raise ValueError("result_ids 不能为空")
+
+        if len(result_ids) > 100:
+            raise ValueError(f"批量更新最多支持 100 条，当前请求 {len(result_ids)} 条")
+
+        # 验证状态值
+        valid_statuses = {s.value for s in LangGraphResultStatus}
+        if langgraph_status not in valid_statuses:
+            raise ValueError(
+                f"无效的 langgraph_status 值: {langgraph_status}, "
+                f"有效值: {valid_statuses}"
+            )
+
+        try:
+            collection = await self._get_collection()
+
+            # 批量更新
+            result = await collection.update_many(
+                {"_id": {"$in": result_ids}},
+                {"$set": {"langgraph_status": langgraph_status}}
+            )
+
+            updated_count = result.modified_count
+            matched_count = result.matched_count
+
+            # 如果 matched_count < len(result_ids)，说明有些 ID 不存在
+            failed_count = len(result_ids) - matched_count
+
+            # 获取实际更新的 ID（简化处理：假设匹配的都更新了）
+            # 注意：MongoDB update_many 不返回具体哪些 ID 被更新
+            # 如需精确追踪，需要逐条更新或额外查询
+            updated_ids = []
+            failed_ids = []
+
+            if matched_count > 0:
+                # 查询确认哪些 ID 存在且状态已更新
+                async for doc in collection.find(
+                    {"_id": {"$in": result_ids}, "langgraph_status": langgraph_status},
+                    {"_id": 1}
+                ):
+                    updated_ids.append(doc["_id"])
+
+            # 计算失败的 ID
+            updated_set = set(updated_ids)
+            failed_ids = [rid for rid in result_ids if rid not in updated_set]
+
+            logger.info(
+                f"✅ 批量更新 LangGraph 结果状态为 '{langgraph_status}': "
+                f"成功 {len(updated_ids)}/{len(result_ids)} 条"
+            )
+
+            return {
+                "success": len(updated_ids) > 0,
+                "updated": len(updated_ids),
+                "failed": len(failed_ids),
+                "total": len(result_ids),
+                "updated_ids": updated_ids,
+                "failed_ids": failed_ids
+            }
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"❌ 批量更新 LangGraph 结果状态失败: {e}")
             raise
 
     # ==================== 查询方法 ====================
@@ -719,6 +894,7 @@ class MongoLangGraphResultRepository:
         translator_status: Optional[str] = None,
         only_translated: bool = False,
         exclude_transferred: bool = False,
+        langgraph_status: Optional[List[str]] = None,  # v4.7.0: 处理状态筛选
         page: int = 1,
         page_size: int = 20,
         sort_by: str = "final_score",
@@ -729,6 +905,7 @@ class MongoLangGraphResultRepository:
         v4.5.4 新增
         v4.5.5 更新: 新增 translator_status, only_translated, exclude_transferred 筛选
         v4.6.0 更新: 支持按 conversation_id 查询（与 task_id 二选一）
+        v4.7.0 更新: 新增 langgraph_status 筛选（支持多选）
 
         Args:
             task_id: 任务 ID（与 conversation_id 二选一）
@@ -739,6 +916,7 @@ class MongoLangGraphResultRepository:
             translator_status: 翻译状态筛选 (pending/processing/completed/failed)
             only_translated: 仅返回 translator_status 有值的记录
             exclude_transferred: 排除已转移到 news_results 的记录
+            langgraph_status: 处理状态筛选列表 (pending/transferred/discarded)，支持多选
             page: 页码（从 1 开始）
             page_size: 每页数量（最大 100）
             sort_by: 排序字段（final_score, created_at, relevance_score）
@@ -786,6 +964,23 @@ class MongoLangGraphResultRepository:
             # v4.5.5: 排除已转移的记录
             if exclude_transferred:
                 query["transferred_to_news"] = {"$ne": True}
+
+            # v4.7.0: 处理状态筛选（支持多选）
+            if langgraph_status:
+                # 验证状态值
+                valid_statuses = {s.value for s in LangGraphResultStatus}
+                invalid_statuses = set(langgraph_status) - valid_statuses
+                if invalid_statuses:
+                    logger.warning(
+                        f"⚠️ 忽略无效的 langgraph_status 值: {invalid_statuses}"
+                    )
+                    langgraph_status = [s for s in langgraph_status if s in valid_statuses]
+
+                if langgraph_status:
+                    if len(langgraph_status) == 1:
+                        query["langgraph_status"] = langgraph_status[0]
+                    else:
+                        query["langgraph_status"] = {"$in": langgraph_status}
 
             # 排序方向
             sort_direction = -1 if sort_order == "desc" else 1

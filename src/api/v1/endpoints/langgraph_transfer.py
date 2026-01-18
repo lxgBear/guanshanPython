@@ -1,25 +1,31 @@
 """
 LangGraph 搜索结果管理 API
 
-提供 LangGraph 搜索结果的查询、分页、批量转移等功能
+提供 LangGraph 搜索结果的查询、分页、批量转移、修改等功能
 
-版本: v4.5.6
-日期: 2026-01-14
+版本: v4.7.0
+日期: 2026-01-16
 
 API 端点汇总:
 -----------
 查询类:
   GET  /langgraph/tasks             - 获取有 LangGraph 结果的任务列表（聚合查询）
-  GET  /langgraph/results           - 分页查询搜索结果（支持模糊搜索 title、层级筛选、分数筛选）
+  GET  /langgraph/results           - 分页查询搜索结果（支持模糊搜索 title、层级筛选、分数筛选、状态筛选）
   GET  /langgraph/transfer-status/{task_id} - 获取任务的转移状态统计
 
+修改类 (v4.7.0 新增):
+  PATCH /langgraph/results/{result_id}  - 修改单条结果（标题、摘要、内容、状态、分类）
+  PATCH /langgraph/results/batch        - 批量修改结果状态
+
 转移类:
+  POST /langgraph/results/{result_id}/transfer - 单条结果入库 (v4.7.0 新增)
   POST /langgraph/transfer-to-news  - 根据 ID 列表批量转移结果到 news_results
   POST /langgraph/transfer-by-task  - 根据任务 ID 批量转移结果到 news_results
 
 权限说明:
 --------
 - langgraph:read / search:basic: 查询类接口
+- langgraph:write: 修改类接口 (v4.7.0 新增)
 - langgraph:transfer: 转移类接口
 
 v4.5.4 更新:
@@ -37,6 +43,13 @@ v4.5.6 更新:
 - 新增 GET /tasks 端点，获取有 LangGraph 结果的任务列表（前端库外信息 Tab 使用）
 - 支持按关键词搜索任务、分页查询
 - 返回每个任务的结果数量、层级分布、平均分数等统计信息
+
+v4.7.0 更新:
+- 新增 PATCH /results/{result_id} 端点，支持修改单条结果的标题、摘要、内容、状态、分类
+- 新增 PATCH /results/batch 端点，支持批量修改结果处理状态
+- 新增 langgraph_status 字段：处理状态 (pending/transferred/discarded)
+- GET /results 新增 langgraph_status 筛选参数，支持多选
+- 响应模型新增 langgraph_status 字段
 """
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -69,6 +82,56 @@ class TransferByTaskRequest(BaseModel):
     limit: Optional[int] = Field(None, ge=1, le=500, description="最大转移数量（可选）")
 
 
+# ========== v4.7.0: 修改请求模型 ==========
+
+class UpdateResultRequest(BaseModel):
+    """单条结果修改请求
+
+    v4.7.0 新增：支持修改单条 LangGraph 搜索结果的部分字段
+    """
+    title: Optional[str] = Field(None, description="修改标题")
+    snippet: Optional[str] = Field(None, description="修改摘要")
+    markdown_content: Optional[str] = Field(None, description="修改 Markdown 内容")
+    langgraph_status: Optional[str] = Field(
+        None,
+        description="处理状态: pending(未处理) / transferred(已入库) / discarded(已废弃)"
+    )
+    category: Optional[Dict[str, Any]] = Field(None, description="分类信息")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "title": "修改后的标题",
+                "langgraph_status": "discarded"
+            }
+        }
+
+
+class BatchUpdateStatusRequest(BaseModel):
+    """批量状态修改请求
+
+    v4.7.0 新增：支持批量修改多条结果的处理状态
+    """
+    result_ids: List[str] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="结果 ID 列表（1-100 条）"
+    )
+    langgraph_status: str = Field(
+        ...,
+        description="目标状态: pending(未处理) / transferred(已入库) / discarded(已废弃)"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "result_ids": ["id1", "id2", "id3"],
+                "langgraph_status": "transferred"
+            }
+        }
+
+
 # ========== 响应模型 ==========
 
 class TransferResponse(BaseModel):
@@ -81,6 +144,32 @@ class TransferResponse(BaseModel):
     failed_ids: List[str] = Field(default_factory=list, description="失败的 LangGraph 结果 ID 列表")
     errors: List[Dict[str, Any]] = Field(default_factory=list, description="错误详情")
     message: Optional[str] = Field(None, description="额外消息")
+
+
+# ========== v4.7.0: 修改响应模型 ==========
+
+class UpdateResultResponse(BaseModel):
+    """单条结果修改响应
+
+    v4.7.0 新增
+    """
+    success: bool = Field(..., description="是否成功")
+    result_id: str = Field(..., description="结果 ID")
+    updated_fields: List[str] = Field(default_factory=list, description="已更新的字段列表")
+    message: Optional[str] = Field(None, description="额外消息")
+
+
+class BatchUpdateStatusResponse(BaseModel):
+    """批量状态修改响应
+
+    v4.7.0 新增
+    """
+    success: bool = Field(..., description="是否成功（至少有一条更新成功）")
+    updated: int = Field(..., description="成功更新数量")
+    failed: int = Field(..., description="失败数量")
+    total: int = Field(..., description="总请求数量")
+    updated_ids: List[str] = Field(default_factory=list, description="成功更新的 ID 列表")
+    failed_ids: List[str] = Field(default_factory=list, description="失败的 ID 列表")
 
 
 # ========== v4.5.4: 查询响应模型 ==========
@@ -116,6 +205,8 @@ class LangGraphResultItem(BaseModel):
     # v4.5.5: 数据转移状态
     transferred_to_news: bool = Field(False, description="是否已转移到 news_results")
     transferred_at: Optional[datetime] = Field(None, description="转移时间")
+    # v4.7.0: 结果处理状态
+    langgraph_status: str = Field("pending", description="处理状态: pending(未处理)/transferred(已入库)/discarded(已废弃)")
 
     class Config:
         from_attributes = True
@@ -231,6 +322,39 @@ async def get_langgraph_tasks(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取任务列表失败: {str(e)}")
+
+
+@router.post("/results/{result_id}/transfer")
+async def transfer_single_langgraph_result(
+    result_id: str,
+    current_user = Depends(require_permissions(["langgraph:transfer"]))
+):
+    """转移单条 LangGraph 结果到 news_results 表
+
+    v4.7.0 新增: 便利端点，支持前端单条入库操作
+
+    权限: langgraph:transfer
+
+    Args:
+        result_id: 结果 ID
+
+    Returns:
+        { success: bool, message: str }
+    """
+    try:
+        result = await langgraph_transfer_service.transfer_by_ids(
+            result_ids=[result_id],
+            user_id=current_user.id,
+            task_id=None
+        )
+
+        if result.get("success_count", 0) > 0:
+            return {"success": True, "message": "入库成功"}
+        else:
+            return {"success": False, "message": result.get("message", "入库失败")}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"入库失败: {str(e)}")
 
 
 @router.post("/transfer-to-news", response_model=TransferResponse)
@@ -358,11 +482,12 @@ async def get_langgraph_results(
     translator_status: Optional[str] = Query(None, description="翻译状态筛选 (pending/processing/completed/failed)"),
     only_translated: bool = Query(False, description="仅返回 translator_status 有值的记录"),
     exclude_transferred: bool = Query(False, description="排除已转移到 news_results 的记录"),
+    langgraph_status: Optional[str] = Query(None, description="处理状态筛选，多选用逗号分隔 (pending,transferred,discarded)"),
     page: int = Query(1, ge=1, description="页码（从 1 开始）"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量（最大 100）"),
     sort_by: str = Query("final_score", description="排序字段"),
     sort_order: str = Query("desc", description="排序方向 (asc/desc)"),
-    include_content: bool = Query(False, description="是否包含完整内容（markdown_content, html_content）"),
+    include_content: bool = Query(True, description="是否包含完整内容（markdown_content, html_content）"),
     current_user: Dict[str, Any] = Depends(require_permissions(["langgraph:read", "search:basic"]))
 ):
     """分页查询 LangGraph 搜索结果
@@ -370,8 +495,9 @@ async def get_langgraph_results(
     v4.5.4 新增
     v4.5.5 更新: 新增 translator_status, only_translated, exclude_transferred 筛选参数
     v4.6.0 更新: 新增 conversation_id 参数，支持按对话会话查询
+    v4.7.0 更新: 新增 langgraph_status 参数，支持按处理状态筛选
 
-    支持按 task_id 或 conversation_id 查询，可选模糊搜索、层级筛选、分数筛选、翻译状态筛选。
+    支持按 task_id 或 conversation_id 查询，可选模糊搜索、层级筛选、分数筛选、翻译状态筛选、处理状态筛选。
 
     权限: langgraph:read 或 search:basic
 
@@ -384,6 +510,7 @@ async def get_langgraph_results(
         translator_status: 翻译状态筛选 (pending/processing/completed/failed)
         only_translated: 仅返回 translator_status 有值的记录
         exclude_transferred: 排除已转移到 news_results 的记录
+        langgraph_status: 处理状态筛选，多选用逗号分隔 (pending/transferred/discarded)
         page: 页码
         page_size: 每页数量
         sort_by: 排序字段 (final_score, created_at, relevance_score, credibility_score, layer)
@@ -410,7 +537,12 @@ async def get_langgraph_results(
 
         repo = MongoLangGraphResultRepository()
 
-        # 分页查询（v4.6.0: 新增 conversation_id 参数）
+        # v4.7.0: 解析 langgraph_status 参数（支持逗号分隔的多选）
+        langgraph_status_list = None
+        if langgraph_status:
+            langgraph_status_list = [s.strip() for s in langgraph_status.split(",") if s.strip()]
+
+        # 分页查询（v4.6.0: 新增 conversation_id 参数, v4.7.0: 新增 langgraph_status 参数）
         results, total = await repo.find_with_pagination(
             task_id=task_id,
             conversation_id=conversation_id,
@@ -420,6 +552,7 @@ async def get_langgraph_results(
             translator_status=translator_status,
             only_translated=only_translated,
             exclude_transferred=exclude_transferred,
+            langgraph_status=langgraph_status_list,
             page=page,
             page_size=page_size,
             sort_by=sort_by,
@@ -455,6 +588,8 @@ async def get_langgraph_results(
                 # v4.5.5: 数据转移状态
                 transferred_to_news=r.transferred_to_news,
                 transferred_at=r.transferred_at,
+                # v4.7.0: 结果处理状态
+                langgraph_status=r.langgraph_status,
             )
             data.append(item)
 
@@ -481,3 +616,132 @@ async def get_langgraph_results(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+# ========== v4.7.0: 修改端点 ==========
+
+@router.patch("/results/{result_id}", response_model=UpdateResultResponse)
+async def update_langgraph_result(
+    result_id: str,
+    request: UpdateResultRequest,
+    current_user: Dict[str, Any] = Depends(require_permissions(["langgraph:write"]))
+):
+    """修改单条 LangGraph 搜索结果
+
+    v4.7.0 新增：支持修改结果的标题、摘要、内容、处理状态、分类等字段
+
+    权限: langgraph:write
+
+    Args:
+        result_id: 结果 ID
+        request: 修改请求，包含要更新的字段
+
+    Returns:
+        UpdateResultResponse: 更新结果
+
+    Raises:
+        HTTPException 400: 如果请求体为空
+        HTTPException 404: 如果结果不存在
+        HTTPException 422: 如果状态值无效
+    """
+    # 构建更新字典（只包含非空字段）
+    updates = {}
+    if request.title is not None:
+        updates["title"] = request.title
+    if request.snippet is not None:
+        updates["snippet"] = request.snippet
+    if request.markdown_content is not None:
+        updates["markdown_content"] = request.markdown_content
+    if request.langgraph_status is not None:
+        updates["langgraph_status"] = request.langgraph_status
+    if request.category is not None:
+        updates["category"] = request.category
+
+    if not updates:
+        raise HTTPException(
+            status_code=400,
+            detail="请求体不能为空，至少需要提供一个要修改的字段"
+        )
+
+    try:
+        from src.infrastructure.persistence.repositories.mongo.langgraph_result_repository import (
+            MongoLangGraphResultRepository
+        )
+
+        repo = MongoLangGraphResultRepository()
+
+        # 先检查结果是否存在
+        existing = await repo.get_by_id(result_id)
+        if not existing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到 ID 为 {result_id} 的结果"
+            )
+
+        # 执行部分更新
+        success = await repo.update_partial(result_id, updates)
+
+        return UpdateResultResponse(
+            success=success,
+            result_id=result_id,
+            updated_fields=list(updates.keys()),
+            message="更新成功" if success else "数据未变化"
+        )
+
+    except ValueError as e:
+        # 参数验证错误（如无效的状态值）
+        raise HTTPException(status_code=422, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"更新失败: {str(e)}")
+
+
+@router.patch("/results/batch", response_model=BatchUpdateStatusResponse)
+async def batch_update_langgraph_results_status(
+    request: BatchUpdateStatusRequest,
+    current_user: Dict[str, Any] = Depends(require_permissions(["langgraph:write"]))
+):
+    """批量修改 LangGraph 搜索结果的处理状态
+
+    v4.7.0 新增：支持批量修改多条结果的处理状态
+
+    权限: langgraph:write
+
+    Args:
+        request: 批量修改请求，包含结果 ID 列表和目标状态
+
+    Returns:
+        BatchUpdateStatusResponse: 批量更新结果统计
+
+    Raises:
+        HTTPException 400: 如果 result_ids 为空
+        HTTPException 422: 如果状态值无效或 ID 数量超过限制
+    """
+    try:
+        from src.infrastructure.persistence.repositories.mongo.langgraph_result_repository import (
+            MongoLangGraphResultRepository
+        )
+
+        repo = MongoLangGraphResultRepository()
+
+        # 执行批量更新
+        result = await repo.batch_update_status(
+            result_ids=request.result_ids,
+            langgraph_status=request.langgraph_status
+        )
+
+        return BatchUpdateStatusResponse(
+            success=result["success"],
+            updated=result["updated"],
+            failed=result["failed"],
+            total=result["total"],
+            updated_ids=result["updated_ids"],
+            failed_ids=result["failed_ids"]
+        )
+
+    except ValueError as e:
+        # 参数验证错误
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量更新失败: {str(e)}")
