@@ -252,6 +252,10 @@ class MultilangSearchExecutor(TaskExecutor):
         elif "content" in item:
             result.markdown_content = item["content"]
 
+        # 提取 HTML 内容（如果有）- v4.7.1 修复缺失
+        if "html" in item:
+            result.html_content = item["html"]
+
         # 提取元数据
         metadata = item.get("metadata", {})
 

@@ -17,10 +17,27 @@ v4.5.5 更新：
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+
+from enum import Enum
 
 from src.core.domain.entities.search_result import SearchResult, ResultStatus
 from src.infrastructure.id_generator import generate_string_id
+
+
+class LangGraphResultStatus(str, Enum):
+    """LangGraph 结果处理状态
+
+    v4.7.0 新增：用于标记搜索结果的处理状态
+
+    状态说明:
+    - PENDING: 未处理 - 默认状态，等待用户操作
+    - TRANSFERRED: 已入库 - 已转移到 news_results 表供 AI 处理
+    - DISCARDED: 已废弃 - 用户标记为不需要的结果
+    """
+    PENDING = "pending"          # 未处理 - 默认状态
+    TRANSFERRED = "transferred"  # 已入库 - 已转移到 news_results
+    DISCARDED = "discarded"      # 已废弃 - 用户标记为废弃
 
 
 @dataclass
@@ -87,6 +104,9 @@ class LangGraphSearchResult(SearchResult):
     transferred_to_news: bool = False  # 是否已转移到 news_results 表
     transferred_at: Optional[datetime] = None  # 转移时间
 
+    # v4.7.0: 结果处理状态
+    langgraph_status: str = "pending"  # 处理状态: pending/transferred/discarded
+
     def __post_init__(self):
         """初始化后处理"""
         # 确保父类的 content_hash 已生成
@@ -115,6 +135,8 @@ class LangGraphSearchResult(SearchResult):
             "translator_dict": self.translator_dict,
             "transferred_to_news": self.transferred_to_news,
             "transferred_at": self.transferred_at,
+            # v4.7.0: 处理状态
+            "langgraph_status": self.langgraph_status,
         })
         return base_summary
 
