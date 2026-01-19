@@ -60,11 +60,16 @@ class SearchEngineConfig:
         self.langgraph_enable_checkpointing = os.getenv(
             "LANGGRAPH_ENABLE_CHECKPOINTING", "false"
         ).lower() == "true"
+        # v4.10.0: 使用简化架构（LLM + Firecrawl 单次搜索）
+        self.use_simplified_architecture = os.getenv(
+            "USE_SIMPLIFIED_ARCHITECTURE", "true"
+        ).lower() == "true"
 
     def __repr__(self):
         return (
             f"SearchEngineConfig(engine={self.engine}, "
-            f"fallback={self.enable_fallback})"
+            f"fallback={self.enable_fallback}, "
+            f"simplified={self.use_simplified_architecture})"
         )
 
 
@@ -294,6 +299,9 @@ class SearchEngineAdapter:
             options = {
                 "search_mode": search_mode,
                 "task_id": task_id,  # v4.5.2: 传递 task_id 用于数据库存储
+                # v4.10.0: 使用简化架构
+                "use_simplified_architecture": self.config.use_simplified_architecture,
+                "save_to_db": True,  # 默认保存到数据库
             }
 
             # v4.4.0: 移除硬编码的多语言检测，改由 QueryAnalyzer (LLM) 智能判断

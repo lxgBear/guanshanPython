@@ -1,6 +1,8 @@
-"""LangGraph 搜索状态模型
+"""LangGraph 搜索状态模型 (v4.16.0)
 
 定义 SearchState 和相关数据结构，支持多用户隔离
+
+v4.16.0: 添加 intent_filter_results 字段 (意图筛选结果)
 """
 
 from typing import TypedDict, List, Dict, Optional, Annotated, Any
@@ -185,91 +187,11 @@ class LayerSearchResult:
 
 
 # ==============================================================================
-# v4.7.0: OSINT 架构迁移 - 新增类型
+# v4.8.0: 规则化架构迁移 - 状态字段版本控制
 # ==============================================================================
-
-@dataclass
-class ParsedIntent:
-    """解析后的意图 (v4.7.0)
-
-    OSINT 架构中独立的意图解析结果，包含：
-    - investigation_target: 调查对象（核心事件/实体）
-    - source_type_constraint: 信息源类型约束（西方媒体、当地媒体等）
-    - time_range: 时间范围
-    - investigation_type: 调查类型
-
-    关键设计原则：source_type_constraint 只决定搜索哪些媒体，不作为搜索关键词。
-    """
-    investigation_target: str         # 调查对象（事件核心），用于生成搜索关键词
-    source_type_constraint: Optional[str] = None  # 信息源类型约束，仅用于域名过滤
-    time_range: Optional[str] = None
-    investigation_type: str = "event"  # event | situation_awareness | entity_profile
-    user_intent_raw: Optional[str] = None  # 原始用户意图描述（用于日志）
-
-    def to_dict(self) -> Dict:
-        """转换为字典"""
-        return {
-            "investigation_target": self.investigation_target,
-            "source_type_constraint": self.source_type_constraint,
-            "time_range": self.time_range,
-            "investigation_type": self.investigation_type,
-            "user_intent_raw": self.user_intent_raw,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict) -> "ParsedIntent":
-        """从字典创建"""
-        return cls(
-            investigation_target=data.get("investigation_target", ""),
-            source_type_constraint=data.get("source_type_constraint"),
-            time_range=data.get("time_range"),
-            investigation_type=data.get("investigation_type", "event"),
-            user_intent_raw=data.get("user_intent_raw"),
-        )
-
-
-@dataclass
-class KeywordGroup:
-    """关键词组 (v4.7.0)
-
-    OSINT 架构中结构化的关键词输出：
-    - keywords: 该层级的搜索关键词（不含任何意图词）
-    - layer: 层级 ID (0-4)
-    - language: 搜索语言 (zh/en/mixed)
-    - search_type: 搜索类型 (web/news)
-
-    关键设计原则：keywords 纯粹包含事件内容，不含任何媒体类型词或意图动词。
-    """
-    keywords: List[str] = field(default_factory=list)
-    layer: int = 0                    # 0=官方来源, 1=主流媒体, 2=周边地区, 3=国际权威, 4=智库分析
-    language: str = "en"               # zh | en | mixed
-    search_type: str = "news"           # web | news
-    description: Optional[str] = None    # 该层级的描述
-
-    def to_dict(self) -> Dict:
-        """转换为字典"""
-        return {
-            "keywords": self.keywords,
-            "layer": self.layer,
-            "language": self.language,
-            "search_type": self.search_type,
-            "description": self.description,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict) -> "KeywordGroup":
-        """从字典创建"""
-        return cls(
-            keywords=data.get("keywords", []),
-            layer=data.get("layer", 0),
-            language=data.get("language", "en"),
-            search_type=data.get("search_type", "news"),
-            description=data.get("description"),
-        )
-
-
-# OSINT 架构迁移 - 状态字段版本控制
-OSINT_MIGRATION_VERSION = "4.7.0"  # 标记 OSINT 架构迁移版本
+# v4.8.0: 移除 LLM 意图和关键词生成，使用基于规则的查询分析
+# 移除 ParsedIntent 和 KeywordGroup 类型，改用简单字段
+RULES_BASED_VERSION = "4.8.0"  # 标记规则化架构版本
 
 
 
@@ -298,18 +220,60 @@ class SearchState(TypedDict, total=False):
     target_languages: List[str]               # 目标语言 (支持17种: zh, en, ja, ko, fr, de, es, it, pt, nl, ru, ar, tr, hi, ur, vi, th, id, ms)
     search_domains: List[str]                 # 意图检测的搜索域名
 
-    # === v4.7.0: OSINT 架构新增字段 ===
-    # 意图解析（独立于关键词生成）
-    parsed_intent: Optional[Dict]            # ParsedIntent 的字典表示，独立字段
-    # 关键词组（结构化，替代 keywords/keywords_en）
-    keyword_groups: Annotated[
-        List[Dict],                           # KeywordGroup 列表 (JSON序列化)
-        operator.add,                            # 自动聚合多个节点生成
-    ]
-    # 媒体类型约束（独立字段，用于域名过滤，不作为关键词）
+    # === v4.8.0: 规则化架构字段 =====
+    # 媒体类型约束（用于域名过滤，不作为关键词）
     source_type_constraint: Optional[str]         # "西方主流媒体", "当地媒体" 等
     # 架构版本控制
-    osint_migration_version: Optional[str]          # OSINT_MIGRATION_VERSION
+    rules_based_version: Optional[str]         # RULES_BASED_VERSION
+
+    # === v4.9.0: LLM 驱动的查询理解 =====
+    # LLM 解释的查询理解结果
+    llm_interpretation: Optional[Dict]           # LLM 对查询的理解和解��结果
+    # firecrawl 搜索配置（由 LLM 生成）
+    firecrawl_search_config: Optional[List[Dict]]  # Firecrawl API 搜索配置列表
+
+    # === v4.17.0: 重试搜索配置 =====
+    # 搜索重试控制
+    should_retry: bool = False               # 是否需要重试
+    # 被过滤结果记录（用于分析）
+    filtered_out_results: List[Dict] = field(default_factory=list)  # 被过滤掉的结果
+
+    # === v4.11.0: 两步关键词生成架构 =====
+    # Step 1: 关键词生成节点输出
+    keyword_generation: Optional[Dict]           # 关键词生成结果
+    # 结构:
+    # {
+    #   "intent": {                              # 理解意图
+    #     "source_type": "西方主流媒体",
+    #     "content_depth": "报道+反应",
+    #     "time_requirement": "无限制"
+    #   },
+    #   "event": {                               # 确认事件
+    #     "type": "突发事件|持续事态|历史追溯|人物背景",
+    #     "time": "2025年11月11日",
+    #     "location": "四川阿坝",
+    #     "parties": ["中国"]
+    #   },
+    #   "keyword_atoms": [                       # 关键词原子
+    #     {"original": "四川阿坝", "atoms": ["Sichuan", "Aba"]}
+    #   ],
+    #   "keyword_expansions": {                  # 关键词扩展
+    #     "Aba": {
+    #       "synonyms": ["Aba Tibetan", "Tibetan area"],
+    #       "related": ["Tibetan Autonomous Prefecture"],
+    #       "variations": {"zh": "阿坝", "en": "Aba"}
+    #     }
+    #   },
+    #   "tiered_keywords": {                     # 分层关键词
+    #     "tier_1": ["Sichuan bridge collapse November 2025"],
+    #     "tier_2": ["Hongqi Bridge collapse Sichuan"],
+    #     "tier_3": ["Sichuan bridge collapse analysis"]
+    #   },
+    #   "search_directions": [                   # 搜索方向
+    #     {"direction": "事件核心", "keywords": [...], "priority": 1},
+    #     {"direction": "扩大范围", "keywords": [...], "priority": 2}
+    #   ]
+    # }
 
     # === 分层搜索配置 (v4.4.0: 由 Claude 分析生成) ===
     layer_search_config: Dict[str, Dict]      # 每层的语言和关键词配置
@@ -335,6 +299,7 @@ class SearchState(TypedDict, total=False):
 
     # === 聚合结果 ===
     aggregated_results: List[Dict]            # 去重聚合后的结果 (JSON)
+    # v4.16.0: 每个结果包含 intent_score 字段 (0.0-1.0) 用于排序
 
     # === 验证结果 ===
     validation_scores: Dict[str, float]       # URL → 验证分数
@@ -417,11 +382,9 @@ def create_initial_state(
         target_languages=initial_languages,    # 使用传入的语言配置
         search_domains=[],           # 意图检测域名
 
-        # v4.7.0: OSINT 架构新增字段 (初始化)
-        parsed_intent=None,         # 待 IntentParserNode 填充
-        keyword_groups=[],          # 待 KeywordGeneratorNode 填充
-        source_type_constraint=None,  # 待 IntentParserNode 填充
-        osint_migration_version=OSINT_MIGRATION_VERSION,
+        # v4.8.0: 规则化架构字段 (初始化)
+        source_type_constraint=None,  # 待 QueryAnalyzer 填充
+        rules_based_version=RULES_BASED_VERSION,
 
         # 分层搜索配置 (v4.4.0: 由 QueryAnalyzer 填充)
         layer_search_config={},
@@ -436,6 +399,7 @@ def create_initial_state(
         layer_results={},
 
         # 聚合结果 (待填充)
+        # v4.16.0: 每个结果将包含 intent_score 字段
         aggregated_results=[],
 
         # 验证 (待填充)
@@ -451,6 +415,10 @@ def create_initial_state(
         should_retry_search=False,
         search_retry_count=0,
         retry_strategy="",
+
+        # v4.17.0: 重试和过滤结果
+        should_retry=False,            # 两步架构重试控制
+        filtered_out_results=[],      # 被过滤掉的结果（用于分析）
 
         # 最终输出 (待填充)
         final_results=[],

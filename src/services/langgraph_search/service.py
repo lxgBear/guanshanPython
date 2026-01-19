@@ -30,7 +30,8 @@ except ImportError:
 
 from .state import SearchState, create_initial_state
 from .config import LangGraphSearchConfig
-from .graph import build_search_graph
+from .graph import build_search_graph, build_two_step_search_graph
+from .feature_flags import FeatureFlags
 from .utils.thread_id import (
     generate_secure_thread_id,
     validate_thread_id_ownership,
@@ -79,7 +80,24 @@ class LangGraphSearchService:
         """
         self.config = config or LangGraphSearchConfig.from_env()
         self.firecrawl_client = firecrawl_client
-        self.anthropic_client = anthropic_client or Anthropic()
+        # v4.9.1: 使用配置的 API key 和 base_url
+        if anthropic_client:
+            self.anthropic_client = anthropic_client
+        elif self.config.claude_api_key:
+            # 使用配置的 API key 和 base_url
+            api_key = self.config.claude_api_key
+            base_url = self.config.claude_base_url
+            if base_url and base_url != "https://api.anthropic.com":
+                # 自定义 base_url (如中转服务)
+                self.anthropic_client = Anthropic(api_key=api_key, base_url=base_url)
+                logger.info(f"Anthropic client initialized with custom base_url: {base_url}")
+            else:
+                # 默认官方 API
+                self.anthropic_client = Anthropic(api_key=api_key)
+                logger.info("Anthropic client initialized with official API")
+        else:
+            self.anthropic_client = None
+            logger.warning("Anthropic API key not configured, LLM features will be unavailable")
 
         # 初始化检查点保存器
         if checkpointer:
@@ -89,7 +107,15 @@ class LangGraphSearchService:
         else:
             self.checkpointer = None
 
-        # 编译搜索图
+        # v4.11.0: 编译两步搜索图（默认）
+        self.two_step_graph = build_two_step_search_graph(
+            config=self.config,
+            firecrawl_client=self.firecrawl_client,
+            anthropic_client=self.anthropic_client,
+            checkpointer=self.checkpointer,
+        )
+
+        # 完整 5 层架构图（备用）
         self.graph = build_search_graph(
             config=self.config,
             firecrawl_client=self.firecrawl_client,
@@ -97,7 +123,7 @@ class LangGraphSearchService:
             checkpointer=self.checkpointer,
         )
 
-        logger.info("LangGraphSearchService initialized")
+        logger.info("LangGraphSearchService initialized (v4.11.0 two-step architecture)")
 
     def _create_checkpointer(self) -> Optional[Any]:
         """创建检查点保存器
@@ -151,6 +177,15 @@ class LangGraphSearchService:
         )
 
         try:
+            # v4.11.0: 检查架构选择（优先级：two_step > full）
+            feature_flags = FeatureFlags.from_search_options(options)
+            use_two_step = feature_flags.use_two_step_architecture
+
+            if use_two_step:
+                logger.info(f"[user:{user_id}] Using TWO-STEP architecture (v4.11.0)")
+            else:
+                logger.info(f"[user:{user_id}] Using FULL architecture (5-layer search)")
+
             # 创建初始状态
             initial_state = create_initial_state(
                 query=query,
@@ -166,8 +201,12 @@ class LangGraphSearchService:
                 }
             }
 
-            # 执行搜索图
-            final_state = await self._run_graph(initial_state, config)
+            # v4.11.0: 根据标志选择图执行
+            final_state = await self._run_graph(
+                initial_state,
+                config,
+                use_two_step=use_two_step,
+            )
 
             # v4.5.2: 保存结果到 search_results 表
             response = self._build_response(final_state, thread_id)
@@ -178,7 +217,17 @@ class LangGraphSearchService:
                 if final_results:
                     # v4.6.0: 获取 task_id 和 conversation_id 用于数据库关联
                     task_id_for_save = options.get("task_id") if options else None
-                    conversation_id_for_save = options.get("conversation_id") if options else None
+                    conversation_id_raw = options.get("conversation_id") if options else None
+                    # v4.7.1: 修复 JavaScript 大整数精度丢失问题
+                    # 前端发送的 ID 可能被 JS 转换为科学计数法，需要恢复为整数字符串
+                    if conversation_id_raw is not None:
+                        try:
+                            # 尝试转换为整数再转字符串，避免科学计数法
+                            conversation_id_for_save = str(int(float(conversation_id_raw)))
+                        except (ValueError, TypeError):
+                            conversation_id_for_save = str(conversation_id_raw) if conversation_id_raw else None
+                    else:
+                        conversation_id_for_save = None
                     logger.info(f"[user:{user_id}] Saving {len(final_results)} results to search_results... (task_id={task_id_for_save}, conversation_id={conversation_id_for_save})")
                     await self._save_results_to_search_results(
                         final_results, user_id, task_id_for_save, conversation_id_for_save
@@ -408,12 +457,14 @@ class LangGraphSearchService:
         self,
         input_state: Optional[Dict[str, Any]],
         config: Dict[str, Any],
+        use_two_step: bool = False,
     ) -> Dict[str, Any]:
         """运行搜索图
 
         Args:
             input_state: 输入状态
             config: 执行配置
+            use_two_step: 是否使用两步架构 (v4.11.0，默认推荐)
 
         Returns:
             最终状态
@@ -425,7 +476,15 @@ class LangGraphSearchService:
         timeout = self.config.search_timeout
         query = input_state.get("query", "unknown")
 
-        logger.info(f"[LangGraph] 开始搜索: query='{query[:50]}...', timeout={timeout}s")
+        # v4.11.0: 选择图（two_step 为推荐架构）
+        if use_two_step:
+            graph_to_use = self.two_step_graph
+            arch_name = "TWO-STEP"
+        else:
+            graph_to_use = self.graph
+            arch_name = "FULL"
+
+        logger.info(f"[LangGraph] 开始搜索 ({arch_name}): query='{query[:50]}...', timeout={timeout}s")
 
         try:
             # 使用 asyncio.wait_for 包装 ainvoke 以支持超时
@@ -433,16 +492,16 @@ class LangGraphSearchService:
             start_time = time.time()
 
             result = await asyncio.wait_for(
-                self.graph.ainvoke(input_state, config),
+                graph_to_use.ainvoke(input_state, config),
                 timeout=timeout
             )
 
             elapsed = time.time() - start_time
-            logger.info(f"[LangGraph] 搜索完成: query='{query[:50]}...', elapsed={elapsed:.1f}s")
+            logger.info(f"[LangGraph] 搜索完成 ({arch_name}): query='{query[:50]}...', elapsed={elapsed:.1f}s")
 
             return result
         except asyncio.TimeoutError:
-            logger.error(f"[LangGraph] ⏱️ 搜索超时: query='{query[:50]}...', timeout={timeout}s")
+            logger.error(f"[LangGraph] ⏱️ 搜索超时 ({arch_name}): query='{query[:50]}...', timeout={timeout}s")
             raise
 
     async def _save_results_to_search_results(
@@ -528,6 +587,7 @@ class LangGraphSearchService:
                 f"saved={stats['saved']}, duplicates={stats['duplicates']}, "
                 f"total={stats['total']}"
             )
+
         except Exception as e:
             logger.error(f"[user:{user_id}] Failed to save results to langgraph_search_results: {e}")
             # 不抛出异常，允许搜索流程继续
@@ -552,7 +612,9 @@ class LangGraphSearchService:
         # v4.5.2: 保存结果到 search_results 表
         # 注意：这是一个异步操作，需要在 execute_search 中处理
         # 这里我们只标记需要保存，实际保存由调用方处理
-        save_needed = state.get("save_to_db", True)
+        # v4.10.1: 修复 - 从 search_options 中读取 save_to_db 选项
+        search_options = state.get("search_options", {})
+        save_needed = search_options.get("save_to_db", True)
 
         return {
             "success": state.get("status") == "completed",

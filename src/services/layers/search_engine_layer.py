@@ -14,6 +14,7 @@
 """
 
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -256,6 +257,11 @@ class SearchEngineLayer(ISearchLayer):
 
         options = context.options.copy()
         options["task_id"] = context.task_id
+        # v4.10.1: 添加简化架构和保存选项
+        options["use_simplified_architecture"] = os.getenv(
+            "USE_SIMPLIFIED_ARCHITECTURE", "true"
+        ).lower() == "true"
+        options["save_to_db"] = self._config.save_to_db
 
         result = await self._langgraph_service.execute_search(
             query=context.query,
