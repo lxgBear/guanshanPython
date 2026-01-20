@@ -85,7 +85,7 @@ class GSAICrawlEngine:
     def _lazy_import(self):
         """懒加载 gsac 模块"""
         if self._acrawl is None:
-            from gsac import acrawl
+            from src.gsac import acrawl
             self._acrawl = acrawl
             logger.debug("[GSAC_ENGINE] gsac 模块已加载")
 
@@ -257,7 +257,7 @@ class GSAICrawlEngine:
             引擎状态信息
         """
         try:
-            import gsac
+            from src import gsac
             version = gsac.__version__
             return {
                 "engine": "gsac",

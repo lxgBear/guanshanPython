@@ -10,7 +10,8 @@ class PasswordHandler:
         self.pwd_context = CryptContext(
             schemes=["bcrypt"],
             deprecated="auto",
-            bcrypt__rounds=12
+            bcrypt__rounds=12,
+            bcrypt__truncate_error=False  # 兼容 Python 3.13 + bcrypt 4.x
         )
 
     def hash_password(self, password: str) -> str:
