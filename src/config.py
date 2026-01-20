@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = Field(default="gpt-4", env="OPENAI_MODEL")
     CLAUDE_API_KEY: Optional[str] = Field(default=None, env="CLAUDE_API_KEY")
     CLAUDE_MODEL: str = Field(default="claude-3-opus", env="CLAUDE_MODEL")
+    ANTHROPIC_BASE_URL: Optional[str] = Field(default=None, env="ANTHROPIC_BASE_URL")
     
     # 向量数据库配置
     VECTOR_DB_TYPE: str = Field(default="qdrant", env="VECTOR_DB_TYPE")
@@ -90,6 +91,13 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = Field(default=200, env="CHUNK_OVERLAP")
     TOP_K_RETRIEVAL: int = Field(default=5, env="TOP_K_RETRIEVAL")
     RERANK_MODEL: Optional[str] = Field(default=None, env="RERANK_MODEL")
+    
+    # 搜索引擎配置
+    SEARCH_ENGINE: str = Field(default="gsac", env="SEARCH_ENGINE")  # "gsac" | "nl_search"
+    GSAC_MAX_KEYWORDS: int = Field(default=5, env="GSAC_MAX_KEYWORDS")
+    GSAC_MAX_RESULTS_PER_KEYWORD: int = Field(default=10, env="GSAC_MAX_RESULTS_PER_KEYWORD")
+    GSAC_ENABLE_DEEP_SCRAPE: bool = Field(default=False, env="GSAC_ENABLE_DEEP_SCRAPE")
+    GSAC_ENABLE_SUMMARY: bool = Field(default=True, env="GSAC_ENABLE_SUMMARY")
     
     model_config = SettingsConfigDict(
         case_sensitive=True,

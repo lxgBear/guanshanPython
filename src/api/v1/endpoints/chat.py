@@ -35,13 +35,15 @@ from pathlib import Path
 
 from src.services.nl_search.nl_search_service import nl_search_service
 from src.services.nl_search.search_history_service import search_history_service
-from src.services.search_engine_adapter import search_engine_adapter, SearchEngine
+from src.services.search_engine_adapter import search_engine_adapter
 from src.infrastructure.database.connection import get_mongodb_database
 from src.infrastructure.database.chat_conversation_repository import (
     chat_conversation_repository
 )
 from src.infrastructure.database.chat_task_repository import chat_task_repository
 from src.services.chat_task_service import chat_task_service
+from src.services.chat_search_service import get_chat_search_service, ChatSearchService
+from src.core.domain.entities.chat_search_elements import ChatSearchElements
 from src.core.domain.entities.auth.user import User
 from src.api.dependencies.auth import get_current_active_user
 from bson import ObjectId
@@ -218,6 +220,42 @@ class ChatSyncResponse(BaseModel):
     task_id: Optional[str] = Field(None, description="LangGraph工作流ID，用于查询langgraph_search_results")
 
 
+# ==================== 要素确认相关模型 (v4.20.0) ====================
+
+class ChatSearchElementsModel(BaseModel):
+    """搜索要素模型 (v4.20.0)
+
+    用于要素确认流程，封装 LLM 提取的搜索参数。
+    """
+    keywords: List[str] = Field(..., description="中文关键词列表")
+    keywords_en: List[str] = Field(default_factory=list, description="英文关键词列表")
+    time_range: Optional[str] = Field(None, description="时间范围 (qdr:d, qdr:w, qdr:m, qdr:y)")
+    source_preferences: List[str] = Field(default_factory=list, description="来源偏好 (official, mainstream, regional)")
+    languages: List[str] = Field(default_factory=lambda: ["zh", "en"], description="搜索语言列表")
+    search_strategy: Dict[str, Any] = Field(default_factory=dict, description="搜索策略配置")
+    summary: str = Field(default="", description="事件简要描述")
+    event_type: str = Field(default="", description="事件类型")
+    llm_reasoning: str = Field(default="", description="LLM 分析理由")
+    original_query: str = Field(default="", description="原始查询")
+
+
+class ConfirmElementsRequest(BaseModel):
+    """确认要素请求 (v4.20.0)"""
+    confirmed_elements: ChatSearchElementsModel = Field(..., description="用户确认的搜索要素")
+
+
+class ChatTaskWithElementsResponse(BaseModel):
+    """带要素的任务响应 (v4.20.0)
+
+    用于要素确认流程的第一阶段响应。
+    """
+    task_id: str = Field(..., description="任务ID")
+    status: str = Field(..., description="任务状态 (awaiting_confirmation)")
+    extracted_elements: Optional[ChatSearchElementsModel] = Field(None, description="LLM 提取的搜索要素")
+    message: str = Field(default="", description="提示消息")
+    created_at: Optional[str] = Field(None, description="创建时间")
+
+
 # ==================== v3.0.0: 任务模式相关模型 ====================
 
 class ChatTaskCreatedResponse(BaseModel):
@@ -261,15 +299,16 @@ class ChatTaskListResponse(BaseModel):
 @router.post(
     "/chat/sync",
     summary="Chat接口（同步/异步模式）",
-    description="v3.0.0: 支持同步等待和异步任务两种模式。wait=true等待完成，wait=false立即返回任务ID。",
-    response_model=Union[ChatSyncResponse, ChatTaskCreatedResponse]
+    description="v4.20.0: 支持要素确认模式。require_confirmation=true时返回提取的要素供用户确认。",
+    response_model=Union[ChatSyncResponse, ChatTaskCreatedResponse, ChatTaskWithElementsResponse]
 )
 async def chat_sync_endpoint(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     wait: bool = Query(True, description="是否等待任务完成。true=同步等待(默认)，false=立即返回任务ID"),
-    skip_summary: bool = Query(False, description="是否跳过AI总结。true=只返回搜索结果(快速模式)，false=包含AI总结(默认)")
+    skip_summary: bool = Query(False, description="是否跳过AI总结。true=只返回搜索结果(快速模式)，false=包含AI总结(默认)"),
+    require_confirmation: bool = Query(True, description="是否需要要素确认。true=返回提取的要素供用户确认(默认)，false=直接执行搜索")
 ):
     """
     Chat接口 - 支持同步等待和异步任务两种模式
@@ -331,7 +370,52 @@ async def chat_sync_endpoint(
         ```
     """
     try:
-        logger.info(f"Chat同步请求: question='{request.question[:50]}...', wait={wait}, conversation_id={request.conversation_id}")
+        logger.info(f"Chat同步请求: question='{request.question[:50]}...', wait={wait}, require_confirmation={require_confirmation}, conversation_id={request.conversation_id}")
+
+        # v4.20.0: 要素确认模式 - 提取要素后返回供用户确认
+        if require_confirmation:
+            logger.info(f"要素确认模式: 开始提取搜索要素")
+            chat_search_service = get_chat_search_service()
+
+            try:
+                task_id, elements = await chat_search_service.extract_elements(
+                    question=request.question,
+                    user_id=current_user.id,
+                    search_mode=request.search_mode,
+                    conversation_id=request.conversation_id,
+                    metadata={"source": "chat_sync", "require_confirmation": True}
+                )
+
+                # 转换为响应模型
+                elements_model = ChatSearchElementsModel(
+                    keywords=elements.keywords,
+                    keywords_en=elements.keywords_en,
+                    time_range=elements.time_range,
+                    source_preferences=elements.source_preferences,
+                    languages=elements.languages,
+                    search_strategy=elements.search_strategy,
+                    summary=elements.summary,
+                    event_type=elements.event_type,
+                    llm_reasoning=elements.llm_reasoning,
+                    original_query=elements.original_query
+                )
+
+                logger.info(f"要素提取完成: task_id={task_id}, keywords={elements.keywords}")
+
+                return ChatTaskWithElementsResponse(
+                    task_id=task_id,
+                    status="awaiting_confirmation",
+                    extracted_elements=elements_model,
+                    message="请确认或修改搜索要素，然后调用 POST /chat/tasks/{task_id}/confirm 执行搜索",
+                    created_at=datetime.now().isoformat()
+                )
+
+            except Exception as e:
+                logger.error(f"要素提取失败: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail={"error": "要素提取失败", "message": str(e)}
+                )
 
         # v3.0.0: 创建任务记录
         task_id = await chat_task_service.create_task(
@@ -955,6 +1039,136 @@ async def chat_sync_endpoint(
 
 
 # ==================== 任务管理 API (v3.0.0) ====================
+
+
+# ==================== 要素确认端点 (v4.20.0) ====================
+
+@router.post(
+    "/chat/tasks/{task_id}/confirm",
+    response_model=ChatSyncResponse,
+    summary="确认搜索要素并执行搜索",
+    description="v4.20.0 新增：确认要素确认流程的第二阶段，用户确认/修改要素后执行搜索"
+)
+async def confirm_search_elements(
+    task_id: str,
+    request: ConfirmElementsRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """确认搜索要素并执行搜索
+
+    **v4.20.0 新增：要素确认流程第二阶段**
+
+    在调用 POST /chat/sync?require_confirmation=true 获取提取的要素后，
+    用户可以修改要素，然后调用此端点执行搜索。
+
+    **流程**:
+    1. POST /chat/sync?require_confirmation=true → 获取提取的要素 (status=awaiting_confirmation)
+    2. POST /chat/tasks/{task_id}/confirm → 确认要素并执行搜索 (status=completed)
+
+    Args:
+        task_id: 任务ID
+        request: 确认要素请求
+
+    Returns:
+        ChatSyncResponse: 搜索结果
+
+    Example:
+        ```bash
+        # 第二阶段：确认要素并执行搜索
+        curl -X POST "http://localhost:8000/api/v1/chat/tasks/271534169378697216/confirm" \\
+          -H "Authorization: Bearer <token>" \\
+          -H "Content-Type: application/json" \\
+          -d '{
+            "confirmed_elements": {
+              "keywords": ["四川阿坝", "红旗大桥", "垮塌", "桥梁事故"],
+              "time_range": "qdr:w",
+              "languages": ["zh", "en"],
+              "search_strategy": {
+                "max_keywords": 5,
+                "max_results_per_keyword": 15,
+                "enable_deep_scrape": true
+              }
+            }
+          }'
+        ```
+    """
+    try:
+        logger.info(f"确认搜索要素: task_id={task_id}, user_id={current_user.id}")
+
+        # 转换请求模型为实体
+        confirmed_elements = ChatSearchElements(
+            keywords=request.confirmed_elements.keywords,
+            keywords_en=request.confirmed_elements.keywords_en,
+            time_range=request.confirmed_elements.time_range,
+            source_preferences=request.confirmed_elements.source_preferences,
+            languages=request.confirmed_elements.languages,
+            search_strategy=request.confirmed_elements.search_strategy,
+            summary=request.confirmed_elements.summary,
+            event_type=request.confirmed_elements.event_type,
+            llm_reasoning=request.confirmed_elements.llm_reasoning,
+            original_query=request.confirmed_elements.original_query
+        )
+
+        # 调用服务执行确认和搜索
+        chat_search_service = get_chat_search_service()
+        result = await chat_search_service.confirm_and_execute(
+            task_id=task_id,
+            confirmed_elements=confirmed_elements,
+            user_id=current_user.id
+        )
+
+        # 转换搜索结果为响应格式
+        # 注：result 包含 results 列表，需要转换为 SourceDetail
+        sources = []
+        for r in result.get("results", []):
+            # 处理 category 字段
+            category_data = r.get("category", {})
+            if not category_data or not isinstance(category_data, dict):
+                category_data = {"大类": "未分类", "类别": "未分类", "地域": "未知"}
+
+            sources.append(SourceDetail(
+                id=r.get("id", ""),
+                mongo_id=r.get("mongo_id", r.get("id", "")),
+                title=r.get("title", ""),
+                source=r.get("source", r.get("source_domain", "")),
+                score=r.get("score", r.get("final_score", 0.0)),
+                category=CategoryModel(**category_data),
+                publish_time=r.get("publish_time", r.get("published_date", "未知时间")),
+                preview=r.get("preview", r.get("snippet", ""))[:200] if r.get("preview") or r.get("snippet") else "",
+                url=r.get("url"),
+                markdown_content=r.get("markdown_content"),
+                content_length=len(r.get("markdown_content", "")) if r.get("markdown_content") else None
+            ))
+
+        # 构建简单回答
+        question = result.get("search_elements", {}).get("original_query", "")
+        simple_answer = f"为您找到 {len(sources)} 条关于「{question}」的相关信息。"
+
+        logger.info(f"确认搜索完成: task_id={task_id}, sources_count={len(sources)}")
+
+        return ChatSyncResponse(
+            question=question,
+            answer=simple_answer,
+            sources=sources,
+            sources_count=len(sources),
+            answer_length=len(simple_answer),
+            status="completed",
+            task_id=task_id
+        )
+
+    except ValueError as e:
+        logger.error(f"确认要素验证失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "验证失败", "message": str(e)}
+        )
+    except Exception as e:
+        logger.error(f"确认搜索要素失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "确认搜索要素失败", "message": str(e)}
+        )
+
 
 @router.get(
     "/chat/tasks/{task_id}",

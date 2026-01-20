@@ -51,10 +51,10 @@ v4.7.0 更新:
 - GET /results 新增 langgraph_status 筛选参数，支持多选
 - 响应模型新增 langgraph_status 字段
 """
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.api.dependencies.auth import require_permissions
 from src.services.langgraph_search.transfer_service import langgraph_transfer_service
@@ -207,6 +207,54 @@ class LangGraphResultItem(BaseModel):
     transferred_at: Optional[datetime] = Field(None, description="转移时间")
     # v4.7.0: 结果处理状态
     langgraph_status: str = Field("pending", description="处理状态: pending(未处理)/transferred(已入库)/discarded(已废弃)")
+
+    @field_validator('published_date', mode='before')
+    @classmethod
+    def parse_published_date(cls, v: Union[str, datetime, None]) -> Optional[datetime]:
+        """解析 published_date 字段，支持字符串格式转换"""
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v
+        if not isinstance(v, str):
+            return None
+
+        date_str = v.strip()
+        if not date_str:
+            return None
+
+        # 常见日期格式列表
+        date_formats = [
+            # ISO 8601 formats
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            # English month formats
+            "%b %d, %Y",      # "Nov 11, 2025"
+            "%B %d, %Y",      # "November 11, 2025"
+            "%d %b %Y",       # "11 Nov 2025"
+            "%d %B %Y",       # "11 November 2025"
+            "%b %d %Y",       # "Nov 11 2025"
+            "%B %d %Y",       # "November 11 2025"
+            # Other common formats
+            "%m/%d/%Y",
+            "%d/%m/%Y",
+            "%m-%d-%Y",
+            "%d-%m-%Y",
+        ]
+
+        for fmt in date_formats:
+            try:
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
+                continue
+
+        # 如果所有格式都失败，返回 None（不抛出异常）
+        return None
 
     class Config:
         from_attributes = True

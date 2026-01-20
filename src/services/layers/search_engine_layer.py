@@ -1,9 +1,11 @@
 """搜索引擎层实现
 
-封装 LangGraph 搜索服务，提供职责单一的搜索层。
+封装搜索服务，提供职责单一的搜索层。
+
+v4.19.0 - 集成 gs-ai-crawl 搜索引擎
 
 职责:
-- 执行搜索查询（LangGraph 或 NL Search）
+- 执行搜索查询（gs-ai-crawl 或 NL Search）
 - 将结果保存到 langgraph_search_results 集合
 - 发送搜索完成事件
 
@@ -15,8 +17,9 @@
 
 import logging
 import os
+import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from src.core.interfaces.layer import LayerConfig, LayerContext, LayerStatus
 from src.core.interfaces.search_layer import (
@@ -31,15 +34,16 @@ from src.core.events.types import (
     SearchFailedEvent,
 )
 from src.core.events.bus import get_event_bus
+from src.core.domain.entities.langgraph_search_result import LangGraphSearchResult
 
 logger = logging.getLogger(__name__)
 
 
 class SearchEngineLayerConfig(LayerConfig):
     """搜索引擎层配置"""
-    search_engine: str = "langgraph"  # "langgraph" | "nl_search"
+    search_engine: str = "gsac"  # "gsac" | "nl_search" - 默认使用 gsac
     fallback_engine: str = "nl_search"
-    enable_fallback: bool = True
+    enable_fallback: bool = True  # 启用回退到 nl_search
     max_results: int = 100
     save_to_db: bool = True
 
@@ -62,7 +66,7 @@ class SearchEngineLayer(ISearchLayer):
     def __init__(
         self,
         config: Optional[SearchEngineLayerConfig] = None,
-        langgraph_service: Optional[Any] = None,
+        gsac_engine: Optional[Any] = None,
         nl_search_service: Optional[Any] = None,
         result_repository: Optional[Any] = None,
     ):
@@ -70,12 +74,12 @@ class SearchEngineLayer(ISearchLayer):
 
         Args:
             config: 层配置
-            langgraph_service: LangGraph 搜索服务实例
+            gsac_engine: gs-ai-crawl 搜索引擎实例
             nl_search_service: NL Search 服务实例
             result_repository: 结果仓储实例
         """
         self._config = config or SearchEngineLayerConfig()
-        self._langgraph_service = langgraph_service
+        self._gsac_engine = gsac_engine
         self._nl_search_service = nl_search_service
         self._result_repository = result_repository
         self._event_bus = get_event_bus()
@@ -93,25 +97,14 @@ class SearchEngineLayer(ISearchLayer):
 
     async def initialize(self) -> None:
         """初始化层"""
-        from src.config import settings
-        from firecrawl import Firecrawl
-
         # 延迟导入，避免循环依赖
-        if self._langgraph_service is None:
-            from src.services.langgraph_search.service import LangGraphSearchService
-
-            # 初始化 Firecrawl 客户端并传递给 LangGraphSearchService
-            firecrawl_client = None
-            if settings.FIRECRAWL_API_KEY:
-                try:
-                    firecrawl_client = Firecrawl(api_key=settings.FIRECRAWL_API_KEY)
-                    logger.info("Firecrawl 客户端初始化成功")
-                except Exception as e:
-                    logger.warning(f"Firecrawl 客户端初始化失败: {e}")
-
-            self._langgraph_service = LangGraphSearchService(
-                firecrawl_client=firecrawl_client
-            )
+        # 初始化 gsac 引擎
+        if self._gsac_engine is None:
+            try:
+                from src.services.langgraph_search.gsac_engine import GSAICrawlEngine
+                self._gsac_engine = GSAICrawlEngine()
+            except ImportError:
+                logger.warning("GSAICrawlEngine not available")
 
         if self._nl_search_service is None:
             try:
@@ -135,9 +128,9 @@ class SearchEngineLayer(ISearchLayer):
     async def health_check(self) -> bool:
         """健康检查"""
         try:
-            # 简单检查服务是否可用
-            if self._config.search_engine == "langgraph":
-                return self._langgraph_service is not None
+            # 检查配置的引擎是否可用
+            if self._config.search_engine == "gsac":
+                return self._gsac_engine is not None
             else:
                 return self._nl_search_service is not None
         except Exception:
@@ -173,21 +166,22 @@ class SearchEngineLayer(ISearchLayer):
         )
 
         try:
-            # 执行搜索
-            if self._config.search_engine == "langgraph":
-                result = await self._execute_langgraph_search(context)
+            # 执行搜索 - 根据配置选择引擎
+            if self._config.search_engine == "gsac":
+                result = await self._execute_gsac_search(context)
             else:
                 result = await self._execute_nl_search(context)
 
             # 如果主搜索失败且启用回退
             if not result.is_success and self._config.enable_fallback:
                 logger.warning(
-                    f"[SearchEngineLayer] Primary search failed, trying fallback"
+                    f"[SearchEngineLayer] Primary search failed, trying fallback: {self._config.fallback_engine}"
                 )
-                if self._config.search_engine == "langgraph":
+                # 回退到备用引擎
+                if self._config.fallback_engine == "nl_search":
                     result = await self._execute_nl_search(context)
-                else:
-                    result = await self._execute_langgraph_search(context)
+                elif self._config.fallback_engine == "gsac":
+                    result = await self._execute_gsac_search(context)
 
             # 更新时间
             result.started_at = started_at
@@ -247,60 +241,6 @@ class SearchEngineLayer(ISearchLayer):
                 task_id=task_id,
             )
 
-    async def _execute_langgraph_search(
-        self,
-        context: LayerContext,
-    ) -> SearchLayerResult:
-        """执行 LangGraph 搜索"""
-        if self._langgraph_service is None:
-            await self.initialize()
-
-        options = context.options.copy()
-        options["task_id"] = context.task_id
-        # v4.10.1: 添加简化架构和保存选项
-        options["use_simplified_architecture"] = os.getenv(
-            "USE_SIMPLIFIED_ARCHITECTURE", "true"
-        ).lower() == "true"
-        options["save_to_db"] = self._config.save_to_db
-
-        result = await self._langgraph_service.execute_search(
-            query=context.query,
-            user_id=context.user_id,
-            options=options,
-        )
-
-        if result.get("success"):
-            # 转换结果格式
-            items = [
-                SearchResultItem.from_dict(r)
-                for r in result.get("results", [])
-            ]
-
-            # 从统计信息中提取字段，避免 total_results 重复
-            raw_stats = result.get("statistics", {})
-            stats = SearchStatistics(
-                total_results=len(items),
-                search_engine="langgraph",
-                unique_domains=raw_stats.get("unique_domains", 0),
-                layer_distribution=raw_stats.get("layer_distribution", {}),
-                tier_distribution=raw_stats.get("tier_distribution", {}),
-                language_distribution=raw_stats.get("language_distribution", {}),
-                execution_time_ms=raw_stats.get("execution_time_ms", 0),
-            )
-
-            return SearchLayerResult(
-                status=LayerStatus.COMPLETED,
-                results=items,
-                statistics=stats,
-                data=result,
-            )
-        else:
-            return SearchLayerResult(
-                status=LayerStatus.FAILED,
-                error=result.get("error_message") or result.get("error", "Unknown error"),
-                data=result,
-            )
-
     async def _execute_nl_search(
         self,
         context: LayerContext,
@@ -345,6 +285,223 @@ class SearchEngineLayer(ISearchLayer):
                 status=LayerStatus.FAILED,
                 error=str(e),
             )
+
+    async def _execute_gsac_search(
+        self,
+        context: LayerContext,
+    ) -> SearchLayerResult:
+        """执行 gs-ai-crawl 搜索
+
+        Args:
+            context: 层执行上下文
+
+        Returns:
+            SearchLayerResult: 搜索结果
+        """
+        if self._gsac_engine is None:
+            return SearchLayerResult(
+                status=LayerStatus.FAILED,
+                error="gs-ai-crawl engine not available",
+            )
+
+        try:
+            # 从 context.options 获取搜索配置
+            options = context.options or {}
+            
+            result = await self._gsac_engine.search(
+                query=context.query,
+                user_id=context.user_id,
+                **options
+            )
+
+            if result.get("success"):
+                items = [
+                    SearchResultItem.from_dict(r)
+                    for r in result.get("results", [])
+                ]
+
+                stats = SearchStatistics(
+                    total_results=result.get("statistics", {}).get("total_results", len(items)),
+                    search_engine="gsac",
+                )
+
+                # 保存到数据库（如果配置启用）
+                if self._config.save_to_db and self._result_repository:
+                    try:
+                        # 将 Dict 转换为 LangGraphSearchResult 实体
+                        langgraph_results = self._convert_to_langgraph_results(
+                            raw_results=result.get("results", []),
+                            task_id=context.task_id,
+                            user_id=context.user_id,
+                            conversation_id=context.options.get("conversation_id") if context.options else None,
+                        )
+                        if langgraph_results:
+                            save_stats = await self._result_repository.save_results(
+                                results=langgraph_results,
+                                enable_dedup=True,
+                            )
+                            logger.info(
+                                f"[SearchEngineLayer] Saved results: "
+                                f"saved={save_stats.get('saved', 0)}, "
+                                f"duplicates={save_stats.get('duplicates', 0)}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"[SearchEngineLayer] Failed to save results: {e}")
+
+                return SearchLayerResult(
+                    status=LayerStatus.COMPLETED,
+                    results=items,
+                    statistics=stats,
+                    data=result,
+                )
+            else:
+                return SearchLayerResult(
+                    status=LayerStatus.FAILED,
+                    error=result.get("error", "Unknown error from gsac"),
+                )
+        except Exception as e:
+            logger.error(f"[SearchEngineLayer] gsac search failed: {e}", exc_info=True)
+            return SearchLayerResult(
+                status=LayerStatus.FAILED,
+                error=str(e),
+            )
+
+    def _convert_to_langgraph_results(
+        self,
+        raw_results: List[Dict[str, Any]],
+        task_id: str,
+        user_id: str,
+        conversation_id: Optional[str] = None,
+    ) -> List[LangGraphSearchResult]:
+        """将 gsac 原始结果转换为 LangGraphSearchResult 实体
+
+        Args:
+            raw_results: gsac 返回的原始结果列表
+            task_id: 任务 ID
+            user_id: 用户 ID
+            conversation_id: 对话会话 ID（可选）
+
+        Returns:
+            LangGraphSearchResult 实体列表
+        """
+        from src.infrastructure.id_generator import generate_string_id
+
+        results = []
+        for idx, raw in enumerate(raw_results):
+            try:
+                # 从 metadata 中提取额外信息
+                metadata = raw.get("metadata", {})
+
+                result = LangGraphSearchResult(
+                    id=generate_string_id(),
+                    task_id=str(task_id),
+                    user_id=str(user_id),
+                    created_by=str(user_id),
+                    conversation_id=conversation_id,
+                    # 基础字段
+                    title=raw.get("title", ""),
+                    url=raw.get("url", ""),
+                    snippet=raw.get("snippet", ""),
+                    source=raw.get("source_domain", "web"),
+                    published_date=self._parse_published_date(raw.get("published_date")),
+                    markdown_content=raw.get("content"),
+                    search_position=idx + 1,
+                    # LangGraph 特定字段
+                    layer=raw.get("layer", 0),
+                    layer_name=self._get_layer_name(raw.get("layer", 0)),
+                    source_tier=raw.get("source_tier", 3),
+                    credibility_score=raw.get("credibility_score", 0.5),
+                    final_score=raw.get("score", 0.0),
+                    category=raw.get("category"),
+                    # 元数据
+                    metadata={
+                        "keyword": metadata.get("keyword"),
+                        "source": metadata.get("source"),
+                        "engine": "gsac",
+                    },
+                    data_source_type="gsac",
+                    created_at=datetime.utcnow(),
+                )
+                results.append(result)
+            except Exception as e:
+                logger.warning(f"[SearchEngineLayer] Failed to convert result: {e}")
+                continue
+
+        logger.info(f"[SearchEngineLayer] Converted {len(results)} results to LangGraphSearchResult")
+        return results
+
+    def _get_layer_name(self, layer: int) -> str:
+        """获取层级名称"""
+        layer_names = {
+            0: "官方来源",
+            1: "主流媒体",
+            2: "区域媒体",
+            3: "国际媒体",
+            4: "智库机构",
+        }
+        return layer_names.get(layer, "未知层级")
+
+    def _parse_published_date(self, date_value: Union[str, datetime, None]) -> Optional[datetime]:
+        """解析发布日期
+
+        支持多种日期格式：
+        - datetime 对象
+        - ISO 8601 格式: "2025-01-19T12:00:00Z"
+        - 英文月份格式: "Nov 11, 2025", "January 15, 2026"
+        - 纯数字格式: "2025-01-19", "2025/01/19"
+
+        Args:
+            date_value: 日期值（字符串或 datetime）
+
+        Returns:
+            datetime 对象或 None
+        """
+        if date_value is None:
+            return None
+
+        if isinstance(date_value, datetime):
+            return date_value
+
+        if not isinstance(date_value, str):
+            return None
+
+        date_str = date_value.strip()
+        if not date_str:
+            return None
+
+        # 常见日期格式列表
+        date_formats = [
+            # ISO 8601 formats
+            "%Y-%m-%dT%H:%M:%SZ",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S.%fZ",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            # English month formats
+            "%b %d, %Y",      # "Nov 11, 2025"
+            "%B %d, %Y",      # "November 11, 2025"
+            "%d %b %Y",       # "11 Nov 2025"
+            "%d %B %Y",       # "11 November 2025"
+            "%b %d %Y",       # "Nov 11 2025"
+            "%B %d %Y",       # "November 11 2025"
+            # Other common formats
+            "%m/%d/%Y",
+            "%d/%m/%Y",
+            "%m-%d-%Y",
+            "%d-%m-%Y",
+        ]
+
+        for fmt in date_formats:
+            try:
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
+                continue
+
+        # 如果所有格式都失败，记录警告
+        logger.warning(f"[SearchEngineLayer] Unable to parse date: {date_str}")
+        return None
 
     async def get_search_status(self, task_id: str) -> str:
         """获取搜索状态"""

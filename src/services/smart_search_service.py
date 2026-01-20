@@ -49,9 +49,6 @@ from src.infrastructure.llm.openai_service import LLMService, LLMException
 from src.infrastructure.llm.claude_client import ClaudeClient, ClaudeConfig, create_claude_client
 from src.services.instant_search_service import InstantSearchService
 from src.services.query_analyzer import get_unified_analyzer, UnifiedQueryAnalyzer
-
-# v4.5.0: LangGraph QueryAnalyzerNode - 使用其优秀的 4 层组合法 Prompt
-from src.services.langgraph_search.nodes.query_analyzer import QueryAnalyzerNode
 from src.infrastructure.database.smart_search_repositories import (
     SmartSearchTaskRepository,
     QueryDecompositionCacheRepository
@@ -80,7 +77,7 @@ class SmartSearchService:
         self.aggregator = ResultAggregator()
         self.aggregated_result_repo = AggregatedSearchResultRepository()  # v1.5.2: 职责分离
 
-        # v2.3.0: 统一查询分析器（复用 LangGraph QueryAnalyzerNode 的优秀 Prompt）
+        # v2.3.0: 统一查询分析器（增强 Prompt）
         self.use_unified_analyzer = __import__('os').getenv("SMART_SEARCH_USE_UNIFIED_ANALYZER", "true").lower() == "true"
         if self.use_unified_analyzer:
             self.unified_analyzer: UnifiedQueryAnalyzer = get_unified_analyzer()

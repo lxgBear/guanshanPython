@@ -534,10 +534,10 @@ class MongoLangGraphResultRepository:
             enable_dedup: 是否启用去重（默认 True）
 
         Returns:
-            保存统计信息: {"saved": 10, "duplicates": 2, "total": 12, "skipped_no_title": 1}
+            保存统计信息: {"saved": 10, "duplicates": 2, "total": 12, "skipped_no_title": 1, "url_duplicates": 3}
         """
         if not results:
-            return {"saved": 0, "duplicates": 0, "total": 0, "skipped_no_title": 0}
+            return {"saved": 0, "duplicates": 0, "total": 0, "skipped_no_title": 0, "url_duplicates": 0}
 
         try:
             collection = await self._get_collection()
@@ -558,7 +558,7 @@ class MongoLangGraphResultRepository:
 
             if not valid_results:
                 logger.info("没有有效记录可保存（全部无标题）")
-                return {"saved": 0, "duplicates": 0, "total": len(results), "skipped_no_title": skipped_no_title}
+                return {"saved": 0, "duplicates": 0, "total": len(results), "skipped_no_title": skipped_no_title, "url_duplicates": 0}
 
             # 如果不启用去重，直接批量插入
             if not enable_dedup:
@@ -569,48 +569,81 @@ class MongoLangGraphResultRepository:
                     "saved": len(valid_results),
                     "duplicates": 0,
                     "total": len(results),
-                    "skipped_no_title": skipped_no_title
+                    "skipped_no_title": skipped_no_title,
+                    "url_duplicates": 0
                 }
 
-            # 启用去重逻辑
-            # 1. 确保所有结果都有 content_hash
+            # ==================== v4.22.0: URL 去重逻辑 ====================
+            # 1. 提取所有 URL
+            urls = [result.url for result in valid_results if result.url]
+
+            # 2. 查询数据库中已存在的 URL
+            existing_urls = set()
+            if urls:
+                async for doc in collection.find(
+                    {"url": {"$in": urls}},
+                    {"url": 1}
+                ):
+                    existing_urls.add(doc.get("url"))
+
+            # 3. 过滤出 URL 不存在的结果
+            url_new_results = []
+            url_duplicate_count = 0
+
             for result in valid_results:
+                if result.url in existing_urls:
+                    url_duplicate_count += 1
+                    logger.debug(f"跳过重复URL: {result.url}")
+                else:
+                    url_new_results.append(result)
+                    # 将当前 URL 加入已存在集合，避免同批次重复
+                    existing_urls.add(result.url)
+
+            if url_duplicate_count > 0:
+                logger.info(f"⚠️ 跳过 {url_duplicate_count} 条重复URL记录")
+
+            # ==================== content_hash 二次去重 ====================
+            # 4. 确保所有结果都有 content_hash
+            for result in url_new_results:
                 result.ensure_content_hash()
 
-            # 2. 获取所有 content_hash
-            content_hashes = [result.content_hash for result in valid_results]
+            # 5. 获取所有 content_hash
+            content_hashes = [result.content_hash for result in url_new_results]
 
-            # 3. 查询数据库中已存在的 content_hash
+            # 6. 查询数据库中已存在的 content_hash
             existing_hashes = set()
-            async for doc in collection.find(
-                {"content_hash": {"$in": content_hashes}},
-                {"content_hash": 1}
-            ):
-                existing_hashes.add(doc.get("content_hash"))
+            if content_hashes:
+                async for doc in collection.find(
+                    {"content_hash": {"$in": content_hashes}},
+                    {"content_hash": 1}
+                ):
+                    existing_hashes.add(doc.get("content_hash"))
 
-            # 4. 过滤出新结果
+            # 7. 过滤出新结果
             new_results = []
             duplicate_count = 0
 
-            for result in valid_results:
+            for result in url_new_results:
                 if result.content_hash not in existing_hashes:
                     new_results.append(result)
+                    # 将当前 hash 加入已存在集合，避免同批次重复
+                    existing_hashes.add(result.content_hash)
                 else:
                     duplicate_count += 1
                     logger.debug(f"跳过重复内容: {result.url} (hash: {result.content_hash})")
 
-            # 5. 保存新结果
+            # 8. 保存新结果
             if new_results:
                 result_dicts = [self._result_to_dict(result) for result in new_results]
                 await collection.insert_many(result_dicts)
                 logger.info(
                     f"保存 LangGraph 搜索结果成功: "
-                    f"新增{len(new_results)}条, 跳过重复{duplicate_count}条, "
-                    f"跳过无标题{skipped_no_title}条"
+                    f"新增{len(new_results)}条, 跳过URL重复{url_duplicate_count}条, "
+                    f"跳过内容重复{duplicate_count}条, 跳过无标题{skipped_no_title}条"
                 )
             else:
                 logger.info(
-                    f"无新结果保存: 全部{duplicate_count}条均为重复"
+                    f"无新结果保存: URL重复{url_duplicate_count}条, 内容重复{duplicate_count}条"
                     f"{f', 跳过无标题{skipped_no_title}条' if skipped_no_title > 0 else ''}"
                 )
 
@@ -618,7 +651,8 @@ class MongoLangGraphResultRepository:
                 "saved": len(new_results),
                 "duplicates": duplicate_count,
                 "total": len(results),
-                "skipped_no_title": skipped_no_title
+                "skipped_no_title": skipped_no_title,
+                "url_duplicates": url_duplicate_count
             }
 
         except Exception as e:

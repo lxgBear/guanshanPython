@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class UnifiedAnalyzerConfig:
     """统一分析器配置"""
-    # Claude API 配置
-    base_url: str = "http://23.106.129.19:2828/api"
-    api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN", ""))
+    # Claude API 配置 - 从环境变量读取，与项目其他 LLM 配置保持一致
+    base_url: str = field(default_factory=lambda: os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"))
+    api_key: str = field(default_factory=lambda: os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN", ""))
     model: str = "claude-sonnet-4-20250514"
     max_tokens: int = 4096
     timeout: int = 60
@@ -329,11 +329,15 @@ class UnifiedQueryAnalyzer:
             )
         ]
 
+        # v4.20.1: 修复中文文本分词 - 使用简单的中文关键词提取
+        # 对于中文查询，尝试提取常见的实体词
+        keywords = self._extract_chinese_keywords(query)
+
         return EnhancedQueryDecomposition(
             decomposed_queries=decomposed_queries,
             overall_strategy="降级策略：通用分解模式",
             summary=f"关于'{query}'的搜索",
-            keywords=query.split(),
+            keywords=keywords,
             keywords_en=[],
             time_sensitivity="medium",
             suggested_time_range="qdr:m",
@@ -350,6 +354,69 @@ class UnifiedQueryAnalyzer:
             tokens_used=0,
             model=f"{self.config.model}-fallback"
         )
+
+    def _extract_chinese_keywords(self, query: str) -> List[str]:
+        """从中文查询中提取关键词
+
+        使用简单的规则提取关键词，不依赖外部分词库。
+
+        Args:
+            query: 查询文本
+
+        Returns:
+            关键词列表
+        """
+        import re
+
+        # 如果有空格，先按空格分割
+        if ' ' in query:
+            words = [w.strip() for w in query.split() if w.strip()]
+            if len(words) > 1:
+                return words[:5]
+
+        # 提取常见的中文实体模式
+        keywords = []
+
+        # 1. 提取地名模式 (省市县区、大桥、广场等)
+        location_pattern = r'[\u4e00-\u9fa5]{2,4}(?:省|市|县|区|镇|乡|村|大桥|广场|路|街|机场|港口|车站)'
+        locations = re.findall(location_pattern, query)
+        keywords.extend(locations)
+
+        # 2. 提取事件关键词 (垮塌、爆炸、地震、事故等)
+        event_patterns = [
+            r'(?:垮塌|倒塌|坍塌|崩塌)',
+            r'(?:爆炸|火灾|事故|灾害|灾难)',
+            r'(?:地震|洪水|台风|泥石流)',
+            r'(?:冲突|战争|袭击|恐袭)',
+            r'(?:报道|反应|评论|分析)',
+        ]
+        for pattern in event_patterns:
+            matches = re.findall(pattern, query)
+            keywords.extend(matches)
+
+        # 3. 提取组织/媒体名称
+        org_pattern = r'[\u4e00-\u9fa5]{2,6}(?:媒体|新闻|报|台|社|网)'
+        orgs = re.findall(org_pattern, query)
+        keywords.extend(orgs)
+
+        # 4. 提取形容词+名词组合
+        adj_noun_pattern = r'(?:西方|主流|国际|国内|官方|民间)[\u4e00-\u9fa5]{2,4}'
+        adj_nouns = re.findall(adj_noun_pattern, query)
+        keywords.extend(adj_nouns)
+
+        # 去重并限制数量
+        seen = set()
+        unique_keywords = []
+        for kw in keywords:
+            if kw not in seen and len(kw) >= 2:
+                seen.add(kw)
+                unique_keywords.append(kw)
+
+        # 如果没有提取到关键词，返回原始查询（截取前30字符）
+        if not unique_keywords:
+            return [query[:30]] if len(query) > 30 else [query]
+
+        return unique_keywords[:5]
 
     async def analyze(
         self,
