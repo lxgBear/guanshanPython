@@ -23,33 +23,38 @@ def _setup_gsac_env():
     """
     # Firecrawl API Key
     if settings.FIRECRAWL_API_KEY:
-        os.environ.setdefault("GS_CRAWL_FIRECRAWL_API_KEY", settings.FIRECRAWL_API_KEY)
+        os.environ["GS_CRAWL_FIRECRAWL_API_KEY"] = settings.FIRECRAWL_API_KEY
+        logger.info(f"[GSAC_ENV] 设置 Firecrawl API Key")
 
     # LLM 配置 - 根据 provider 设置
     if settings.LLM_PROVIDER == "openai" and settings.OPENAI_API_KEY:
-        os.environ.setdefault("GS_CRAWL_LLM_PROVIDER", "openai")
-        os.environ.setdefault("GS_CRAWL_LLM_API_KEY", settings.OPENAI_API_KEY)
-        os.environ.setdefault("GS_CRAWL_LLM_MODEL", settings.OPENAI_MODEL or "gpt-4o-mini")
+        os.environ["GS_CRAWL_LLM_PROVIDER"] = "openai"
+        os.environ["GS_CRAWL_LLM_API_KEY"] = settings.OPENAI_API_KEY
+        os.environ["GS_CRAWL_LLM_MODEL"] = settings.OPENAI_MODEL or "gpt-4o-mini"
+        logger.info(f"[GSAC_ENV] 使用 openai provider")
     elif settings.LLM_PROVIDER == "claude" and settings.CLAUDE_API_KEY:
         # 检查是否使用自定义 Claude API (第三方代理)
         if settings.ANTHROPIC_BASE_URL:
             # 使用 custom_claude provider (第三方代理如 api.codeable.icu)
-            os.environ.setdefault("GS_CRAWL_LLM_PROVIDER", "custom_claude")
-            os.environ.setdefault("GS_CRAWL_CUSTOM_CLAUDE_BASE_URL", settings.ANTHROPIC_BASE_URL)
-            os.environ.setdefault("GS_CRAWL_CUSTOM_CLAUDE_API_KEY", settings.CLAUDE_API_KEY)
-            os.environ.setdefault("GS_CRAWL_CUSTOM_CLAUDE_MODEL", settings.CLAUDE_MODEL or "claude-sonnet-4-20250514")
+            os.environ["GS_CRAWL_LLM_PROVIDER"] = "custom_claude"
+            os.environ["GS_CRAWL_CUSTOM_CLAUDE_BASE_URL"] = settings.ANTHROPIC_BASE_URL
+            os.environ["GS_CRAWL_CUSTOM_CLAUDE_API_KEY"] = settings.CLAUDE_API_KEY
+            os.environ["GS_CRAWL_CUSTOM_CLAUDE_MODEL"] = settings.CLAUDE_MODEL or "claude-sonnet-4-20250514"
             logger.info(f"[GSAC_ENV] 使用 custom_claude provider: {settings.ANTHROPIC_BASE_URL}")
         else:
             # 使用原生 Anthropic API
-            os.environ.setdefault("GS_CRAWL_LLM_PROVIDER", "anthropic")
-            os.environ.setdefault("GS_CRAWL_LLM_API_KEY", settings.CLAUDE_API_KEY)
-            os.environ.setdefault("GS_CRAWL_LLM_MODEL", settings.CLAUDE_MODEL or "claude-3-haiku-20240307")
+            os.environ["GS_CRAWL_LLM_PROVIDER"] = "anthropic"
+            os.environ["GS_CRAWL_LLM_API_KEY"] = settings.CLAUDE_API_KEY
+            os.environ["GS_CRAWL_LLM_MODEL"] = settings.CLAUDE_MODEL or "claude-3-haiku-20240307"
+            logger.info(f"[GSAC_ENV] 使用 anthropic provider")
+    else:
+        logger.warning(f"[GSAC_ENV] LLM 配置不完整: provider={settings.LLM_PROVIDER}, claude_key={bool(settings.CLAUDE_API_KEY)}")
 
-    logger.debug("[GSAC_ENV] 环境变量已设置")
+    logger.info("[GSAC_ENV] 环境变量设置完成")
 
 
-# 初始化时设置环境变量
-_setup_gsac_env()
+# 不在模块顶层调用，改为在类初始化时调用
+_gsac_env_initialized = False
 
 
 class GSAICrawlEngine:
@@ -77,6 +82,13 @@ class GSAICrawlEngine:
                 - similarity_threshold: 去重相似度阈值 (默认 0.8)
                 - enable_summary: 是否生成摘要 (默认 True)
         """
+        global _gsac_env_initialized
+
+        # 确保环境变量只设置一次
+        if not _gsac_env_initialized:
+            _setup_gsac_env()
+            _gsac_env_initialized = True
+
         self.config = config or {}
         self._acrawl = None
         self._CrawlConfig = None
