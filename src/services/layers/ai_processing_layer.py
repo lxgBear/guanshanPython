@@ -17,6 +17,7 @@
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -37,8 +38,8 @@ from src.core.events.bus import get_event_bus
 
 logger = logging.getLogger(__name__)
 
-# 默认配置
-DEFAULT_AI_SERVICE_URL = "http://192.168.0.5:8035/chat"
+# 默认配置 (支持环境变量覆盖)
+DEFAULT_AI_SERVICE_URL = os.getenv("LAYER_AI_SERVICE_URL", "http://localhost:8035/chat")
 DEFAULT_AI_SERVICE_TIMEOUT = 300.0
 DEFAULT_SEARCH_POLL_INTERVAL = 1.0
 DEFAULT_SEARCH_POLL_MAX_RETRIES = 300

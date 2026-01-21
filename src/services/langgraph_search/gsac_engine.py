@@ -231,6 +231,8 @@ class GSAICrawlEngine:
                 "title": r.title,
                 "snippet": r.description,  # 映射 description -> snippet
                 "content": r.content,
+                "markdown": getattr(r, 'markdown', None),
+                "html": getattr(r, 'html', None),
                 "layer": r.layer,
                 "score": r.score,
                 "source_domain": r.source_domain,

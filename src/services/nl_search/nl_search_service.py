@@ -314,15 +314,15 @@ class NLSearchService:
         # 从环境变量读取，默认使用 firecrawl
         self.search_engine = os.getenv("NL_SEARCH_ENGINE", "firecrawl").lower()
 
-        # 初始化搜索适配器
+        # 初始化搜索适配器 (v4.19.5: 默认生产模式)
         if self.search_engine == "firecrawl":
             self.search_adapter = FirecrawlSearchAdapter(
-                test_mode=not nl_search_config.enabled
+                test_mode=False  # 默认生产模式，不再依赖 nl_search_config.enabled
             )
             logger.info("✅ 使用 Firecrawl Search 引擎 (4-5x 更快, 支持 location)")
         else:
             self.search_adapter = GPT5SearchAdapter(
-                test_mode=not nl_search_config.enabled
+                test_mode=False  # 默认生产模式
             )
             logger.info("✅ 使用 Sonar/GPT-5 Search 引擎")
 

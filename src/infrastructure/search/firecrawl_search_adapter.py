@@ -33,9 +33,8 @@ Firecrawl 搜索API适配器
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        # 优先使用传入的test_mode参数，否则从settings读取TEST_MODE，最后fallback到环境变量
-        self.is_test_mode = test_mode or getattr(settings, 'TEST_MODE',
-                                     os.getenv("TEST_MODE", "false").lower() == "true")
+        # 只有显式传入 test_mode=True 时才使用测试模式，默认生产模式
+        self.is_test_mode = test_mode
 
         if self.is_test_mode:
             logger.info("🧪 Firecrawl适配器运行在测试模式 - 将生成模拟数据")

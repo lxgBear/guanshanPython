@@ -47,11 +47,12 @@ from src.core.domain.entities.chat_search_elements import ChatSearchElements
 from src.core.domain.entities.auth.user import User
 from src.api.dependencies.auth import get_current_active_user
 from bson import ObjectId
+import os
 
 logger = logging.getLogger(__name__)
 
-# AI服务配置
-REMOTE_AI_SERVICE_URL = "http://192.168.0.5:8035/chat"
+# AI服务配置 (支持环境变量覆盖)
+REMOTE_AI_SERVICE_URL = os.getenv("LAYER_AI_SERVICE_URL", "http://localhost:8035/chat")
 REMOTE_AI_SERVICE_TIMEOUT = 300.0  # 5分钟 - LangGraph 5层搜索需要更长时间
 
 router = APIRouter()

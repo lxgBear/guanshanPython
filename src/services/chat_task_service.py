@@ -11,6 +11,7 @@ v3.0.0 新增：支持后台任务执行模式
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -28,8 +29,8 @@ from bson import ObjectId
 
 logger = logging.getLogger(__name__)
 
-# AI服务配置
-REMOTE_AI_SERVICE_URL = "http://192.168.0.5:8035/chat"
+# AI服务配置 (支持环境变量覆盖)
+REMOTE_AI_SERVICE_URL = os.getenv("LAYER_AI_SERVICE_URL", "http://localhost:8035/chat")
 REMOTE_AI_SERVICE_TIMEOUT = 120.0
 
 

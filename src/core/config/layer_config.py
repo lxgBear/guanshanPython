@@ -48,7 +48,7 @@ class SearchLayerConfig:
 @dataclass
 class AILayerConfig:
     """AI处理层配置"""
-    service_url: str = "http://192.168.0.5:8035/chat"
+    service_url: str = "http://localhost:8035/chat"  # 本地化默认值
     service_timeout: float = 300.0
     search_poll_interval: float = 1.0
     search_poll_max_retries: int = 300
@@ -59,7 +59,7 @@ class AILayerConfig:
     def from_env(cls) -> "AILayerConfig":
         """从环境变量加载配置"""
         return cls(
-            service_url=os.getenv("LAYER_AI_SERVICE_URL", "http://192.168.0.5:8035/chat"),
+            service_url=os.getenv("LAYER_AI_SERVICE_URL", "http://localhost:8035/chat"),
             service_timeout=float(os.getenv("LAYER_AI_SERVICE_TIMEOUT", "300.0")),
             search_poll_interval=float(os.getenv("LAYER_AI_SEARCH_POLL_INTERVAL", "1.0")),
             search_poll_max_retries=int(os.getenv("LAYER_AI_SEARCH_POLL_MAX_RETRIES", "300")),

@@ -36,6 +36,9 @@ COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 # 复制应用代码
 COPY --chown=appuser:appuser . .
 
+# 创建必要的目录并设置权限
+RUN mkdir -p /app/logs /app/data && chown -R appuser:appuser /app/logs /app/data
+
 # 切换到非root用户
 USER appuser
 

@@ -47,7 +47,7 @@ class UnifiedAnalyzerConfig:
     api_key: str = field(default_factory=lambda: os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN", ""))
     model: str = "claude-sonnet-4-20250514"
     max_tokens: int = 4096
-    timeout: int = 60
+    timeout: int = 120  # 增加超时时间以适应第三方 API 代理
 
     # 分析配置
     enable_parties: bool = True  # 是否识别当事方

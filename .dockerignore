@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Test
+tests/
+pytest_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Development files
+.pre-commit-config.yaml
+.flake8
+.mypy_cache/
+.ruff_cache/
+pyproject.toml
+setup.py
+setup.cfg
+Makefile
+
+# Docker
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Logs and data (will be mounted as volumes)
+logs/
+data/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Archives
+*.zip
+*.tar.gz
+*.rar
+
+# Claude/AI files
+.claude/
+CLAUDE.md
+**/CLAUDE.md
+
+# Environment examples (actual .env should be mounted)
+.env.example
+.env.*.example
+
+# macOS
+.DS_Store

@@ -232,6 +232,8 @@ class SearchResult(BaseModel):
     title: str = Field(description="结果标题")
     description: str | None = Field(default=None, description="结果描述")
     content: str | None = Field(default=None, description="结果内容")
+    markdown: str | None = Field(default=None, description="Markdown格式内容")
+    html: str | None = Field(default=None, description="HTML格式内容")
     source: str = Field(default="web", description="来源类型")
     keyword: str = Field(default="", description="来源关键词")
     score: float = Field(default=0.0, description="相关性评分")

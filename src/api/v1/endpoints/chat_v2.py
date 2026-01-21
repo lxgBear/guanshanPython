@@ -31,6 +31,7 @@ from src.core.interfaces.orchestrator import ExecutionMode
 from src.services.layers import SearchEngineLayer, AIProcessingLayer
 from src.services.orchestrators import ChatOrchestrator, ChatOrchestratorConfig
 from src.infrastructure.database.chat_task_repository import chat_task_repository
+from src.infrastructure.database.chat_conversation_repository import chat_conversation_repository
 from src.core.domain.entities.auth.user import User
 from src.api.dependencies.auth import get_current_active_user
 from src.services.chat_search_service import get_chat_search_service
@@ -384,6 +385,30 @@ async def chat_sync_v2(
                 for s in result.data.get("results", [])
             ]
 
+            # v4.22.0: 保存消息到 chat_conversations (search_only 模式)
+            if request.conversation_id:
+                try:
+                    # 保存用户消息
+                    await chat_conversation_repository.add_message(
+                        conversation_id=request.conversation_id,
+                        role="user",
+                        content=request.question
+                    )
+                    # 保存搜索结果（无AI回答）
+                    sources_for_save = [
+                        {"mongo_id": s.mongo_id, "title": s.title, "source": s.source}
+                        for s in sources[:5]
+                    ]
+                    await chat_conversation_repository.add_message(
+                        conversation_id=request.conversation_id,
+                        role="assistant",
+                        content="[仅搜索模式 - 无AI总结]",
+                        sources=sources_for_save
+                    )
+                    logger.info(f"[ChatV2] search_only 消息已保存: conversation_id={request.conversation_id}")
+                except Exception as e:
+                    logger.warning(f"[ChatV2] search_only 保存消息失败: {e}")
+
             return ChatV2Response(
                 question=request.question,
                 answer="",
@@ -425,6 +450,30 @@ async def chat_sync_v2(
             _convert_source(s)
             for s in ai_result.result.sources
         ]
+
+        # v4.22.0: 保存消息到 chat_conversations
+        if request.conversation_id:
+            try:
+                # 保存用户消息
+                await chat_conversation_repository.add_message(
+                    conversation_id=request.conversation_id,
+                    role="user",
+                    content=request.question
+                )
+                # 保存AI回复（包含来源摘要）
+                sources_for_save = [
+                    {"mongo_id": s.mongo_id, "title": s.title, "source": s.source}
+                    for s in sources[:5]  # 只保存前5个来源
+                ]
+                await chat_conversation_repository.add_message(
+                    conversation_id=request.conversation_id,
+                    role="assistant",
+                    content=ai_result.result.answer,
+                    sources=sources_for_save
+                )
+                logger.info(f"[ChatV2] 消息已保存到对话: conversation_id={request.conversation_id}")
+            except Exception as e:
+                logger.warning(f"[ChatV2] 保存消息失败: {e}")
 
         return ChatV2Response(
             question=request.question,
@@ -806,6 +855,32 @@ async def confirm_search_elements_v2(
             for s in result.get("sources", [])
         ]
 
+        # v4.22.0: 保存消息到 chat_conversations
+        task = await chat_task_repository.get_task(task_id)
+        if task and task.get("conversation_id"):
+            conversation_id = task.get("conversation_id")
+            try:
+                # 保存用户消息
+                await chat_conversation_repository.add_message(
+                    conversation_id=conversation_id,
+                    role="user",
+                    content=result.get("question", "")
+                )
+                # 保存AI回复（包含来源摘要）
+                sources_for_save = [
+                    {"mongo_id": s.mongo_id, "title": s.title, "source": s.source}
+                    for s in sources[:5]  # 只保存前5个来源
+                ]
+                await chat_conversation_repository.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=result.get("answer", ""),
+                    sources=sources_for_save
+                )
+                logger.info(f"[ChatV2] 确认搜索消息已保存: conversation_id={conversation_id}")
+            except Exception as e:
+                logger.warning(f"[ChatV2] 确认搜索保存消息失败: {e}")
+
         return ChatV2Response(
             question=result.get("question", ""),
             answer=result.get("answer", ""),
@@ -844,6 +919,34 @@ async def _execute_confirm_search_background(
 
         logger.info(f"[ChatV2] 后台搜索完成: task_id={task_id}, results={result.get('result_count', 0)}")
 
+        # v4.22.0: 保存消息到 chat_conversations
+        task = await chat_task_repository.get_task(task_id)
+        if task and task.get("conversation_id"):
+            conversation_id = task.get("conversation_id")
+            try:
+                # 保存用户消息
+                await chat_conversation_repository.add_message(
+                    conversation_id=conversation_id,
+                    role="user",
+                    content=task.get("question", "")
+                )
+                # 保存AI回复（如果有的话）
+                answer = result.get("answer", "")
+                if answer:
+                    sources_for_save = [
+                        {"mongo_id": s.get("mongo_id"), "title": s.get("title"), "source": s.get("source")}
+                        for s in result.get("sources", [])[:5]  # 只保存前5个来源
+                    ]
+                    await chat_conversation_repository.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=answer,
+                        sources=sources_for_save
+                    )
+                logger.info(f"[ChatV2] 后台搜索消息已保存: conversation_id={conversation_id}")
+            except Exception as save_e:
+                logger.warning(f"[ChatV2] 后台搜索保存消息失败: {save_e}")
+
     except Exception as e:
         logger.error(f"[ChatV2] 后台搜索失败: task_id={task_id}, error={e}", exc_info=True)
         # 错误已在 service 层处理，这里只记录日志
@@ -879,6 +982,31 @@ async def _execute_in_background(
                 history_id=ai_result.result.data.get("history_id"),
             )
             logger.info(f"[ChatV2] Background execution completed: task_id={task_id}")
+
+            # v4.22.0: 保存消息到 chat_conversations
+            conversation_id = context.options.get("conversation_id") if context.options else None
+            if conversation_id:
+                try:
+                    # 保存用户消息
+                    await chat_conversation_repository.add_message(
+                        conversation_id=conversation_id,
+                        role="user",
+                        content=context.query
+                    )
+                    # 保存AI回复（包含来源摘要）
+                    sources_for_save = [
+                        {"mongo_id": s.get("mongo_id"), "title": s.get("title"), "source": s.get("source")}
+                        for s in ai_result.result.sources[:5]  # 只保存前5个来源
+                    ]
+                    await chat_conversation_repository.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=ai_result.result.answer,
+                        sources=sources_for_save
+                    )
+                    logger.info(f"[ChatV2] 后台任务消息已保存: conversation_id={conversation_id}")
+                except Exception as e:
+                    logger.warning(f"[ChatV2] 后台任务保存消息失败: {e}")
         else:
             error_msg = "; ".join(result.errors) if result.errors else "执行失败"
             await chat_task_repository.fail_task(

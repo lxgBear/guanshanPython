@@ -404,7 +404,8 @@ class SearchEngineLayer(ISearchLayer):
                     snippet=raw.get("snippet", ""),
                     source=raw.get("source_domain", "web"),
                     published_date=self._parse_published_date(raw.get("published_date")),
-                    markdown_content=raw.get("content"),
+                    markdown_content=raw.get("markdown") or raw.get("content"),
+                    html_content=raw.get("html"),
                     search_position=idx + 1,
                     # LangGraph 特定字段
                     layer=raw.get("layer", 0),
