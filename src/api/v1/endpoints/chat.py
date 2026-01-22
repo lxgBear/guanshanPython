@@ -202,6 +202,7 @@ class SourceDetail(BaseModel):
     preview: str = Field(..., description="内容预览")
     url: Optional[str] = Field(None, description="完整URL")
     markdown_content: Optional[str] = Field(None, description="完整Markdown内容")
+    html_content: Optional[str] = Field(None, description="HTML格式内容")
     content_length: Optional[int] = Field(None, description="内容长度")
     title_zh: Optional[str] = Field(None, description="中文标题")
     summary_zh: Optional[str] = Field(None, description="中文摘要")
@@ -563,6 +564,7 @@ async def chat_sync_endpoint(
                     preview=sr.get('preview', sr.get('snippet', ''))[:200] if sr.get('preview') or sr.get('snippet') else '',
                     url=sr.get('url'),
                     markdown_content=sr.get('markdown_content'),
+                    html_content=sr.get('html_content'),
                     content_length=len(sr.get('markdown_content', '')) if sr.get('markdown_content') else None
                 ))
 
@@ -898,6 +900,7 @@ async def chat_sync_endpoint(
                         "news_results.title_zh": 1,
                         "news_results.summary_zh": 1,
                         "news_results.content_zh": 1,
+                        "news_results.html_content": 1,
                         "_id": 0
                     }
                 )
@@ -917,7 +920,8 @@ async def chat_sync_endpoint(
                     url=news_result.get('url') if news_result else None,
                     title_zh=nested_news_results.get('title_zh'),
                     summary_zh=nested_news_results.get('summary_zh'),
-                    content_zh=nested_news_results.get('content_zh')
+                    content_zh=nested_news_results.get('content_zh'),
+                    html_content=nested_news_results.get('html_content')
                 )
 
             enhanced_sources.append(enhanced_source)
@@ -1138,6 +1142,7 @@ async def confirm_search_elements(
                 preview=r.get("preview", r.get("snippet", ""))[:200] if r.get("preview") or r.get("snippet") else "",
                 url=r.get("url"),
                 markdown_content=r.get("markdown_content"),
+                html_content=r.get("html_content"),
                 content_length=len(r.get("markdown_content", "")) if r.get("markdown_content") else None
             ))
 
@@ -1315,10 +1320,12 @@ async def delete_task(
 
 
 class InfoItemModel(BaseModel):
-    """信息条目存储模型 (v2.9.0 优化)
+    """信息条目存储模型 (v2.9.0 优化, v4.22.0 扩展)
 
     只存储引用信息 (mongo_id + source)，查询时从原表填充完整数据。
     优化目的: 减少数据冗余，降低数据库存储压力，保证数据一致性。
+
+    v4.22.0: 添加 markdown_content 和 html_content 字段支持完整内容存储
     """
     id: str = Field(..., description="条目ID (同 mongo_id)")
     mongo_id: str = Field(..., description="MongoDB 数据库 ID")
@@ -1327,6 +1334,9 @@ class InfoItemModel(BaseModel):
     title: Optional[str] = Field(None, description="标题 (查询时填充)")
     score: Optional[float] = Field(None, description="相关性评分 (查询时填充)")
     preview: Optional[str] = Field(None, description="预览内容 (查询时填充)")
+    # v4.22.0: 完整内容字段
+    markdown_content: Optional[str] = Field(None, description="Markdown格式内容")
+    html_content: Optional[str] = Field(None, description="HTML格式内容")
 
 
 class ConversationCreateRequest(BaseModel):

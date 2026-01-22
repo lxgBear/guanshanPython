@@ -2,6 +2,8 @@
 Firecrawl 搜索工具
 
 封装搜索相关的高级功能
+
+v4.9.0: 添加媒体来源映射支持
 """
 
 from typing import Any
@@ -9,6 +11,14 @@ from urllib.parse import urlparse
 
 from ..models.schemas import SearchResult, SearchTask
 from .client import FirecrawlClient, get_firecrawl_client
+
+# 媒体来源映射
+from src.core.config.media_sources import (
+    extract_domain_from_url as _extract_domain_from_media,
+    get_media_source,
+    get_source_name_en,
+    get_source_name_zh,
+)
 
 
 def _extract_domain(url: str) -> str:
@@ -133,6 +143,10 @@ async def execute_search_task(
                         description = getattr(item, "description", "") or getattr(item, "snippet", "") or ""
                         published_date = _extract_published_date(item)
 
+                    # v4.9.0: 媒体来源映射
+                    source_name = get_source_name_en(url)
+                    layer_name = get_source_name_zh(url)
+
                     results.append(
                         SearchResult(
                             url=url,
@@ -142,9 +156,11 @@ async def execute_search_task(
                             markdown=getattr(item, "markdown", None),
                             html=getattr(item, "html", None),
                             source=source_type,
+                            source_name=source_name,
                             keyword=task.keyword,
                             score=0.0,
                             source_domain=_extract_domain(url),
+                            layer_name=layer_name,
                             published_date=published_date,
                             layer=task.layer,
                         )
@@ -155,6 +171,10 @@ async def execute_search_task(
                 source_results = data.get(source_type, [])
                 for item in source_results:
                     url = item.get("url", "")
+                    # v4.9.0: 媒体来源映射
+                    source_name = get_source_name_en(url)
+                    layer_name = get_source_name_zh(url)
+
                     results.append(
                         SearchResult(
                             url=url,
@@ -164,9 +184,11 @@ async def execute_search_task(
                             markdown=item.get("markdown"),
                             html=item.get("html"),
                             source=source_type,
+                            source_name=source_name,
                             keyword=task.keyword,
                             score=0.0,
                             source_domain=_extract_domain(url),
+                            layer_name=layer_name,
                             published_date=_extract_published_date(item),
                             layer=task.layer,
                         )
@@ -175,6 +197,10 @@ async def execute_search_task(
             # 处理扁平列表返回
             for item in data:
                 url = item.get("url", "")
+                # v4.9.0: 媒体来源映射
+                source_name = get_source_name_en(url)
+                layer_name = get_source_name_zh(url)
+
                 results.append(
                     SearchResult(
                         url=url,
@@ -184,9 +210,11 @@ async def execute_search_task(
                         markdown=item.get("markdown"),
                         html=item.get("html"),
                         source=task.source,
+                        source_name=source_name,
                         keyword=task.keyword,
                         score=0.0,
                         source_domain=_extract_domain(url),
+                        layer_name=layer_name,
                         published_date=_extract_published_date(item),
                         layer=task.layer,
                     )
@@ -261,6 +289,10 @@ def search_sync(
                     description = getattr(item, "description", "") or getattr(item, "snippet", "") or ""
                     published_date = _extract_published_date(item)
 
+                # v4.9.0: 媒体来源映射
+                source_name = get_source_name_en(url)
+                layer_name = get_source_name_zh(url)
+
                 results.append(
                     SearchResult(
                         url=url,
@@ -270,9 +302,11 @@ def search_sync(
                         markdown=getattr(item, "markdown", None),
                         html=getattr(item, "html", None),
                         source=source_type,
+                        source_name=source_name,
                         keyword=query,
                         score=0.0,
                         source_domain=_extract_domain(url),
+                        layer_name=layer_name,
                         published_date=published_date,
                     )
                 )
@@ -281,6 +315,10 @@ def search_sync(
             source_results = data.get(source_type, [])
             for item in source_results:
                 url = item.get("url", "")
+                # v4.9.0: 媒体来源映射
+                source_name = get_source_name_en(url)
+                layer_name = get_source_name_zh(url)
+
                 results.append(
                     SearchResult(
                         url=url,
@@ -290,15 +328,21 @@ def search_sync(
                         markdown=item.get("markdown"),
                         html=item.get("html"),
                         source=source_type,
+                        source_name=source_name,
                         keyword=query,
                         score=0.0,
                         source_domain=_extract_domain(url),
+                        layer_name=layer_name,
                         published_date=_extract_published_date(item),
                     )
                 )
     elif isinstance(data, list):
         for item in data:
             url = item.get("url", "")
+            # v4.9.0: 媒体来源映射
+            source_name = get_source_name_en(url)
+            layer_name = get_source_name_zh(url)
+
             results.append(
                 SearchResult(
                     url=url,
@@ -308,9 +352,11 @@ def search_sync(
                     markdown=item.get("markdown"),
                     html=item.get("html"),
                     source="web",
+                    source_name=source_name,
                     keyword=query,
                     score=0.0,
                     source_domain=_extract_domain(url),
+                    layer_name=layer_name,
                     published_date=_extract_published_date(item),
                 )
             )

@@ -23,6 +23,7 @@ from src.api.v1.endpoints import chat_v2  # V2 层分离架构
 from src.api.v1.endpoints import upload
 from src.api.v1.endpoints import review
 from src.api.v1.endpoints import langgraph_transfer
+from src.api.v1.endpoints import category_management
 from src.api.v1.endpoints.auth import router as auth_router
 
 # 权限依赖
@@ -164,6 +165,13 @@ api_router.include_router(
     langgraph_transfer.router,
     tags=["🔄 LangGraph 转移管理"],
     dependencies=[Depends(require_permissions("langgraph:transfer", "info:create"))]
+)
+
+# 分类体系管理 - 需要 info:update 或 system:config 权限
+api_router.include_router(
+    category_management.router,
+    tags=["📂 分类体系管理"],
+    dependencies=[Depends(require_permissions("info:update", "system:config"))]
 )
 
 # ==========================================
