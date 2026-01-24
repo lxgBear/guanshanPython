@@ -53,7 +53,7 @@ class ArchivedData:
 
     # 类型特定字段（JSON存储）
     type_specific_fields: Dict[str, Any] = field(default_factory=dict)
-    # scheduled类型：search_rank, relevance_score, task_id等
+    # scheduled类型：search_rank, task_id等
     # instant类型：content_hash, url_normalized, found_count等
 
     # 通用元数据
@@ -99,8 +99,6 @@ class ArchivedData:
         # 提取scheduled类型特定字段
         type_specific = {
             "search_rank": search_result.search_position if hasattr(search_result, 'search_position') else None,
-            "relevance_score": search_result.relevance_score,
-            "quality_score": search_result.quality_score,
             "task_id": str(search_result.task_id) if isinstance(search_result.task_id, UUID) else search_result.task_id,
             "source": search_result.source,
             "author": search_result.author,
@@ -155,8 +153,6 @@ class ArchivedData:
         type_specific = {
             "content_hash": instant_result.content_hash,
             "url_normalized": instant_result.url_normalized,
-            "relevance_score": instant_result.relevance_score,
-            "quality_score": instant_result.quality_score,
             "task_id": instant_result.task_id,
             "source": instant_result.source,
             "author": instant_result.author,

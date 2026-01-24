@@ -375,7 +375,7 @@ Firecrawl 搜索API适配器
                 search_position=search_position,
                 metadata={},  # v2.1.0: 不再存储metadata，所有有用字段已提取为独立字段
                 # 不再存储: raw_data (~850KB), content (使用markdown_content替代), metadata (2-5KB)
-                relevance_score=item.get('score', 0.0),
+                # v4.8.1: 移除评分字段
                 status=ResultStatus.PENDING
             )
 
@@ -517,7 +517,7 @@ Firecrawl 搜索API适配器
                 markdown_content=test_content,  # 使用markdown_content替代content
                 source="test",
                 published_date=datetime.utcnow(),
-                relevance_score=0.9 - (i * 0.05),
+                # v4.8.1: 移除评分字段
                 is_test_data=True,
                 status=ResultStatus.PENDING  # v1.5.2: 修复 - 使用PENDING而非不存在的PROCESSED
             )
@@ -725,7 +725,7 @@ Firecrawl 搜索API适配器
             "title": result.title or "",
             "url": result.url or "",
             "snippet": result.snippet or "",
-            "score": result.relevance_score,
+            # v4.8.1: 移除评分字段
             "markdown": result.markdown_content or "",
             "published_date": published_date_str,
             "source": result.source or "web",

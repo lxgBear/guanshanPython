@@ -123,41 +123,41 @@ class SourceClassifier:
     EXCLUDED_PATTERNS = ENCYCLOPEDIA_PATTERNS  # 别名保持兼容
 
     @classmethod
-    def classify(cls, url: str, source_name: str = "") -> Tuple[SourceTier, float]:
+    def classify(cls, url: str, source_name: str = "") -> SourceTier:
         """
         分类 URL 的来源层级
 
         Returns:
-            (SourceTier, credibility_score)
+            SourceTier: 来源层级
         """
         url_lower = url.lower()
 
         # 检查排除模式
         for pattern in cls.EXCLUDED_PATTERNS:
             if re.search(pattern, url_lower):
-                return SourceTier.OTHER, 0.3
+                return SourceTier.OTHER
 
         # 检查官方来源
         for pattern in cls.OFFICIAL_PATTERNS:
             if re.search(pattern, url_lower):
-                return SourceTier.OFFICIAL, SOURCE_TIER_CREDIBILITY[SourceTier.OFFICIAL]
+                return SourceTier.OFFICIAL
 
         # 检查智库
         for pattern in cls.THINK_TANK_PATTERNS:
             if re.search(pattern, url_lower):
-                return SourceTier.THINK_TANK, SOURCE_TIER_CREDIBILITY[SourceTier.THINK_TANK]
+                return SourceTier.THINK_TANK
 
         # 检查国际主流
         for pattern in cls.INTL_MAINSTREAM_PATTERNS:
             if re.search(pattern, url_lower):
-                return SourceTier.INTL_MAINSTREAM, SOURCE_TIER_CREDIBILITY[SourceTier.INTL_MAINSTREAM]
+                return SourceTier.INTL_MAINSTREAM
 
         # 检查当地主流
         for pattern in cls.LOCAL_MAINSTREAM_PATTERNS:
             if re.search(pattern, url_lower):
-                return SourceTier.LOCAL_MAINSTREAM, SOURCE_TIER_CREDIBILITY[SourceTier.LOCAL_MAINSTREAM]
+                return SourceTier.LOCAL_MAINSTREAM
 
-        return SourceTier.OTHER, SOURCE_TIER_CREDIBILITY[SourceTier.OTHER]
+        return SourceTier.OTHER
 
 
 # =============================================================================
@@ -309,7 +309,6 @@ class EnhancedSearchResult:
     # 来源分类
     source_tier: str
     source_tier_label: str
-    credibility_score: float
 
     # 语言和地区
     language: str
@@ -322,8 +321,7 @@ class EnhancedSearchResult:
     crawled_at: Optional[str] = None  # 采集时间 (ISO 格式)
     time_range_hint: Optional[str] = None  # 根据 tbs 推断的时间范围提示
 
-    # 评分
-    relevance_score: float = 0.0
+    # 位置
     position: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -566,7 +564,7 @@ class ClaudeSearchAgentV21:
             enhanced_results = []
             for i, r in enumerate(results):
                 # 分类来源
-                tier, credibility = self.classifier.classify(r.url, r.title)
+                tier = self.classifier.classify(r.url, r.title)
 
                 # 处理发布时间
                 raw_published_date = r.published_date if hasattr(r, 'published_date') else None
@@ -579,7 +577,6 @@ class ClaudeSearchAgentV21:
                     snippet=r.snippet,
                     source_tier=tier.value,
                     source_tier_label=SOURCE_TIER_LABELS[tier],
-                    credibility_score=credibility,
                     language=config.get("lang", "en"),
                     country=config.get("country", "US"),
                     search_query=config["query"][:50],
@@ -587,7 +584,6 @@ class ClaudeSearchAgentV21:
                     time_verified=has_published_date,
                     crawled_at=crawled_at,
                     time_range_hint=time_range_hint if not has_published_date else None,
-                    relevance_score=r.score,
                     position=i + 1,
                 )
                 enhanced_results.append(enhanced.to_dict())
@@ -639,11 +635,8 @@ class ClaudeSearchAgentV21:
                     tier_stats[tier] = tier_stats.get(tier, 0) + 1
                     lang_stats[lang] = lang_stats.get(lang, 0) + 1
 
-        # 按可信度和相关性排序
-        all_results.sort(key=lambda r: (
-            -r.get("credibility_score", 0),
-            -r.get("relevance_score", 0)
-        ))
+        # 按位置排序
+        all_results.sort(key=lambda r: r.get("position", 999))
 
         return all_results, {"by_tier": tier_stats, "by_lang": lang_stats}
 
@@ -764,13 +757,12 @@ class ClaudeSearchAgentV21:
         print("-" * 80)
 
         # 显示前 10 条结果
-        print(f"\n📰 前 10 条结果 (按可信度排序):")
+        print(f"\n📰 前 10 条结果:")
         for i, r in enumerate(all_results[:10], 1):
             tier_label = r.get("source_tier_label", "?")[:4]
-            cred = r.get("credibility_score", 0)
             lang = r.get("language", "?")[:2]
             title = r.get("title", "N/A")[:50]
-            print(f"[{i:2d}] [{tier_label}] [{cred:.2f}] [{lang}] {title}")
+            print(f"[{i:2d}] [{tier_label}] [{lang}] {title}")
 
         print("\n" + "=" * 80)
 

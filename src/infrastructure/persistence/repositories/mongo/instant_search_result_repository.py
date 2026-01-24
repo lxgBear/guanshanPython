@@ -49,7 +49,7 @@ class MongoInstantSearchResultRepository(IInstantSearchResultRepository):
     - task_id (查询优化)
     - search_type (v2.1.0 统一架构)
     - (task_id, search_type) 复合索引
-    - relevance_score (排序优化)
+    - v4.8.1: relevance_score (排序优化) - 已移除
     - created_at (排序优化)
 
     v2.1.0 统一架构：
@@ -92,8 +92,7 @@ class MongoInstantSearchResultRepository(IInstantSearchResultRepository):
             "author": result.author,
             "language": result.language,
             "metadata": result.metadata,
-            "relevance_score": result.relevance_score,
-            "quality_score": result.quality_score,
+            # v4.8.1: 移除评分字段
             # v1.3.0 发现统计字段
             "first_found_at": result.first_found_at,
             "last_found_at": result.last_found_at,
@@ -128,8 +127,7 @@ class MongoInstantSearchResultRepository(IInstantSearchResultRepository):
             author=data.get("author"),
             language=data.get("language"),
             metadata=data.get("metadata", {}),
-            relevance_score=data.get("relevance_score", 0.0),
-            quality_score=data.get("quality_score", 0.0),
+            # v4.8.1: 移除评分字段
             first_found_at=data.get("first_found_at", datetime.utcnow()),
             last_found_at=data.get("last_found_at", datetime.utcnow()),
             found_count=data.get("found_count", 1),
@@ -383,9 +381,8 @@ class MongoInstantSearchResultRepository(IInstantSearchResultRepository):
         Returns:
             (results, total): 结果列表和总数
 
-        排序规则：
-        1. relevance_score DESC（相关性优先）
-        2. created_at DESC（时间次之）
+        v4.8.1 排序规则：
+        1. created_at DESC（时间优先）
 
         Raises:
             RepositoryException: 查询失败时抛出
@@ -403,7 +400,6 @@ class MongoInstantSearchResultRepository(IInstantSearchResultRepository):
 
             # 查询
             cursor = collection.find(query).sort([
-                ("relevance_score", -1),
                 ("created_at", -1)
             ]).skip(skip).limit(limit)
 

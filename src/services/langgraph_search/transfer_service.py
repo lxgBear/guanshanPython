@@ -177,9 +177,8 @@ class LangGraphTransferService:
         else:
             results = await self.langgraph_repo.find_by_task_id(task_id, limit)
 
-        # 按分数筛选
-        if min_score is not None:
-            results = [r for r in results if r.final_score >= min_score]
+        # v4.8.1: 移除按分数筛选（评分字段已删除）
+        # if min_score is not None:
 
         if not results:
             return {
@@ -229,12 +228,8 @@ class LangGraphTransferService:
                 "layer": langgraph_result.layer,
                 "layer_name": langgraph_result.layer_name,
                 "source_tier": langgraph_result.source_tier,
-                "credibility_score": langgraph_result.credibility_score,
-                "final_score": langgraph_result.final_score,
+                # v4.8.1: 移除评分字段
                 "data_source_type": langgraph_result.data_source_type,
-                "multi_source_bonus": langgraph_result.multi_source_bonus,
-                "recency_bonus": langgraph_result.recency_bonus,
-                "layer_weight": langgraph_result.layer_weight,
             }
         }
 
@@ -257,8 +252,7 @@ class LangGraphTransferService:
             language=langgraph_result.language,
             source=langgraph_result.source,
             metadata=metadata,
-            quality_score=langgraph_result.quality_score,
-            relevance_score=langgraph_result.relevance_score,
+            # v4.8.1: 移除评分字段
             search_position=langgraph_result.search_position,
 
             # LangGraph 分类信息映射到 cls_results

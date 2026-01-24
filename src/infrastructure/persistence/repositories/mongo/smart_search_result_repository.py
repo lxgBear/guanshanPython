@@ -54,7 +54,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
     - (task_id, status) 复合索引
     - original_query (跨任务查询)
     - aggregation_priority (排序优化)
-    - relevance_score (排序优化)
+    - v4.8.1: relevance_score (排序优化) - 已移除
     - created_at (排序优化)
 
     v1.5.0 ID系统统一：
@@ -121,9 +121,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
             "search_position": result.search_position,
             "metadata": result.metadata,
 
-            # 质量指标
-            "relevance_score": result.relevance_score,
-            "quality_score": result.quality_score,
+            # v4.8.1: 移除质量指标
 
             # 状态与时间
             "status": result.status.value,
@@ -141,6 +139,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
         doc["decomposition_reasoning"] = ""
         doc["query_focus"] = ""
         doc["relevance_to_original"] = 0.0
+        # v4.8.1: 移除聚合优先级（基于相关性分数）
         doc["aggregation_priority"] = 0
         doc["sub_search_task_id"] = ""
 
@@ -155,8 +154,9 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
                 doc["decomposition_reasoning"] = sub_query.reasoning
                 doc["query_focus"] = sub_query.focus
 
-            # 设置聚合优先级 (基于相关性分数)
-            doc["aggregation_priority"] = int(result.relevance_score * 100)
+            # v4.8.1: 移除聚合优先级（基于相关性分数）
+            # 改用 search_position 作为优先级（越靠前优先级越高）
+            doc["aggregation_priority"] = max(0, 100 - result.search_position)
 
         return doc
 
@@ -201,9 +201,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
             search_position=doc.get("search_position"),
             metadata=doc.get("metadata", {}),
 
-            # 质量指标
-            relevance_score=doc.get("relevance_score", 0.0),
-            quality_score=doc.get("quality_score", 0.0),
+            # v4.8.1: 移除质��指标
 
             # 状态与时间
             status=ResultStatus(doc.get("status", "pending")),
@@ -262,7 +260,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
             task_id: 任务ID
             skip: 跳过的记录数
             limit: 返回的最大记录数
-            sort_by: 排序字段 (aggregation_priority, relevance_score, created_at)
+            sort_by: 排序字段 (aggregation_priority, created_at)
 
         Returns:
             (结果列表, 总数)
@@ -281,11 +279,8 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
             if sort_by == "aggregation_priority":
                 sort_fields = [
                     ("aggregation_priority", -1),
-                    ("relevance_score", -1),
                     ("created_at", -1)
                 ]
-            elif sort_by == "relevance_score":
-                sort_fields = [("relevance_score", -1), ("created_at", -1)]
             elif sort_by == "created_at":
                 sort_fields = [("created_at", -1)]
             else:
@@ -339,7 +334,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
 
             # 查询
             cursor = (await self._get_collection()).find(query).sort([
-                ("relevance_score", -1),
+                ("aggregation_priority", -1),
                 ("created_at", -1)
             ]).skip(skip).limit(limit)
 
@@ -361,14 +356,13 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
         self,
         task_id: str,
         limit: int = 10,
-        min_relevance_score: float = 0.0
+        # v4.8.1: 移除最小相关性分数阈值参数
     ) -> List[SearchResult]:
-        """获取任务的top结果（按聚合优先级和相关性）
+        """获取任务的top结果（按聚合优先级）
 
         Args:
             task_id: 任务ID
             limit: 返回的最大记录数
-            min_relevance_score: 最小相关性分数阈值
 
         Returns:
             结果列表
@@ -379,13 +373,13 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
         try:
             query = {
                 "task_id": task_id,
-                "relevance_score": {"$gte": min_relevance_score}
+                # v4.8.1: 移除相关性分数筛选
             }
 
+            # v4.8.1: 移除评分字段排序
             cursor = (await self._get_collection()).find(query).sort([
                 ("aggregation_priority", -1),
-                ("relevance_score", -1),
-                ("quality_score", -1)
+                ("created_at", -1)
             ]).limit(limit)
 
             results = []
@@ -394,7 +388,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
 
             logger.debug(
                 f"🎯 查询top结果: task_id={task_id}, "
-                f"limit={limit}, min_score={min_relevance_score}, count={len(results)}"
+                f"limit={limit}, count={len(results)}"
             )
             return results
 
@@ -429,8 +423,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
 
             # 查询
             cursor = (await self._get_collection()).find(query).sort([
-                ("created_at", -1),
-                ("relevance_score", -1)
+                ("created_at", -1)
             ]).skip(skip).limit(limit)
 
             results = []
@@ -560,15 +553,13 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
             RepositoryException: 统计失败时抛出
         """
         try:
+            # v4.8.1: 移除评分字段统计
             pipeline = [
                 {"$match": {"task_id": task_id}},
                 {"$group": {
                     "_id": "$sub_query_index",
                     "count": {"$sum": 1},
-                    "avg_relevance": {"$avg": "$relevance_score"},
-                    "avg_quality": {"$avg": "$quality_score"},
-                    "max_relevance": {"$max": "$relevance_score"},
-                    "min_relevance": {"$min": "$relevance_score"}
+                    # v4.8.1: 移除评分统计
                 }},
                 {"$sort": {"_id": 1}}
             ]
@@ -578,10 +569,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
                 sub_query_stats.append({
                     "sub_query_index": doc["_id"],
                     "count": doc["count"],
-                    "avg_relevance_score": round(doc["avg_relevance"], 3),
-                    "avg_quality_score": round(doc["avg_quality"], 3),
-                    "max_relevance_score": round(doc["max_relevance"], 3),
-                    "min_relevance_score": round(doc["min_relevance"], 3)
+                    # v4.8.1: 移除评分统计
                 })
 
             # 总体统计
@@ -631,8 +619,7 @@ class MongoSmartSearchResultRepository(ISmartSearchResultRepository):
 
             # 查询
             cursor = (await self._get_collection()).find(query).sort([
-                ("created_at", -1),
-                ("relevance_score", -1)
+                ("created_at", -1)
             ]).skip(skip).limit(limit)
 
             results = []

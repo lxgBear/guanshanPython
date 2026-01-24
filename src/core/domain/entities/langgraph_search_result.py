@@ -3,8 +3,8 @@
 v4.5.2 新增：专用于 LangGraph 智能搜索系统的结果实体
 
 与 SearchResult 的关系：
-- 继承 SearchResult 的所有基础字段
-- 新增 LangGraph 特定的字段：layer, layer_name, source_tier, credibility_score, final_score, category
+- 继承 SearchResult 的���有基础字段
+- 新增 LangGraph 特定的字段：layer, layer_name, source_tier, category
 - 使用独立的 MongoDB 集合：langgraph_search_results
 - 实现智能搜索数据与常规搜索结果的数据隔离
 
@@ -13,6 +13,10 @@ v4.5.5 更新：
 - 新增 translator_dict: AI 翻译总结内容
 - 新增 transferred_to_news: 是否已转移到 news_results 表
 - 新增 transferred_at: 转移时间
+
+v4.8.1 更新：
+- 移除所有评分字段：relevance_score, quality_score, credibility_score, final_score
+- 移除 multi_source_bonus, recency_bonus, layer_weight
 """
 
 from dataclasses import dataclass, field
@@ -46,19 +50,18 @@ class LangGraphSearchResult(SearchResult):
 
     v4.5.2 新增：用于存储 LangGraph 7节点智能搜索系统的结果
 
+    v4.8.1 更新：移除所有评分字段
+
     继承 SearchResult 的所有字段：
     - id, task_id, user_id, created_by
     - title, url, snippet, source
     - markdown_content, html_content, article_tag, article_published_time
-    - relevance_score, quality_score
     - content_hash, metadata, status, created_at, processed_at
 
     新增 LangGraph 特定字段：
     - layer: 搜索层级 (0-4)
     - layer_name: 层级名称
     - source_tier: 来源可信度等级 (1-6)
-    - credibility_score: 可信度分数 (0.0-1.0)
-    - final_score: 综合分数
     - category: 分类信息 {"大类": "", "类别": "", "地域": ""}
     """
 
@@ -75,18 +78,9 @@ class LangGraphSearchResult(SearchResult):
 
     # 来源可信度
     source_tier: int = 1  # 来源可信度等级 (1=最高, 6=最低)
-    credibility_score: float = 0.0  # 可信度分数 (0.0-1.0)，独立于 quality_score
-
-    # 综合评分
-    final_score: float = 0.0  # 综合分数 = relevance_score + credibility_score + layer_weight + recency_bonus
 
     # 分类信息
     category: Optional[Dict[str, str]] = None  # 分类信息: {"大类": "", "类别": "", "地域": ""}
-
-    # 额外的 LangGraph 元数据
-    multi_source_bonus: float = 0.0  # 多来源加分
-    recency_bonus: float = 0.0  # 时效性加分
-    layer_weight: float = 0.0  # 层级权重
 
     # v4.5.3: 数据来源分类
     data_source_type: str = "langgraph"  # 数据来源: langgraph, nl_search, manual_upload, api_import
@@ -127,8 +121,6 @@ class LangGraphSearchResult(SearchResult):
             "layer": self.layer,
             "layer_name": self.layer_name,
             "source_tier": self.source_tier,
-            "credibility_score": self.credibility_score,
-            "final_score": self.final_score,
             "category": self.category,
             # v4.5.5: 新增字段
             "translator_status": self.translator_status,
@@ -189,41 +181,6 @@ class LangGraphSearchResult(SearchResult):
             }
         )
 
-    def calculate_final_score(
-        self,
-        relevance_weight: float = 1.0,
-        credibility_weight: float = 0.8,
-        layer_weight: float = 0.5
-    ) -> float:
-        """重新计算综合分数
-
-        Args:
-            relevance_weight: 相关性权重
-            credibility_weight: 可信度权重
-            layer_weight: 层级权重
-
-        Returns:
-            综合分数
-        """
-        layer_config = self.get_layer_config()
-
-        # 基础分数
-        base_score = (
-            self.relevance_score * relevance_weight +
-            self.credibility_score * credibility_weight
-        )
-
-        # 层级加权
-        layer_bonus = layer_config["weight"] * layer_weight
-
-        # 综合分数
-        self.final_score = base_score + layer_bonus + self.multi_source_bonus + self.recency_bonus
-
-        # 确保分数在 0-1 范围内
-        self.final_score = max(0.0, min(1.0, self.final_score))
-
-        return self.final_score
-
 
 @dataclass
 class LangGraphSearchResultBatch:
@@ -272,32 +229,4 @@ class LangGraphSearchResultBatch:
             distribution[layer] = distribution.get(layer, 0) + 1
         return distribution
 
-    def get_average_scores(self) -> Dict[str, float]:
-        """获取平均分数
-
-        Returns:
-            平均分数字典: {relevance: 0.75, credibility: 0.80, final: 0.78}
-        """
-        if not self.results:
-            return {"relevance": 0.0, "credibility": 0.0, "final": 0.0}
-
-        total_relevance = 0.0
-        total_credibility = 0.0
-        total_final = 0.0
-        count = 0
-
-        for result in self.results:
-            if isinstance(result, LangGraphSearchResult):
-                total_relevance += result.relevance_score
-                total_credibility += result.credibility_score
-                total_final += result.final_score
-                count += 1
-
-        if count == 0:
-            return {"relevance": 0.0, "credibility": 0.0, "final": 0.0}
-
-        return {
-            "relevance": round(total_relevance / count, 3),
-            "credibility": round(total_credibility / count, 3),
-            "final": round(total_final / count, 3),
-        }
+    # v4.8.1: 已移除 get_average_scores 方法，因为评分字段已删除

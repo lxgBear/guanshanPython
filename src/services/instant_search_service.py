@@ -306,7 +306,7 @@ class InstantSearchService:
                 result_id=result_id,
                 task_id=task_id,
                 search_position=idx,
-                relevance_score=result.relevance_score,
+                # v4.8.1: 移除评分字段
                 is_first_discovery=is_first_discovery
             )
             mappings.append(mapping)
@@ -358,7 +358,7 @@ class InstantSearchService:
                 "mapping_info": {
                     "found_at": mapping.found_at.isoformat(),
                     "search_position": mapping.search_position,
-                    "relevance_score": mapping.relevance_score,
+                    # v4.8.1: 移除评分字段
                     "is_first_discovery": mapping.is_first_discovery
                 }
             })

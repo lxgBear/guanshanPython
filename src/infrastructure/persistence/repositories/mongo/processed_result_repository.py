@@ -56,8 +56,7 @@ class MongoProcessedResultRepository(IProcessedResultRepository):
             "language": result.language,
             "source": result.source,
             "metadata": result.metadata,
-            "quality_score": result.quality_score,
-            "relevance_score": result.relevance_score,
+            # v4.8.1: 移除评分字段
             "search_position": result.search_position,
             # AI 处理数据
             "content_zh": result.content_zh,
@@ -129,8 +128,7 @@ class MongoProcessedResultRepository(IProcessedResultRepository):
             language=data.get("language"),
             source=data.get("source", "web"),
             metadata=data.get("metadata", {}),
-            quality_score=data.get("quality_score", 0.0),
-            relevance_score=data.get("relevance_score", 0.0),
+            # v4.8.1: 移除评分字段
             search_position=data.get("search_position", 0),
             # AI 处理数据
             content_zh=data.get("content_zh"),
@@ -782,8 +780,7 @@ class MongoProcessedResultRepository(IProcessedResultRepository):
                     language=raw_data.get("language"),
                     source=raw_data.get("source", "web"),
                     metadata=raw_data.get("metadata", {}),
-                    quality_score=raw_data.get("quality_score", 0.0),
-                    relevance_score=raw_data.get("relevance_score", 0.0),
+                    # v4.8.1: 移除评分字段
                     search_position=raw_data.get("search_position", 0)
                 )
             else:

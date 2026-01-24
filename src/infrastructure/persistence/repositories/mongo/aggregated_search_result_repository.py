@@ -96,13 +96,10 @@ class MongoAggregatedSearchResultRepository(IAggregatedSearchResultRepository):
             if sort_by == "composite_score":
                 sort_fields = [
                     ("composite_score", -1),
-                    ("source_count", -1),
-                    ("avg_relevance_score", -1)
+                    ("source_count", -1)
                 ]
             elif sort_by == "source_count":
                 sort_fields = [("source_count", -1), ("composite_score", -1)]
-            elif sort_by == "avg_relevance_score":
-                sort_fields = [("avg_relevance_score", -1), ("composite_score", -1)]
             elif sort_by == "created_at":
                 sort_fields = [("created_at", -1)]
             else:
@@ -136,8 +133,7 @@ class MongoAggregatedSearchResultRepository(IAggregatedSearchResultRepository):
 
             cursor = (await self._get_collection()).find(query).sort([
                 ("composite_score", -1),
-                ("source_count", -1),
-                ("avg_relevance_score", -1)
+                ("source_count", -1)
             ]).limit(limit)
 
             results = []

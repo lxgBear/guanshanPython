@@ -45,7 +45,6 @@ class InstantSearchResultMapping:
     # 发现元数据
     found_at: datetime = field(default_factory=datetime.utcnow)  # 发现时间
     search_position: int = 0  # 在该次搜索中的排名（1表示第一个结果）
-    relevance_score: float = 0.0  # 该次搜索的相关性分数
 
     # 统计标记
     is_first_discovery: bool = False  # 是否是首次发现该结果
@@ -62,7 +61,6 @@ class InstantSearchResultMapping:
             "task_id": self.task_id,
             "found_at": self.found_at.isoformat() if self.found_at else None,
             "search_position": self.search_position,
-            "relevance_score": self.relevance_score,
             "is_first_discovery": self.is_first_discovery,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
@@ -73,7 +71,6 @@ def create_result_mapping(
     result_id: str,
     task_id: str,
     search_position: int = 0,
-    relevance_score: float = 0.0,
     is_first_discovery: bool = False
 ) -> InstantSearchResultMapping:
     """
@@ -84,7 +81,6 @@ def create_result_mapping(
         result_id: 结果ID
         task_id: 任务ID
         search_position: 搜索结果排名
-        relevance_score: 相关性分数
         is_first_discovery: 是否首次发现
 
     Returns:
@@ -95,6 +91,5 @@ def create_result_mapping(
         result_id=result_id,
         task_id=task_id,
         search_position=search_position,
-        relevance_score=relevance_score,
         is_first_discovery=is_first_discovery
     )

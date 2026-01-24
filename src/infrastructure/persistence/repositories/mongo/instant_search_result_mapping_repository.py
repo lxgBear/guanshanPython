@@ -20,7 +20,7 @@ Version: v3.0.0 (模块化架构)
 - result_id: 结果ID（指向instant_search_results）
 - task_id: 任务ID（冗余字段，方便查询）
 - search_position: 搜索结果排名位置
-- relevance_score: 相关性评分
+- v4.8.1: relevance_score: 相关性评分（已移除）
 - is_first_discovery: 是否首次发现该结果
 - found_at: 发现时间
 
@@ -91,7 +91,7 @@ class MongoInstantSearchResultMappingRepository(IInstantSearchResultMappingRepos
             "task_id": mapping.task_id,
             "found_at": mapping.found_at,
             "search_position": mapping.search_position,
-            "relevance_score": mapping.relevance_score,
+            # v4.8.1: 移除评分字段
             "is_first_discovery": mapping.is_first_discovery,
             "created_at": mapping.created_at
         }
@@ -112,7 +112,7 @@ class MongoInstantSearchResultMappingRepository(IInstantSearchResultMappingRepos
             task_id=data["task_id"],
             found_at=data.get("found_at", datetime.utcnow()),
             search_position=data.get("search_position", 0),
-            relevance_score=data.get("relevance_score", 0.0),
+            # v4.8.1: 移除评分字段
             is_first_discovery=data.get("is_first_discovery", False),
             created_at=data.get("created_at", datetime.utcnow())
         )

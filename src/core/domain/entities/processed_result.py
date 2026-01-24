@@ -92,9 +92,6 @@ class ProcessedResult:
     source: str = "web"                                # 来源类型
     metadata: Dict[str, Any] = field(default_factory=dict)  # 扩展元数据
 
-    # 质量指标
-    quality_score: float = 0.0                         # 质量分数
-    relevance_score: float = 0.0                       # 相关性分数
     search_position: int = 0                           # 搜索位置
 
     # ==================== AI处理字段 ====================

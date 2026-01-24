@@ -115,7 +115,6 @@ class SearchResultWithMappingResponse(BaseModel):
                 "mapping_info": {
                     "found_at": "2025-10-15T10:30:00Z",
                     "search_position": 1,
-                    "relevance_score": 0.95,
                     "is_first_discovery": False
                 }
             }

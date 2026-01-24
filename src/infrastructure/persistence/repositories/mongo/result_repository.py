@@ -37,7 +37,10 @@ class MongoResultRepository(IResultRepository):
         return db[self.collection_name]
 
     def _result_to_dict(self, result: SearchResult) -> Dict[str, Any]:
-        """将结果实体转换为 MongoDB 文档 (v2.1.0: 优化后的模型，移除 metadata 存储)"""
+        """将结果实体转换为 MongoDB 文档 (v2.1.0: 优化后的模型，移除 metadata 存储)
+        
+        v2.3.0: 移除评分字段存储 - relevance_score, quality_score 不再存入数据库
+        """
         return {
             "_id": str(result.id),
             "task_id": str(result.task_id),
@@ -62,8 +65,7 @@ class MongoResultRepository(IResultRepository):
             # 所有有用字段已提取为独立字段：author, language, article_tag, http_status_code 等
             # "metadata": result.metadata,  # 已废弃 - 不再存储
             # 已移除字段: raw_data, content (使用 markdown_content 替代)
-            "relevance_score": result.relevance_score,
-            "quality_score": result.quality_score,
+            # v2.3.0: 移除评分字段存储 - 评分在内存中计算，不需要持久化
             "status": result.status.value,
             "created_at": result.created_at,
             "processed_at": result.processed_at,
@@ -118,8 +120,7 @@ class MongoResultRepository(IResultRepository):
             content_hash=data.get("content_hash"),
             metadata=data.get("metadata", {}),
             # 已移除字段: raw_data, content (不再从数据库读取)
-            relevance_score=data.get("relevance_score", 0.0),
-            quality_score=data.get("quality_score", 0.0),
+            # v2.3.1: 评分字段已删除，不再从数据库读取
             status=status,
             created_at=data.get("created_at", datetime.utcnow()),
             processed_at=data.get("processed_at"),

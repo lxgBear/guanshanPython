@@ -92,8 +92,6 @@ class SearchResultResponse(BaseModel):
     language: Optional[str] = Field(None, description="语言")
     source: str = Field("web", description="来源类型")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="扩展元数据")
-    quality_score: float = Field(0.0, description="质量分数")
-    relevance_score: float = Field(0.0, description="相关性分数")
     search_position: int = Field(0, description="搜索位置")
 
     # ==================== AI增强数据（实际使用的字段）====================
@@ -207,8 +205,7 @@ def processed_result_to_response(result: ProcessedResult) -> SearchResultRespons
         language=language_value,
         source=result.source,
         metadata=result.metadata or {},  # v2.1.1: 如果为 None，使用空字典
-        quality_score=result.quality_score,
-        relevance_score=result.relevance_score,
+        # v2.3.1: 移除评分字段
         search_position=result.search_position,
         # AI增强数据（实际使用的字段）
         content_zh=result.content_zh,

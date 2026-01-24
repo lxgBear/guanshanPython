@@ -240,7 +240,6 @@ class SearchResult(BaseModel):
     source: str = Field(default="web", description="来源类型 (web/news/images)")
     source_name: str = Field(default="", description="媒体来源英文名称 (如 BBC, CNN)")
     keyword: str = Field(default="", description="来源关键词")
-    score: float = Field(default=0.0, description="相关性评分")
     source_domain: str = Field(default="", description="来源域名")
     layer_name: str = Field(default="", description="媒体来源中文名称 (如 英国广播公司新闻)")
     published_date: str | None = Field(default=None, description="发布日期")

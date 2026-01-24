@@ -76,10 +76,6 @@ class InstantSearchResult:
     language: Optional[str] = None  # 语言
     metadata: Dict[str, Any] = field(default_factory=dict)  # 扩展元数据
 
-    # 质量指标
-    relevance_score: float = 0.0  # 相关性分数
-    quality_score: float = 0.0  # 质量分数
-
     # v1.4.0 数据源管理字段
     status: InstantSearchResultStatus = InstantSearchResultStatus.PENDING  # 数据状态
 
@@ -196,8 +192,6 @@ class InstantSearchResult:
             "author": self.author,
             "language": self.language,
             "metadata": self.metadata,
-            "relevance_score": self.relevance_score,
-            "quality_score": self.quality_score,
             "first_found_at": self.first_found_at.isoformat() if self.first_found_at else None,
             "last_found_at": self.last_found_at.isoformat() if self.last_found_at else None,
             "found_count": self.found_count,
@@ -214,7 +208,6 @@ class InstantSearchResult:
             "url": self.url,
             "snippet": self.snippet or (self.markdown_content[:200] if self.markdown_content else ""),
             "source": self.source,
-            "relevance_score": self.relevance_score,
             "published_date": self.published_date.isoformat() if self.published_date else None,
             "found_count": self.found_count,
             "unique_searches": self.unique_searches
@@ -258,9 +251,7 @@ def create_instant_search_result_from_firecrawl(
         published_date=metadata.get("publishedDate"),
         author=metadata.get("author"),
         language=metadata.get("language"),
-        metadata=metadata,
-        relevance_score=metadata.get("relevanceScore", 0.0),
-        quality_score=metadata.get("qualityScore", 0.0)
+        metadata=metadata
     )
 
     return result

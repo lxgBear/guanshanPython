@@ -102,12 +102,8 @@ class SearchResult:
     # 分层信息
     layer: int = 0                    # 0-4
     layer_name: str = "官方来源"       # "官方来源", "主流媒体" 等
-    source_tier: int = 1              # 1-6 可信度层级
+    source_tier: int = 1              # 1-6 可信度���级
 
-    # 评分
-    relevance_score: float = 0.5      # 相关性分数
-    credibility_score: float = 0.5    # 可信度分数
-    final_score: float = 0.0          # 综合分数
 
     # 内容
     markdown_content: Optional[str] = None
@@ -128,9 +124,6 @@ class SearchResult:
             "layer": self.layer,
             "layer_name": self.layer_name,
             "source_tier": self.source_tier,
-            "relevance_score": self.relevance_score,
-            "credibility_score": self.credibility_score,
-            "final_score": self.final_score,
             "markdown_content": self.markdown_content,
             "html_content": self.html_content,
             "language": self.language,
@@ -153,9 +146,6 @@ class SearchResult:
             layer=data.get("layer", 0),
             layer_name=data.get("layer_name", "官方来源"),
             source_tier=data.get("source_tier", 1),
-            relevance_score=data.get("relevance_score", 0.5),
-            credibility_score=data.get("credibility_score", 0.5),
-            final_score=data.get("final_score", 0.0),
             markdown_content=data.get("markdown_content"),
             html_content=data.get("html_content"),
             language=data.get("language", "en"),

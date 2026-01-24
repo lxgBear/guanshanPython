@@ -28,12 +28,11 @@ from src.core.domain.entities.search_result import ResultStatus
 class SourceInfo:
     """结果来源信息
 
-    表示该结果出现在哪个子查询中的位置和评分
+    表示该结果出现在哪个子查询中的位置
     """
     query: str = ""  # 子查询文本
     task_id: str = ""  # 子搜索任务ID
     position: int = 0  # 在该查询结果中的位置（1-based）
-    relevance_score: float = 0.0  # 在该查询中的相关性评分
 
 
 @dataclass
@@ -65,17 +64,12 @@ class AggregatedSearchResult:
 
     # ========== 聚合评分字段 ==========
     composite_score: float = 0.0  # 综合评分（多源加权计算）
-
-    # 分项评分（用于透明度和调试）
-    avg_relevance_score: float = 0.0  # 平均相关性评分
-    avg_quality_score: float = 0.0  # 平均质量评分
     position_score: float = 0.0  # 位置评分（越靠前越高）
     multi_source_score: float = 0.0  # 多源评分（出现次数越多越高）
 
     # ========== 多源信息 ==========
     sources: List[SourceInfo] = field(default_factory=list)  # 所有来源列表
     source_count: int = 0  # 出现在多少个查询中
-    multi_source_bonus: bool = False  # 是否获得多源奖励（source_count > 1）
 
     # ========== 元数据 ==========
     result_type: str = "web"  # 结果类型（web/pdf/video等）
@@ -112,8 +106,6 @@ class AggregatedSearchResult:
 
             # 聚合评分
             "composite_score": self.composite_score,
-            "avg_relevance_score": self.avg_relevance_score,
-            "avg_quality_score": self.avg_quality_score,
             "position_score": self.position_score,
             "multi_source_score": self.multi_source_score,
 
@@ -123,12 +115,10 @@ class AggregatedSearchResult:
                     "query": s.query,
                     "task_id": s.task_id,
                     "position": s.position,
-                    "relevance_score": s.relevance_score
                 }
                 for s in self.sources
             ],
             "source_count": self.source_count,
-            "multi_source_bonus": self.multi_source_bonus,
 
             # 元数据
             "result_type": self.result_type,
@@ -157,7 +147,6 @@ class AggregatedSearchResult:
                 query=s.get("query", ""),
                 task_id=s.get("task_id", ""),
                 position=s.get("position", 0),
-                relevance_score=s.get("relevance_score", 0.0)
             )
             for s in data.get("sources", [])
         ]
@@ -196,15 +185,12 @@ class AggregatedSearchResult:
 
             # 聚合评分
             composite_score=data.get("composite_score", 0.0),
-            avg_relevance_score=data.get("avg_relevance_score", 0.0),
-            avg_quality_score=data.get("avg_quality_score", 0.0),
             position_score=data.get("position_score", 0.0),
             multi_source_score=data.get("multi_source_score", 0.0),
 
             # 多源信息
             sources=sources,
             source_count=data.get("source_count", 0),
-            multi_source_bonus=data.get("multi_source_bonus", False),
 
             # 元数据
             result_type=data.get("result_type", "web"),
@@ -223,18 +209,16 @@ class AggregatedSearchResult:
     def update_composite_score(self):
         """重新计算综合评分
 
-        综合评分公式：
-        composite_score = 0.4 * multi_source_score + 0.4 * avg_relevance_score + 0.2 * position_score
+        v4.8.1 综合评分公式更新（移除相关性评分）：
+        composite_score = 0.6 * multi_source_score + 0.4 * position_score
 
         权重说明：
-        - multi_source_score (40%): 出现在多个查询中的结果更重要
-        - avg_relevance_score (40%): 平均相关性评分
-        - position_score (20%): 原始搜索结果中的位置
+        - multi_source_score (60%): 出现在多个查询中的结果更重要
+        - position_score (40%): 原始搜索结果中的位置
         """
         self.composite_score = (
-            0.4 * self.multi_source_score +
-            0.4 * self.avg_relevance_score +
-            0.2 * self.position_score
+            0.6 * self.multi_source_score +
+            0.4 * self.position_score
         )
 
         # 更新时间戳

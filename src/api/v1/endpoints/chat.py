@@ -196,7 +196,6 @@ class SourceDetail(BaseModel):
     mongo_id: str = Field(..., description="MongoDB ID")
     title: str = Field(..., description="标题")
     source: str = Field(..., description="来源：新闻网站名称 或 '用户上传'")
-    score: float = Field(..., description="相关性评分")
     category: CategoryModel = Field(..., description="分类信息")
     publish_time: str = Field(..., description="发布时间")
     preview: str = Field(..., description="内容预览")
@@ -558,7 +557,6 @@ async def chat_sync_endpoint(
                     mongo_id=sr.get('mongo_id', sr.get('id', '')),
                     title=sr.get('title', ''),
                     source=sr.get('source', sr.get('source_domain', '')),
-                    score=sr.get('score', sr.get('final_score', 0.0)),
                     category=CategoryModel(**category_data),
                     publish_time=sr.get('publish_time', sr.get('published_date', '未知时间')),
                     preview=sr.get('preview', sr.get('snippet', ''))[:200] if sr.get('preview') or sr.get('snippet') else '',
@@ -1136,7 +1134,6 @@ async def confirm_search_elements(
                 mongo_id=r.get("mongo_id", r.get("id", "")),
                 title=r.get("title", ""),
                 source=r.get("source", r.get("source_domain", "")),
-                score=r.get("score", r.get("final_score", 0.0)),
                 category=CategoryModel(**category_data),
                 publish_time=r.get("publish_time", r.get("published_date", "未知时间")),
                 preview=r.get("preview", r.get("snippet", ""))[:200] if r.get("preview") or r.get("snippet") else "",

@@ -100,19 +100,18 @@ class ResultAggregator:
                     "query": item["query"],
                     "task_id": item["task_id"],
                     "position": item["mapping"].search_position,
-                    "relevance_score": item["mapping"].relevance_score
+                    # v4.8.1: 移除评分字段
                 }
                 for item in result_items
             ]
 
             # 计算综合评分
             positions = [item["mapping"].search_position for item in result_items]
-            relevance_scores = [item["mapping"].relevance_score for item in result_items]
+            # v4.8.1: 移除相关性评分
 
             composite_score = self.calculate_composite_score(
                 source_count=len(sources),
                 positions=positions,
-                relevance_scores=relevance_scores,
                 total_queries=total_searches
             )
 
@@ -181,27 +180,24 @@ class ResultAggregator:
         self,
         source_count: int,
         positions: List[int],
-        relevance_scores: List[float],
+        # v4.8.1: 移除相关性评分参数
         total_queries: int
     ) -> float:
         """
         计算综合评分
 
-        评分公式：
+        v4.8.1 评分公式更新（移除相关性评分）：
         composite_score =
-            0.4 * multi_source_score +  # 多源得分
-            0.4 * relevance_score +      # 相关性得分
-            0.2 * position_score         # 位置得分
+            0.6 * multi_source_score +  # 多源得分
+            0.4 * position_score         # 位置得分
 
         其中：
         - multi_source_score = (出现次数 / 总子查询数)
-        - relevance_score = 平均相关性分数
         - position_score = 1 / (1 + avg_position)
 
         Args:
             source_count: 出现在多少个子查询中
             positions: 在各个子查询中的位置
-            relevance_scores: 在各个子查询中的相关性分数
             total_queries: 总查询数
 
         Returns:
@@ -210,18 +206,17 @@ class ResultAggregator:
         # 多源得分：出现在越多查询中，得分越高
         multi_source_score = source_count / total_queries
 
-        # 相关性得分：平均相关性
-        avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+        # v4.8.1: 移除相关性得分
 
         # 位置得分：平均排名越靠前，得分越高
         avg_position = sum(positions) / len(positions) if positions else 1
         position_score = 1.0 / (1.0 + avg_position)
 
-        # 综合评分
+        # 综合评分（v4.8.1: 调整权重）
         composite_score = (
-            0.4 * multi_source_score +
-            0.4 * avg_relevance +
-            0.2 * position_score
+            0.6 * multi_source_score +
+            # 0.4 * avg_relevance +
+            0.4 * position_score
         )
 
         return round(composite_score, 4)
@@ -311,7 +306,7 @@ class ResultAggregator:
                 formatted_results.append({
                     **result.to_dict(),
                     "search_position": mapping.search_position,
-                    "relevance_score": mapping.relevance_score,
+                    # v4.8.1: 移除评分字段
                     "is_first_discovery": mapping.is_first_discovery
                 })
 

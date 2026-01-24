@@ -26,12 +26,20 @@ class ResultStatus(Enum):
     DELETED = "deleted"         # 删除：软删除
 
 
+class DataSourceType(Enum):
+    """数据来源类型枚举（v2.2.0）用于区分数据来源"""
+    SCHEDULED_CRAWL = "scheduled_crawl"  # 定时搜索爬取
+    URL_CRAWL = "url_crawl"              # 用户提交URL爬取
+    USER_ADDED = "user_added"            # 用户手动添加
+
+
 @dataclass
 class SearchResult:
     """搜索结果实体
 
     v1.5.0 改进：统一使用雪花算法ID
     v2.0.0 改进：添加多用户数据隔离支持
+    v2.2.0 改进：添加数据来源类型区分（scheduled_crawl/url_crawl/user_added）
     """
     # 主键（雪花算法ID，全局唯一）
     id: str = field(default_factory=generate_string_id)
@@ -41,6 +49,9 @@ class SearchResult:
     # v2.0.0: 多用户数据隔离
     user_id: str = ""  # 所属用户ID（用于数据隔离查询）
     created_by: str = ""  # 创建者用户ID（记录操作者）
+
+    # v2.2.0: 数据来源类型
+    data_source_type: DataSourceType = field(default_factory=lambda: DataSourceType.SCHEDULED_CRAWL)  # 数据来源类型
 
     # 搜索结果核心数据
     title: str = ""
@@ -70,13 +81,6 @@ class SearchResult:
     # 保留原metadata字段以支持扩展元数据(但应过滤冗余字段)
     metadata: Dict[str, Any] = field(default_factory=dict)  # 精简的扩展元数据
 
-    # 注: 已移除以下字段以优化存储:
-    # - raw_data: 原始响应数据(~850KB) → 已删除,通过独立字段替代
-    
-    # 质量指标
-    relevance_score: float = 0.0  # 相关性分数
-    quality_score: float = 0.0    # 质量分数
-    
     # 状态与时间
     status: ResultStatus = ResultStatus.PENDING
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -127,7 +131,6 @@ class SearchResult:
             "url": self.url,
             "snippet": self.snippet or (self.markdown_content[:200] if self.markdown_content else ""),
             "source": self.source,
-            "relevance_score": self.relevance_score,
             "published_date": self.published_date.isoformat() if self.published_date else None,
             "is_test_data": self.is_test_data
         }

@@ -22,9 +22,6 @@ class SearchResultItem:
         content: 完整内容（可选）
         layer: 搜索层级 (0-4)
         layer_name: 层级名称
-        score: 综合评分
-        relevance_score: 相关性评分
-        credibility_score: 可信度评分
         source_domain: 来源域名
         source_tier: 来源等级
         language: 语言
@@ -37,9 +34,6 @@ class SearchResultItem:
     content: Optional[str] = None
     layer: int = 0
     layer_name: str = ""
-    score: float = 0.0
-    relevance_score: float = 0.0
-    credibility_score: float = 0.0
     source_domain: str = ""
     source_tier: int = 1
     language: str = "zh"
@@ -55,9 +49,6 @@ class SearchResultItem:
             "content": self.content,
             "layer": self.layer,
             "layer_name": self.layer_name,
-            "score": self.score,
-            "relevance_score": self.relevance_score,
-            "credibility_score": self.credibility_score,
             "source_domain": self.source_domain,
             "source_tier": self.source_tier,
             "language": self.language,
@@ -75,9 +66,6 @@ class SearchResultItem:
             content=data.get("content") or data.get("markdown_content"),
             layer=data.get("layer", 0),
             layer_name=data.get("layer_name", ""),
-            score=data.get("score") or data.get("final_score", 0.0),
-            relevance_score=data.get("relevance_score", 0.0),
-            credibility_score=data.get("credibility_score", 0.0),
             source_domain=data.get("source_domain", ""),
             source_tier=data.get("source_tier", 1),
             language=data.get("language", "zh"),

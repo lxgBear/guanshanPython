@@ -24,6 +24,7 @@ from src.api.v1.endpoints import upload
 from src.api.v1.endpoints import review
 from src.api.v1.endpoints import langgraph_transfer
 from src.api.v1.endpoints import category_management
+from src.api.v1.endpoints import search_results_manual  # v2.2.0 手动添加数据
 from src.api.v1.endpoints.auth import router as auth_router
 
 # 权限依赖
@@ -72,6 +73,13 @@ api_router.include_router(
     search_results_frontend.router,
     tags=["📊 搜索结果查询 (通用搜索)"],
     dependencies=[Depends(require_permissions("search:basic", "search:advanced"))]
+)
+
+# 手动添加数据 - 需要 info:create 权限 (v2.2.0)
+api_router.include_router(
+    search_results_manual.router,
+    tags=["📝 手动添加数据"],
+    dependencies=[Depends(require_permissions("info:create", "search:basic"))]
 )
 
 # 调度器管理 - 需要 system:config 权限

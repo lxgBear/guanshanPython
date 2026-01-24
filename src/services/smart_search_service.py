@@ -858,12 +858,10 @@ class SmartSearchService:
                             {
                                 "query": s.query,
                                 "task_id": s.task_id,
-                                "position": s.position,
-                                "relevance_score": s.relevance_score
+                                "position": s.position
                             }
                             for s in result.sources
                         ],
-                        "multi_source_bonus": result.multi_source_bonus,
                         "source_count": result.source_count
                     })
 
@@ -944,15 +942,6 @@ class SmartSearchService:
         aggregated_entities = []
 
         for item in scored_results:
-            # item 结构：
-            # {
-            #   "result": InstantSearchResult,
-            #   "composite_score": float,
-            #   "sources": [{"query", "task_id", "position", "relevance_score"}, ...],
-            #   "multi_source": bool,
-            #   "source_count": int
-            # }
-
             result_data = item["result"]  # InstantSearchResult 实体
 
             # 构建 SourceInfo 列表
@@ -960,17 +949,12 @@ class SmartSearchService:
                 SourceInfo(
                     query=s["query"],
                     task_id=s["task_id"],
-                    position=s["position"],
-                    relevance_score=s["relevance_score"]
+                    position=s["position"]
                 )
                 for s in item["sources"]
             ]
 
-            # 计算分项评分
-            relevance_scores = [s.relevance_score for s in sources]
             positions = [s.position for s in sources]
-
-            avg_relevance_score = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
             avg_position = sum(positions) / len(positions) if positions else 1
             position_score = 1.0 / (1.0 + avg_position)
             multi_source_score = item["source_count"] / aggregation_result["stats"]["total_searches"]
@@ -978,33 +962,18 @@ class SmartSearchService:
             # 创建 AggregatedSearchResult 实体
             aggregated_entity = AggregatedSearchResult(
                 smart_task_id=smart_task_id,
-
-                # 基础搜索结果字段（从 InstantSearchResult 复制）
                 title=result_data.title,
                 url=result_data.url,
-                # v2.1.2: 使用 markdown_content（InstantSearchResult 已移除 content 字段）
                 content=result_data.markdown_content or result_data.html_content or "",
                 snippet=result_data.snippet,
-
-                # 聚合评分
                 composite_score=item["composite_score"],
-                avg_relevance_score=avg_relevance_score,
-                avg_quality_score=0.0,  # InstantSearchResult 暂无 quality_score
                 position_score=position_score,
                 multi_source_score=multi_source_score,
-
-                # 多源信息
                 sources=sources,
                 source_count=item["source_count"],
-                multi_source_bonus=item["multi_source"],
-
-                # 元数据（从 InstantSearchResult 复制）
-                # v2.1.2: result_type 映射自 source（InstantSearchResult 使用 source 字段）
                 result_type=result_data.source or "web",
                 language=result_data.language,
                 published_date=result_data.published_date,
-
-                # 状态（继承原始结果状态）
                 status=result_data.status
             )
 

@@ -171,10 +171,6 @@ class NLSearchResultAdapter:
             # 保留原始 metadata（精简版）
             metadata=NLSearchResultAdapter._filter_metadata(metadata),
 
-            # 评分数据
-            relevance_score=float(nl_result.get("score", 0.0)),
-            quality_score=float(nl_result.get("score", 0.0)),  # 使用相同分数
-
             # 状态
             status=ResultStatus.PENDING,  # 新结果默认为待处理
             created_at=datetime.utcnow(),

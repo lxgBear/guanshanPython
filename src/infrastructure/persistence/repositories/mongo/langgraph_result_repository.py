@@ -5,8 +5,10 @@ v4.5.2 新增：专门用于 LangGraph 智能搜索系统的数据访问实现
 
 与 MongoResultRepository 的关系：
 - 使用独立的 MongoDB 集合：langgraph_search_results
-- 支持 LangGraph 特定字段：layer, layer_name, source_tier, credibility_score, final_score, category
+- 支持 LangGraph 特定字段：layer, layer_name, source_tier, category
 - 实现与 search_results 的数据隔离
+
+v4.8.0: 移除评分字段存储 - 评分在内存中计算，不需要持久化
 """
 
 from datetime import datetime
@@ -44,7 +46,11 @@ class MongoLangGraphResultRepository:
         return db[self.collection_name]
 
     def _result_to_dict(self, result: LangGraphSearchResult) -> Dict[str, Any]:
-        """将 LangGraph 结果实体转换为 MongoDB 文档"""
+        """将 LangGraph 结果实体转换为 MongoDB 文档
+
+        v4.8.0: 移除评分字段存储 - relevance_score, quality_score, credibility_score,
+                final_score, multi_source_bonus, recency_bonus, layer_weight 不再存入数据库
+        """
         # 继承父类的基础字段
         base_dict = {
             "_id": str(result.id),
@@ -69,8 +75,7 @@ class MongoLangGraphResultRepository:
             "search_position": result.search_position,
             "content_hash": result.content_hash,
             "metadata": result.metadata,
-            "relevance_score": result.relevance_score,
-            "quality_score": result.quality_score,
+            # v4.8.0: 移除评分字段存储
             "status": result.status.value if isinstance(result.status, ResultStatus) else result.status,
             "created_at": result.created_at,
             "processed_at": result.processed_at,
@@ -79,12 +84,8 @@ class MongoLangGraphResultRepository:
             "layer": result.layer,
             "layer_name": result.layer_name,
             "source_tier": result.source_tier,
-            "credibility_score": result.credibility_score,
-            "final_score": result.final_score,
+            # v4.8.0: 移除评分字段存储
             "category": result.category,
-            "multi_source_bonus": result.multi_source_bonus,
-            "recency_bonus": result.recency_bonus,
-            "layer_weight": result.layer_weight,
             # v4.5.3: 数据来源分类
             "data_source_type": result.data_source_type,
             # v4.5.3: AI 处理状态标记
@@ -103,7 +104,10 @@ class MongoLangGraphResultRepository:
         return base_dict
 
     def _dict_to_result(self, data: Dict[str, Any]) -> LangGraphSearchResult:
-        """将 MongoDB 文档转换为 LangGraph 结果实体"""
+        """将 MongoDB 文档转换为 LangGraph 结果实体
+
+        v4.8.0: 评分字段从数据库读取时使用默认值（向后兼容旧数据）
+        """
         # 处理状态
         status_value = data.get("status", "pending")
         try:
@@ -142,8 +146,7 @@ class MongoLangGraphResultRepository:
             search_position=data.get("search_position"),
             content_hash=data.get("content_hash"),
             metadata=data.get("metadata", {}),
-            relevance_score=data.get("relevance_score", 0.0),
-            quality_score=data.get("quality_score", 0.0),
+            # v4.8.1: 评分字段已删除，不再从数据库读取
             status=status,
             created_at=data.get("created_at", datetime.utcnow()),
             processed_at=data.get("processed_at"),
@@ -152,12 +155,8 @@ class MongoLangGraphResultRepository:
             layer=data.get("layer", 0),
             layer_name=data.get("layer_name", ""),
             source_tier=data.get("source_tier", 1),
-            credibility_score=data.get("credibility_score", 0.0),
-            final_score=data.get("final_score", 0.0),
+            # v4.8.1: LangGraph 评分字段已删除，不再从数据库读取
             category=data.get("category"),
-            multi_source_bonus=data.get("multi_source_bonus", 0.0),
-            recency_bonus=data.get("recency_bonus", 0.0),
-            layer_weight=data.get("layer_weight", 0.0),
             # v4.5.3: 数据来源分类
             data_source_type=data.get("data_source_type", "langgraph"),
             # v4.5.3: AI 处理状态标记
@@ -423,7 +422,6 @@ class MongoLangGraphResultRepository:
         """根据任务 ID 查询搜索结果"""
         try:
             collection = await self._get_collection()
-            cursor = collection.find({"task_id": task_id}).sort("final_score", -1)
 
             if limit:
                 cursor = cursor.limit(limit)
@@ -448,7 +446,6 @@ class MongoLangGraphResultRepository:
         try:
             collection = await self._get_collection()
             query = {"task_id": task_id, "layer": layer}
-            cursor = collection.find(query).sort("final_score", -1)
 
             if limit:
                 cursor = cursor.limit(limit)
@@ -719,23 +716,8 @@ class MongoLangGraphResultRepository:
                 by_layer[doc["_id"]] = doc["count"]
 
             # 平均分数
-            pipeline_scores = [
-                {"$match": {"task_id": task_id}},
-                {"$group": {
-                    "_id": None,
-                    "avg_relevance": {"$avg": "$relevance_score"},
-                    "avg_credibility": {"$avg": "$credibility_score"},
-                    "avg_final": {"$avg": "$final_score"},
-                }}
-            ]
-
-            avg_scores = {"relevance": 0.0, "credibility": 0.0, "final": 0.0}
-            async for doc in collection.aggregate(pipeline_scores):
-                avg_scores = {
-                    "relevance": round(doc.get("avg_relevance", 0.0), 3),
-                    "credibility": round(doc.get("avg_credibility", 0.0), 3),
-                    "final": round(doc.get("avg_final", 0.0), 3),
-                }
+            # 保留 avg_scores 结构以保持向后兼容，但返回空值
+            avg_scores = {"relevance": None, "credibility": None, "final": None}
 
             # 顶级来源
             pipeline_sources = [
@@ -836,9 +818,6 @@ class MongoLangGraphResultRepository:
                     "result_count": {"$sum": 1},
                     "created_at": {"$min": "$created_at"},
                     "updated_at": {"$max": "$created_at"},
-                    "avg_final_score": {"$avg": "$final_score"},
-                    "avg_relevance_score": {"$avg": "$relevance_score"},
-                    "avg_credibility_score": {"$avg": "$credibility_score"},
                     # 层级分布
                     "layer_0_count": {"$sum": {"$cond": [{"$eq": ["$layer", 0]}, 1, 0]}},
                     "layer_1_count": {"$sum": {"$cond": [{"$eq": ["$layer", 1]}, 1, 0]}},
@@ -870,6 +849,7 @@ class MongoLangGraphResultRepository:
             tasks = []
             async for doc in collection.aggregate(pipeline):
                 # 构建统计信息
+                # v4.8.0: avg_scores 改为空值，评分字段不再存储
                 statistics = {
                     "by_layer": {
                         0: doc.get("layer_0_count", 0),
@@ -879,9 +859,9 @@ class MongoLangGraphResultRepository:
                         4: doc.get("layer_4_count", 0),
                     },
                     "avg_scores": {
-                        "final": round(doc.get("avg_final_score", 0) or 0, 3),
-                        "relevance": round(doc.get("avg_relevance_score", 0) or 0, 3),
-                        "credibility": round(doc.get("avg_credibility_score", 0) or 0, 3),
+                        "final": None,
+                        "relevance": None,
+                        "credibility": None,
                     }
                 }
 
@@ -924,14 +904,13 @@ class MongoLangGraphResultRepository:
         conversation_id: Optional[str] = None,  # v4.6.0: 支持按 conversation_id 查询
         keyword: Optional[str] = None,
         layer: Optional[int] = None,
-        min_score: Optional[float] = None,
+        min_score: Optional[float] = None,  # v4.8.0: 保留参数兼容性，但不再使用
         translator_status: Optional[str] = None,
         only_translated: bool = False,
         exclude_transferred: bool = False,
         langgraph_status: Optional[List[str]] = None,  # v4.7.0: 处理状态筛选
         page: int = 1,
         page_size: int = 20,
-        sort_by: str = "final_score",
         sort_order: str = "desc"
     ) -> tuple[List[LangGraphSearchResult], int]:
         """分页查询 LangGraph 搜索结果（支持模糊搜索）
@@ -940,20 +919,21 @@ class MongoLangGraphResultRepository:
         v4.5.5 更新: 新增 translator_status, only_translated, exclude_transferred 筛选
         v4.6.0 更新: 支持按 conversation_id 查询（与 task_id 二选一）
         v4.7.0 更新: 新增 langgraph_status 筛选（支持多选）
+        v4.8.0 更新: 移除评分字段排序，改用 created_at
 
         Args:
             task_id: 任务 ID（与 conversation_id 二选一）
             conversation_id: 对话会话 ID（与 task_id 二选一，用于前端查询历史会话的搜索结果）
             keyword: 模糊搜索关键词（搜索 title）
             layer: 筛选层级 (0-4)
-            min_score: 最低分数筛选
+            min_score: 最低分数筛选（v4.8.0: 保留参数兼容性，但不再使用）
             translator_status: 翻译状态筛选 (pending/processing/completed/failed)
             only_translated: 仅返回 translator_status 有值的记录
             exclude_transferred: 排除已转移到 news_results 的记录
             langgraph_status: 处理状态筛选列表 (pending/transferred/discarded)，支持多选
             page: 页码（从 1 开始）
             page_size: 每页数量（最大 100）
-            sort_by: 排序字段（final_score, created_at, relevance_score）
+            sort_by: 排序字段（created_at, layer, source_tier）
             sort_order: 排序方向（asc, desc）
 
         Returns:
@@ -984,9 +964,7 @@ class MongoLangGraphResultRepository:
             if layer is not None:
                 query["layer"] = layer
 
-            # 分数筛选
-            if min_score is not None:
-                query["final_score"] = {"$gte": min_score}
+            # if min_score is not None:
 
             # v4.5.5: 翻译状态筛选
             if translator_status:
@@ -1019,10 +997,10 @@ class MongoLangGraphResultRepository:
             # 排序方向
             sort_direction = -1 if sort_order == "desc" else 1
 
-            # 验证排序字段
-            valid_sort_fields = ["final_score", "created_at", "relevance_score", "credibility_score", "layer"]
+            # v4.8.0: 验证排序字段（移除评分字段）
+            valid_sort_fields = ["created_at", "layer", "source_tier"]
             if sort_by not in valid_sort_fields:
-                sort_by = "final_score"
+                sort_by = "created_at"
 
             # 计算总数
             total = await collection.count_documents(query)

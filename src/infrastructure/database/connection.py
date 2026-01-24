@@ -453,7 +453,6 @@ async def create_indexes():
         # LangGraph 特定字段索引
         await langgraph_search_results.create_index("layer", name="idx_lg_layer")
         await langgraph_search_results.create_index("source_tier", name="idx_lg_source_tier")
-        await langgraph_search_results.create_index("final_score", name="idx_lg_final_score")
 
         # v4.5.3: 数据来源分类和 AI 处理状态索引
         await langgraph_search_results.create_index("data_source_type", name="idx_lg_data_source_type")
@@ -466,8 +465,8 @@ async def create_indexes():
             name="idx_lg_task_layer"
         )
         await langgraph_search_results.create_index(
-            [("task_id", 1), ("final_score", -1)],
-            name="idx_lg_task_score"
+            [("task_id", 1), ("created_at", -1)],
+            name="idx_lg_task_created"
         )
         await langgraph_search_results.create_index(
             [("user_id", 1), ("created_at", -1)],

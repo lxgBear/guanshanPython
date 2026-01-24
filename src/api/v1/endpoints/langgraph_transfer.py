@@ -187,10 +187,6 @@ class LangGraphResultItem(BaseModel):
     layer: int = Field(0, description="搜索层级 (0-4)")
     layer_name: str = Field("", description="层级名称")
     source_tier: int = Field(1, description="来源可信度等级 (1-6)")
-    # 评分
-    relevance_score: float = Field(0.0, description="相关性分数")
-    credibility_score: float = Field(0.0, description="可信度分数")
-    final_score: float = Field(0.0, description="综合分数")
     # 内容
     has_markdown_content: bool = Field(False, description="是否有 Markdown 内容")
     has_html_content: bool = Field(False, description="是否有 HTML 内容")
@@ -533,7 +529,7 @@ async def get_langgraph_results(
     langgraph_status: Optional[str] = Query(None, description="处理状态筛选，多选用逗号分隔 (pending,transferred,discarded)"),
     page: int = Query(1, ge=1, description="页码（从 1 开始）"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量（最大 100）"),
-    sort_by: str = Query("final_score", description="排序字段"),
+    sort_by: str = Query("created_at", description="排序字段 (created_at, layer, source_tier)"),
     sort_order: str = Query("desc", description="排序方向 (asc/desc)"),
     include_content: bool = Query(True, description="是否包含完整内容（markdown_content, html_content）"),
     current_user: Dict[str, Any] = Depends(require_permissions(["langgraph:read", "search:basic"]))
@@ -545,7 +541,9 @@ async def get_langgraph_results(
     v4.6.0 更新: 新增 conversation_id 参数，支持按对话会话查询
     v4.7.0 更新: 新增 langgraph_status 参数，支持按处理状态筛选
 
-    支持按 task_id 或 conversation_id 查询，可选模糊搜索、层级筛选、分数筛选、翻译状态筛选、处理状态筛选。
+    支持按 task_id 或 conversation_id 查询，可选模糊搜索、层级筛选、翻译状态筛选、处理状态筛选。
+
+    v4.8.1 更新: 移除评分字段返回和排序，改用 created_at 排序
 
     权限: langgraph:read 或 search:basic
 
@@ -554,14 +552,14 @@ async def get_langgraph_results(
         conversation_id: 对话会话 ID（与 task_id 二选一，用于前端查询历史会话的搜索结果）
         keyword: 模糊搜索关键词（搜索 title）
         layer: 筛选层级 (0-4)
-        min_score: 最低分数筛选
+        min_score: 最低分数筛选（保留参数兼容性，但不再使用）
         translator_status: 翻译状态筛选 (pending/processing/completed/failed)
         only_translated: 仅返回 translator_status 有值的记录
         exclude_transferred: 排除已转移到 news_results 的记录
         langgraph_status: 处理状态筛选，多选用逗号分隔 (pending/transferred/discarded)
         page: 页码
         page_size: 每页数量
-        sort_by: 排序字段 (final_score, created_at, relevance_score, credibility_score, layer)
+        sort_by: 排序字段 (created_at, layer, source_tier)
         sort_order: 排序方向 (asc/desc)
         include_content: 是否包含完整内容
 
@@ -621,9 +619,7 @@ async def get_langgraph_results(
                 layer=r.layer,
                 layer_name=r.layer_name,
                 source_tier=r.source_tier,
-                relevance_score=r.relevance_score,
-                credibility_score=r.credibility_score,
-                final_score=r.final_score,
+                # v4.8.1: 移除评分字段
                 has_markdown_content=bool(r.markdown_content),
                 has_html_content=bool(r.html_content),
                 markdown_content=r.markdown_content if include_content else None,

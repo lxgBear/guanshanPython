@@ -26,13 +26,11 @@ Claude Search Session MongoDB Repository
             "snippet": "...",
             "source_tier": "official",
             "source_tier_label": "官方来源",
-            "credibility_score": 0.95,
             "language": "zh",
             "country": "CN",
             "search_query": "...",
             "published_date": "",
             "time_verified": false,
-            "relevance_score": 1.0,
             "position": 1
         }
     ],

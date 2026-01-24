@@ -240,7 +240,6 @@ async def _execute_crawl_task(task: SearchTask) -> SearchResultBatch:
         markdown_content=crawl_result.markdown[:5000] if crawl_result.markdown else None,
         html_content=crawl_result.html,
         metadata=crawl_result.metadata or {},
-        relevance_score=1.0,  # 直接爬取的页面相关性为100%
         status=ResultStatus.PROCESSED
     )
 

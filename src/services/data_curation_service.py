@@ -946,9 +946,6 @@ class DataCurationService:
             http_status_code=doc.get("http_status_code"),
             search_position=doc.get("search_position"),
             metadata=doc.get("metadata", {}),
-            # 质量指标
-            relevance_score=doc.get("relevance_score", 0.0),
-            quality_score=doc.get("quality_score", 0.0),
             # 状态
             status=status,
             created_at=created_at,
@@ -1014,9 +1011,6 @@ class DataCurationService:
             author=doc.get("author"),
             language=doc.get("language"),
             metadata=doc.get("metadata", {}),
-            # 质量指标
-            relevance_score=doc.get("relevance_score", 0.0),
-            quality_score=doc.get("quality_score", 0.0),
             # 状态
             status=status,
             # 发现统计

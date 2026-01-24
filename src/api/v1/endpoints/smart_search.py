@@ -176,8 +176,7 @@ class AggregatedResultsResponse(BaseModel):
                             {
                                 "query": "缅甸2024年GDP增长数据",
                                 "task_id": "task1",
-                                "position": 1,
-                                "relevance_score": 0.95
+                                "position": 1
                             }
                         ],
                         "multi_source_bonus": True,
@@ -213,8 +212,7 @@ class ByQueryResultsResponse(BaseModel):
                             {
                                 "title": "GDP Report 2024",
                                 "url": "https://example.com",
-                                "search_position": 1,
-                                "relevance_score": 0.95
+                                "search_position": 1
                             }
                         ]
                     }
@@ -386,8 +384,8 @@ async def get_aggregated_results(
     - combined模式：去重后的结果 + 综合评分 + 来源信息
     - by_query模式：按查询分组的结果 + 各查询统计
 
-    综合评分公式：
-    composite_score = 0.4 * multi_source_score + 0.4 * relevance_score + 0.2 * position_score
+    综合评分公式（移除相关性评分）：
+    composite_score = 0.6 * multi_source_score + 0.4 * position_score
     """
     try:
         service = SmartSearchService()
