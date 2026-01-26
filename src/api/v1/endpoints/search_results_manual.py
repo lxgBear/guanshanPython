@@ -16,6 +16,8 @@ from src.infrastructure.crawlers.firecrawl_adapter import FirecrawlAdapter
 from src.core.domain.entities.search_result import SearchResult, ResultStatus, DataSourceType
 from src.infrastructure.id_generator import generate_string_id
 from src.utils.logger import get_logger
+from src.api.dependencies.auth import get_current_user
+from src.core.domain.entities.auth import User
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/search-results", tags=["📝 手动添加数据"])
