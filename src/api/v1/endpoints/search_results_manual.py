@@ -346,3 +346,86 @@ async def crawl_and_add_search_result(
     except Exception as e:
         logger.error(f"URL爬取添加失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"爬取添加失败: {str(e)}")
+
+
+@router.post(
+    "/manual/translated",
+    response_model=ManualAddResponse,
+    summary="手动录入翻译内容",
+    description="用户录入翻译后的内容，入库到 news_results。task_id 自动生成，user_id 从 Token 获取。"
+)
+async def add_translated_content(
+    request: TranslatedContentRequest,
+    current_user: User = Depends(get_current_user),
+    db = Depends(get_db)
+):
+    """手动录入翻译内容
+
+    **功能说明：**
+    - 用户录入翻译后的内容
+    - task_id 使用雪花算法自动生成
+    - user_id/created_by 从 JWT Token 获取
+    - content 完整保存到 snippet 和 markdown_content
+    - 分类信息存入 metadata.category（兼容现有格式）
+
+    **数据流程：**
+    1. 从 Token 获取用户信息
+    2. 生成 task_id（雪花算法）
+    3. 构建 metadata（包含分类、标签、备注）
+    4. 创建 SearchResult 实体
+    5. 保存到数据库
+    """
+    try:
+        # 生成 task_id（雪花算法）
+        task_id = generate_string_id()
+
+        # 构建 metadata（兼容现有分类格式）
+        metadata = {
+            "category": {
+                "大类": request.primary_category,
+                "类别": request.secondary_category,
+                "地域": request.tertiary_category
+            },
+            "tags": request.tags or [],
+            "notes": request.notes,
+            "input_type": "translated"
+        }
+
+        # 创建 SearchResult 实体
+        result = SearchResult(
+            id=generate_string_id(),
+            task_id=task_id,
+            user_id=current_user.id,
+            created_by=current_user.id,
+            title=request.title,
+            url=request.url or "",
+            snippet=request.content,
+            markdown_content=request.content,
+            source="translated",
+            language="zh-CN",
+            published_date=request.published_date,
+            data_source_type=DataSourceType.USER_ADDED,
+            status=ResultStatus.PENDING,
+            metadata=metadata,
+            created_at=datetime.utcnow()
+        )
+
+        # 生成 content_hash
+        result.ensure_content_hash()
+
+        # 保存到数据库
+        await db.search_results.insert_one(result.__dict__)
+
+        logger.info(
+            f"翻译内容录入成功: id={result.id}, title={request.title[:50]}, user={current_user.id}"
+        )
+
+        return ManualAddResponse(
+            success=True,
+            message="翻译内容录入成功",
+            data=search_result_to_dict(result)
+        )
+
+    except Exception as e:
+        logger.error(f"翻译内容录入失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"录入失败: {str(e)}")
