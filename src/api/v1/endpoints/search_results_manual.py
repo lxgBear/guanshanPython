@@ -6,7 +6,7 @@
 - URL爬取添加（用户输入URL，系统自动爬取内容）
 - 数据来源类型标记（user_added/url_crawl/scheduled_crawl）
 """
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel, Field, HttpUrl
@@ -50,6 +50,36 @@ class ManualAddRequest(BaseModel):
                 "language": "zh-CN",
                 "user_id": "user123",
                 "created_by": "user123"
+            }
+        }
+
+
+class TranslatedContentRequest(BaseModel):
+    """手动录入翻译内容请求
+
+    用于用户直接录入翻译后的内容，无需关联已有任务。
+    task_id 和 user_id 由后端自动生成/获取。
+    """
+    title: str = Field(..., description="标题", min_length=1, max_length=500)
+    content: str = Field(..., description="翻译后的内容（完整保存）", min_length=1)
+    url: Optional[str] = Field(None, description="来源URL")
+    published_date: Optional[datetime] = Field(None, description="发布日期")
+    primary_category: Optional[str] = Field(None, description="一级分类（大类）")
+    secondary_category: Optional[str] = Field(None, description="二级分类（类别）")
+    tertiary_category: Optional[str] = Field(None, description="三级分类（地域）")
+    tags: Optional[List[str]] = Field(None, description="自定义标签")
+    notes: Optional[str] = Field(None, description="备注")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "title": "某国安全局发布年度威胁评估报告",
+                "content": "根据最新发布的年度威胁评估报告，该国面临的主要安全威胁包括...",
+                "url": "https://example.com/report",
+                "primary_category": "安全情报",
+                "secondary_category": "类别",
+                "tertiary_category": "东亚",
+                "tags": ["年度报告", "威胁评估"]
             }
         }
 
