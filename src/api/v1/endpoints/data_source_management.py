@@ -29,10 +29,13 @@ router = APIRouter(prefix="/data-sources")
 # ==========================================
 
 class CreateDataSourceRequest(BaseModel):
-    """创建数据源请求"""
+    """创建数据源请求
+
+    注意：created_by 由后端从 JWT Token 获取，不再由前端传递
+    """
     title: str = Field(..., description="数据源标题", min_length=1, max_length=200)
     description: str = Field("", description="数据源描述", max_length=1000)
-    created_by: str = Field(..., description="创建者", min_length=1)
+    # created_by 移除，由后端从 JWT Token 获取
     tags: Optional[List[str]] = Field(default=None, description="标签列表")
     metadata: Optional[dict] = Field(default=None, description="扩展元数据")
     # 分类字段
