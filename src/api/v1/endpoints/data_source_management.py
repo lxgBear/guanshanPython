@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 from src.infrastructure.database.connection import get_mongodb_database
 from src.services.data_curation_service import DataCurationService
 from src.utils.logger import get_logger
-from src.api.dependencies.auth import require_permissions
+from src.api.dependencies.auth import require_permissions, get_current_active_user
+from src.core.domain.entities.auth.user import User
 
 logger = get_logger(__name__)
 
@@ -28,10 +29,13 @@ router = APIRouter(prefix="/data-sources")
 # ==========================================
 
 class CreateDataSourceRequest(BaseModel):
-    """创建数据源请求"""
+    """创建数据源请求
+
+    注意：created_by 由后端从 JWT Token 获取，不再由前端传递
+    """
     title: str = Field(..., description="数据源标题", min_length=1, max_length=200)
     description: str = Field("", description="数据源描述", max_length=1000)
-    created_by: str = Field(..., description="创建者", min_length=1)
+    # created_by 移除，由后端从 JWT Token 获取
     tags: Optional[List[str]] = Field(default=None, description="标签列表")
     metadata: Optional[dict] = Field(default=None, description="扩展元数据")
     # 分类字段
@@ -110,6 +114,7 @@ async def get_data_curation_service():
 @router.post("/", status_code=201, summary="创建数据源")
 async def create_data_source(
     request: CreateDataSourceRequest,
+    current_user: User = Depends(get_current_active_user),
     service: DataCurationService = Depends(get_data_curation_service)
 ):
     """创建新的数据源（草稿状态）
@@ -118,13 +123,13 @@ async def create_data_source(
     - 创建草稿状态的数据源
     - 初始状态：DRAFT
     - 初始数据量：0
+    - created_by 从 JWT Token 自动获取
 
     **请求示例：**
     ```json
     {
       "title": "Python Web开发最佳实践",
       "description": "收集Python Web开发相关的优质资源",
-      "created_by": "user123",
       "tags": ["Python", "Web开发", "最佳实践"]
     }
     ```
@@ -133,7 +138,7 @@ async def create_data_source(
         data_source = await service.create_data_source(
             title=request.title,
             description=request.description,
-            created_by=request.created_by,
+            created_by=current_user.id,  # 从 JWT Token 获取
             tags=request.tags,
             metadata=request.metadata,
             primary_category=request.primary_category,
