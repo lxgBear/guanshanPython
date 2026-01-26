@@ -114,6 +114,7 @@ async def get_data_curation_service():
 @router.post("/", status_code=201, summary="创建数据源")
 async def create_data_source(
     request: CreateDataSourceRequest,
+    current_user: User = Depends(get_current_active_user),
     service: DataCurationService = Depends(get_data_curation_service)
 ):
     """创建新的数据源（草稿状态）
@@ -122,13 +123,13 @@ async def create_data_source(
     - 创建草稿状态的数据源
     - 初始状态：DRAFT
     - 初始数据量：0
+    - created_by 从 JWT Token 自动获取
 
     **请求示例：**
     ```json
     {
       "title": "Python Web开发最佳实践",
       "description": "收集Python Web开发相关的优质资源",
-      "created_by": "user123",
       "tags": ["Python", "Web开发", "最佳实践"]
     }
     ```
@@ -137,7 +138,7 @@ async def create_data_source(
         data_source = await service.create_data_source(
             title=request.title,
             description=request.description,
-            created_by=request.created_by,
+            created_by=current_user.id,  # 从 JWT Token 获取
             tags=request.tags,
             metadata=request.metadata,
             primary_category=request.primary_category,
