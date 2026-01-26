@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 from src.infrastructure.database.connection import get_mongodb_database
 from src.services.data_curation_service import DataCurationService
 from src.utils.logger import get_logger
-from src.api.dependencies.auth import require_permissions
+from src.api.dependencies.auth import require_permissions, get_current_active_user
+from src.core.domain.entities.user import User
 
 logger = get_logger(__name__)
 
