@@ -374,6 +374,18 @@ async def create_search_task(task_data: SearchTaskCreate):
 
         logger.info(f"创建搜索任务: {task.name} (ID: {task.get_id_string()}, 目标网站: {task.target_website})")
 
+        # 将任务添加到调度器（修复：创建任务后需要注册到调度器才能定时执行）
+        if task.is_active:
+            try:
+                scheduler = await get_scheduler()
+                if scheduler.is_running():
+                    await scheduler.add_task(task)
+                    logger.info(f"✅ 任务已添加到调度器: {task.name}")
+                else:
+                    logger.warning(f"⚠️ 调度器未运行，任务未添加到调度器: {task.name}")
+            except Exception as e:
+                logger.warning(f"⚠️ 添加任务到调度器失败（不影响任务创建）: {e}")
+
         # 首次立即执行（如果启用且 execute_immediately=True）
         if task.is_active and task_data.execute_immediately:
             try:
@@ -540,6 +552,16 @@ async def update_search_task(task_id: str, task_data: SearchTaskUpdate):
     await repo.update(task)
 
     logger.info(f"更新搜索任务: {task.name} (ID: {task_id}, 目标网站: {task.target_website})")
+
+    # 同步到调度器（修复：更新任务后需要同步调度器才能应用新的调度配置）
+    try:
+        scheduler = await get_scheduler()
+        if scheduler.is_running():
+            await scheduler.update_task(task)
+            logger.info(f"已同步任务到调度器: {task.name}")
+    except Exception as e:
+        logger.warning(f"同步任务到调度器失败: {e}")
+        # 不影响主流程，继续返回
 
     return task_to_response(task)
 

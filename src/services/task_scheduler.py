@@ -193,12 +193,21 @@ class TaskSchedulerService(ITaskScheduler):
         try:
             repo = await self._get_task_repository()
             
-            # 获取所有活跃任务
-            tasks, _ = await repo.list_tasks(
-                page=1,
-                page_size=1000,
-                is_active=True
-            )
+            # 获取所有活跃任务（使用循环加载避免数量限制）
+            all_tasks = []
+            page = 1
+            page_size = 100
+            while True:
+                tasks_batch, total = await repo.list_tasks(
+                    page=page,
+                    page_size=page_size,
+                    is_active=True
+                )
+                all_tasks.extend(tasks_batch)
+                if len(all_tasks) >= total:
+                    break
+                page += 1
+            tasks = all_tasks
             
             loaded_count = 0
             for task in tasks:
@@ -542,15 +551,20 @@ class TaskSchedulerService(ITaskScheduler):
         }
 
 
-# 全局调度器实例
+# 全局调度器实例和初始化锁
 _scheduler_instance: Optional[TaskSchedulerService] = None
+_scheduler_lock = asyncio.Lock()
 
 
 async def get_scheduler() -> TaskSchedulerService:
-    """获取调度器实例（单例模式）"""
+    """获取调度器实例（线程安全单例模式）"""
     global _scheduler_instance
+    # 双重检查锁定模式优化性能
     if _scheduler_instance is None:
-        _scheduler_instance = TaskSchedulerService()
+        async with _scheduler_lock:
+            # 锁内再次检查，防止竞态条件
+            if _scheduler_instance is None:
+                _scheduler_instance = TaskSchedulerService()
     return _scheduler_instance
 
 
