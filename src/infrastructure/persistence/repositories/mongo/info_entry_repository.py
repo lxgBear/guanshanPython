@@ -3,11 +3,15 @@
 v1.0.0 初始版本：
 - 支持条目的 CRUD 操作
 - 支持从多个数据源获取原始数据并创建条目
+
+v1.1.1 兼容性修复：
+- 所有数据源查询支持 ObjectId 格式（兼容旧数据）
 """
 
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from bson import ObjectId
 
 from src.core.domain.entities.info_entry import (
     InfoEntry,
@@ -153,10 +157,20 @@ class InfoEntryRepository:
             return None
 
     async def _fetch_from_search_results(self, data_id: str) -> Optional[RawDataRef]:
-        """从 search_results 获取数据"""
+        """从 search_results 获取数据
+
+        v1.1.1: 支持多种 ID 格式查询（字符串 _id、ObjectId _id、id 字段）
+        """
         doc = await self.db.search_results.find_one({"_id": data_id})
         if not doc:
-            # 尝试用字符串 ID
+            # 尝试用 ObjectId 格式查询（兼容旧数据）
+            try:
+                oid = ObjectId(data_id)
+                doc = await self.db.search_results.find_one({"_id": oid})
+            except Exception:
+                pass
+        if not doc:
+            # 尝试用 id 字段查询
             doc = await self.db.search_results.find_one({"id": data_id})
         if not doc:
             return None
@@ -195,8 +209,18 @@ class InfoEntryRepository:
         )
 
     async def _fetch_from_instant_search_results(self, data_id: str) -> Optional[RawDataRef]:
-        """从 instant_search_results 获取数据"""
+        """从 instant_search_results 获取数据
+
+        v1.1.1: 支持多种 ID 格式查询（字符串 _id、ObjectId _id）
+        """
         doc = await self.db.instant_search_results.find_one({"_id": data_id})
+        if not doc:
+            # 尝试用 ObjectId 格式查询（兼容旧数据）
+            try:
+                oid = ObjectId(data_id)
+                doc = await self.db.instant_search_results.find_one({"_id": oid})
+            except Exception:
+                pass
         if not doc:
             return None
 
@@ -217,8 +241,18 @@ class InfoEntryRepository:
         )
 
     async def _fetch_from_langgraph_results(self, data_id: str) -> Optional[RawDataRef]:
-        """从 langgraph_search_results 获取数据"""
+        """从 langgraph_search_results 获取数据
+
+        v1.1.1: 支持多种 ID 格式查询（字符串 _id、ObjectId _id）
+        """
         doc = await self.db.langgraph_search_results.find_one({"_id": data_id})
+        if not doc:
+            # 尝试用 ObjectId 格式查询（兼容旧数据）
+            try:
+                oid = ObjectId(data_id)
+                doc = await self.db.langgraph_search_results.find_one({"_id": oid})
+            except Exception:
+                pass
         if not doc:
             return None
 
@@ -244,10 +278,20 @@ class InfoEntryRepository:
         )
 
     async def _fetch_from_file_uploads(self, data_id: str) -> Optional[RawDataRef]:
-        """从 file_uploads 获取数据"""
+        """从 file_uploads 获取数据
+
+        v1.1.1: 支持多种 ID 格式查询（字符串 _id、ObjectId _id、file_id 字段）
+        """
         doc = await self.db.file_uploads.find_one({"_id": data_id})
         if not doc:
-            # 尝试用 file_id
+            # 尝试用 ObjectId 格式查询（兼容旧数据）
+            try:
+                oid = ObjectId(data_id)
+                doc = await self.db.file_uploads.find_one({"_id": oid})
+            except Exception:
+                pass
+        if not doc:
+            # 尝试用 file_id 字段查询
             doc = await self.db.file_uploads.find_one({"file_id": data_id})
         if not doc:
             return None
