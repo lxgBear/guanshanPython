@@ -170,6 +170,10 @@ async def get_unified_results(
         description="排序字段 (created_at/published_date)"
     ),
     sort_order: str = Query("desc", description="排序方向 (asc/desc)"),
+    time_field: str = Query(
+        "created_at",
+        description="时间筛选字段 (created_at=采集时间/published_date=发布时间)"
+    ),
     current_user: User = Depends(get_current_active_user),
     repository: UnifiedResultRepository = Depends(get_unified_repository)
 ):
@@ -241,6 +245,14 @@ async def get_unified_results(
                 detail=f"无效的 sort_order: {sort_order}，可选值: asc, desc"
             )
 
+        # 验证 time_field
+        valid_time_fields = ["created_at", "published_date"]
+        if time_field not in valid_time_fields:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效的 time_field: {time_field}，可选值: {valid_time_fields}"
+            )
+
         # 查询数据
         items, total, statistics = await repository.query_unified_results(
             user_id=current_user.id,
@@ -253,7 +265,8 @@ async def get_unified_results(
             date_end=parsed_date_end,
             task_id=task_id,
             sort_by=sort_by,
-            sort_order=sort_order
+            sort_order=sort_order,
+            time_field=time_field
         )
 
         # 计算总页数

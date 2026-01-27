@@ -135,28 +135,57 @@ class UnifiedResultRepository:
 
         try:
             collection = self.db[task_collection]
-            # 尝试不同的ID字段名（不同集合可能使用不同的字段）
             task_names = {}
 
-            # 先尝试用 task_id 字段查询
+            # 方法1: 使用 id 字段查询（雪花算法ID，SearchTask/InstantSearchTask 使用）
             cursor = collection.find(
-                {"task_id": {"$in": task_ids}},
-                {"task_id": 1, "name": 1, "keyword": 1, "query": 1}
+                {"id": {"$in": task_ids}},
+                {"id": 1, "name": 1, "keyword": 1, "query": 1}
             )
             async for doc in cursor:
-                tid = doc.get("task_id", "")
+                tid = doc.get("id", "")
                 # 优先使用 name，其次是 keyword，最后是 query
                 name = doc.get("name") or doc.get("keyword") or doc.get("query") or ""
                 if tid and name:
                     task_names[tid] = name
 
-            # 如果没找到，尝试用 _id 字段查询（ObjectId 转字符串）
-            if not task_names:
+            # 方法2: 使用 _id 字段直接查询（字符串格式，search_tasks 使用雪花ID作为_id）
+            remaining_ids = [tid for tid in task_ids if tid not in task_names]
+            if remaining_ids:
+                cursor = collection.find(
+                    {"_id": {"$in": remaining_ids}},
+                    {"_id": 1, "name": 1, "keyword": 1, "query": 1}
+                )
+                async for doc in cursor:
+                    tid = str(doc.get("_id", ""))
+                    name = doc.get("name") or doc.get("keyword") or doc.get("query") or ""
+                    if tid and name:
+                        task_names[tid] = name
+
+            # 方法3: 尝试用 task_id 字段查询（某些集合可能使用 task_id）
+            remaining_ids = [tid for tid in task_ids if tid not in task_names]
+            if remaining_ids:
+                cursor = collection.find(
+                    {"task_id": {"$in": remaining_ids}},
+                    {"task_id": 1, "name": 1, "keyword": 1, "query": 1}
+                )
+                async for doc in cursor:
+                    tid = doc.get("task_id", "")
+                    name = doc.get("name") or doc.get("keyword") or doc.get("query") or ""
+                    if tid and name:
+                        task_names[tid] = name
+
+            # 方法4: 尝试用 _id 字段查询（ObjectId 格式，兼容旧数据）
+            remaining_ids = [tid for tid in task_ids if tid not in task_names]
+            if remaining_ids:
                 from bson import ObjectId
                 valid_oids = []
-                for tid in task_ids:
+                oid_to_str = {}
+                for tid in remaining_ids:
                     try:
-                        valid_oids.append(ObjectId(tid))
+                        oid = ObjectId(tid)
+                        valid_oids.append(oid)
+                        oid_to_str[oid] = tid
                     except Exception:
                         pass
 
@@ -166,11 +195,13 @@ class UnifiedResultRepository:
                         {"_id": 1, "name": 1, "keyword": 1, "query": 1}
                     )
                     async for doc in cursor:
-                        tid = str(doc.get("_id", ""))
+                        oid = doc.get("_id")
+                        tid = oid_to_str.get(oid, str(oid))
                         name = doc.get("name") or doc.get("keyword") or doc.get("query") or ""
                         if tid and name:
                             task_names[tid] = name
 
+            logger.debug(f"获取任务名称: collection={task_collection}, ids={task_ids}, found={list(task_names.keys())}")
             return task_names
         except Exception as e:
             logger.warning(f"获取任务名称失败: {e}")
@@ -194,7 +225,8 @@ class UnifiedResultRepository:
         user_id: str,
         keyword: Optional[str] = None,
         time_filter: Optional[Dict] = None,
-        task_id: Optional[str] = None
+        task_id: Optional[str] = None,
+        time_field: str = "created_at"
     ) -> List[Dict]:
         """查询定时任务结果 (search_results)"""
         collection = self.db.search_results
@@ -211,7 +243,8 @@ class UnifiedResultRepository:
             ]
 
         if time_filter:
-            query["created_at"] = time_filter
+            # 根据 time_field 选择筛选字段
+            query[time_field] = time_filter
 
         if task_id:
             query["task_id"] = task_id
@@ -247,6 +280,8 @@ class UnifiedResultRepository:
                 "source_type_name": source_type_name,
                 "origin_site": origin_site,
                 "task_id": str(doc.get("task_id", "")),
+                # v4.28.0: 优先使用冗余存储的 task_name
+                "task_name": doc.get("task_name", ""),
                 "published_date": doc.get("published_date").isoformat() if doc.get("published_date") else None,
                 "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
                 "original_content": raw_content,  # 原始格式（TipTap JSON），用于编辑
@@ -262,7 +297,8 @@ class UnifiedResultRepository:
         user_id: str,
         keyword: Optional[str] = None,
         time_filter: Optional[Dict] = None,
-        task_id: Optional[str] = None
+        task_id: Optional[str] = None,
+        time_field: str = "created_at"
     ) -> List[Dict]:
         """查询智能搜索结果 (instant_search_results)"""
         collection = self.db.instant_search_results
@@ -278,7 +314,9 @@ class UnifiedResultRepository:
             ]
 
         if time_filter:
-            query["first_found_at"] = time_filter
+            # instant_search_results 表使用 first_found_at 作为采集时间
+            db_time_field = "first_found_at" if time_field == "created_at" else time_field
+            query[db_time_field] = time_filter
 
         if task_id:
             query["task_id"] = task_id
@@ -301,6 +339,8 @@ class UnifiedResultRepository:
                 "source_type_name": "智能搜索",
                 "origin_site": origin_site,
                 "task_id": str(doc.get("task_id", "")),
+                # v4.28.0: 优先使用冗余存储的 task_name
+                "task_name": doc.get("task_name", ""),
                 "published_date": doc.get("published_date").isoformat() if isinstance(doc.get("published_date"), datetime) else doc.get("published_date"),
                 "created_at": doc.get("first_found_at").isoformat() if doc.get("first_found_at") else None,
                 "original_content": raw_content,  # 原始格式（TipTap JSON），用于编辑
@@ -316,7 +356,8 @@ class UnifiedResultRepository:
         user_id: str,
         keyword: Optional[str] = None,
         time_filter: Optional[Dict] = None,
-        task_id: Optional[str] = None
+        task_id: Optional[str] = None,
+        time_field: str = "created_at"
     ) -> List[Dict]:
         """查询Chat搜索结果 (langgraph_search_results)"""
         collection = self.db.langgraph_search_results
@@ -333,7 +374,8 @@ class UnifiedResultRepository:
             ]
 
         if time_filter:
-            query["created_at"] = time_filter
+            # 根据 time_field 选择筛选字段
+            query[time_field] = time_filter
 
         if task_id:
             query["task_id"] = task_id
@@ -356,6 +398,8 @@ class UnifiedResultRepository:
                 "source_type_name": "智能搜索",  # 显示名称统一为智能搜索
                 "origin_site": origin_site,
                 "task_id": str(doc.get("task_id", "")),
+                # v4.28.0: 优先使用冗余存储的 task_name
+                "task_name": doc.get("task_name", ""),
                 "published_date": doc.get("published_date").isoformat() if isinstance(doc.get("published_date"), datetime) else doc.get("published_date"),
                 "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
                 "original_content": raw_content,  # 原始格式（TipTap JSON），用于编辑
@@ -371,7 +415,8 @@ class UnifiedResultRepository:
         user_id: str,
         keyword: Optional[str] = None,
         time_filter: Optional[Dict] = None,
-        task_id: Optional[str] = None
+        task_id: Optional[str] = None,
+        time_field: str = "created_at"
     ) -> List[Dict]:
         """查询文件上传数据 (file_uploads)
 
@@ -392,6 +437,7 @@ class UnifiedResultRepository:
             ]
 
         if time_filter:
+            # 文件上传没有 published_date，只使用 created_at
             query["created_at"] = time_filter
 
         cursor = collection.find(query)
@@ -415,6 +461,8 @@ class UnifiedResultRepository:
                 "source_type_name": "文档上传",
                 "origin_site": "本地上传",
                 "task_id": file_id,  # 使用 file_id 作为 task_id
+                # v4.28.0: 文件上传使用文件标题作为 task_name
+                "task_name": title,
                 "published_date": None,
                 "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
                 "original_content": content,  # 原始格式（TipTap JSON），用于编辑
@@ -437,7 +485,8 @@ class UnifiedResultRepository:
         date_end: Optional[datetime] = None,
         task_id: Optional[str] = None,
         sort_by: str = "created_at",
-        sort_order: str = "desc"
+        sort_order: str = "desc",
+        time_field: str = "created_at"
     ) -> Tuple[List[Dict], int, Dict[str, int]]:
         """
         统一查询多个数据源的结果
@@ -454,6 +503,7 @@ class UnifiedResultRepository:
             task_id: 任务ID筛选
             sort_by: 排序字段 (created_at/published_date)
             sort_order: 排序方向 (asc/desc)
+            time_field: 时间筛选字段 (created_at=采集时间/published_date=发布时间)
 
         Returns:
             (items, total, statistics)
@@ -486,19 +536,19 @@ class UnifiedResultRepository:
         for src in sources_to_query:
             try:
                 if src == "scheduled":
-                    results = await self._query_search_results(user_id, keyword, time_filter, task_id)
+                    results = await self._query_search_results(user_id, keyword, time_filter, task_id, time_field)
                     statistics["scheduled"] = len(results)
                     all_results.extend(results)
                 elif src == "smart-search":
-                    results = await self._query_instant_search_results(user_id, keyword, time_filter, task_id)
+                    results = await self._query_instant_search_results(user_id, keyword, time_filter, task_id, time_field)
                     statistics["smart-search"] = len(results)
                     all_results.extend(results)
                 elif src == "chat-search":
-                    results = await self._query_langgraph_results(user_id, keyword, time_filter, task_id)
+                    results = await self._query_langgraph_results(user_id, keyword, time_filter, task_id, time_field)
                     statistics["chat-search"] = len(results)
                     all_results.extend(results)
                 elif src == "upload":
-                    results = await self._query_file_uploads(user_id, keyword, time_filter, task_id)
+                    results = await self._query_file_uploads(user_id, keyword, time_filter, task_id, time_field)
                     statistics["upload"] = len(results)
                     all_results.extend(results)
             except Exception as e:
@@ -526,10 +576,14 @@ class UnifiedResultRepository:
         end_idx = start_idx + page_size
         paginated_results = all_results[start_idx:end_idx]
 
-        # 批量获取任务名称
-        # 按 source_type 分组收集 task_id
+        # v4.28.0: 优先使用结果表中冗余存储的 task_name，仅对缺失的进行回退查询
+        # 收集需要回退查询的 task_id（按 source_type 分组）
         task_ids_by_source: Dict[str, List[str]] = {}
         for item in paginated_results:
+            # 如果已有 task_name，跳过
+            if item.get("task_name"):
+                continue
+
             src_type = item.get("source_type", "")
             task_id = item.get("task_id", "")
             if src_type and task_id:
@@ -538,19 +592,22 @@ class UnifiedResultRepository:
                 if task_id not in task_ids_by_source[src_type]:
                     task_ids_by_source[src_type].append(task_id)
 
-        # 查询各数据源的任务名称
+        # 仅对缺失 task_name 的记录进行回退查询
         all_task_names: Dict[str, str] = {}
-        for src_type, task_ids in task_ids_by_source.items():
-            task_collection = self.SOURCE_TYPE_MAP.get(src_type, {}).get("task_collection")
-            if task_collection:
-                names = await self._get_task_names(task_ids, task_collection)
-                all_task_names.update(names)
+        if task_ids_by_source:
+            for src_type, task_ids in task_ids_by_source.items():
+                task_collection = self.SOURCE_TYPE_MAP.get(src_type, {}).get("task_collection")
+                if task_collection:
+                    names = await self._get_task_names(task_ids, task_collection)
+                    all_task_names.update(names)
 
-        # 填充任务名称并移除内部排序字段
+        # 填充任务名称（仅对缺失的）并移除内部排序字段
         for item in paginated_results:
             item.pop("_sort_date", None)
-            task_id = item.get("task_id", "")
-            item["task_name"] = all_task_names.get(task_id, "")
+            # v4.28.0: 仅在 task_name 为空时使用回退查询结果
+            if not item.get("task_name"):
+                task_id = item.get("task_id", "")
+                item["task_name"] = all_task_names.get(task_id, "")
 
         logger.info(f"查询完成: total={total}, page={page}, returned={len(paginated_results)}")
 
