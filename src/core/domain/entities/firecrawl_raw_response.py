@@ -49,8 +49,13 @@ class FirecrawlRawResponse:
     created_at: datetime = field(default_factory=datetime.utcnow)
 
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典（用于MongoDB存储）"""
+        """转换为字典（用于MongoDB存储）
+
+        Note:
+            使用 id（雪花算法ID）作为 _id，确保ID格式统一
+        """
         return {
+            "_id": self.id,  # 使用雪花算法ID作为主键
             "id": self.id,
             "task_id": self.task_id,
             "search_execution_id": self.search_execution_id,

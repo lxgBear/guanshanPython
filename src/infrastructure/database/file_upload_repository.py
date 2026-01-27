@@ -71,8 +71,12 @@ class MongoFileUploadRepository(IBasicRepository[FileUpload]):
 
         Returns:
             MongoDB文档字典
+
+        Note:
+            使用 file_id（雪花算法ID）作为 _id，确保ID格式统一
         """
         return {
+            "_id": file_upload.file_id,  # 使用雪花算法ID作为主键
             "file_id": file_upload.file_id,
             "original_filename": file_upload.original_filename,
             "stored_filename": file_upload.stored_filename,

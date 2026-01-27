@@ -74,8 +74,12 @@ class MongoDataSourceRepository(IDataSourceRepository):
 
         Returns:
             MongoDB文档字典
+
+        Note:
+            使用 id（雪花算法ID）作为 _id，确保ID格式统一
         """
         return {
+            "_id": data_source.id,  # 使用雪花算法ID作为主键
             "id": data_source.id,
             "title": data_source.title,
             "description": data_source.description,

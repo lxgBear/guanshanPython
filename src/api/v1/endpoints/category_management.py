@@ -14,6 +14,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from src.infrastructure.database.connection import get_mongodb_database
+from src.infrastructure.id_generator import generate_string_id
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -108,9 +109,11 @@ async def ensure_default_categories(db: AsyncIOMotorDatabase):
     collection = await get_collection(db)
     count = await collection.count_documents({})
     if count == 0:
-        # 插入默认分类
+        # 插入默认分类（使用雪花算法ID作为_id）
         for category in DEFAULT_CATEGORY_SYSTEM.values():
-            await collection.insert_one(category.model_dump())
+            doc = category.model_dump()
+            doc["_id"] = generate_string_id()  # 使用雪花算法ID
+            await collection.insert_one(doc)
         logger.info(f"已初始化 {len(DEFAULT_CATEGORY_SYSTEM)} 个默认分类")
 
 
@@ -207,13 +210,15 @@ async def create_primary_category(
         if existing:
             raise HTTPException(status_code=400, detail=f"大类 '{request.primary}' 已存在")
 
-        # 创建新分类
+        # 创建新分类（使用雪花算法ID作为_id）
         category = CategorySystem(
             primary=request.primary,
             secondary_options=request.secondary_options,
             tertiary_options=request.tertiary_options,
         )
-        await collection.insert_one(category.model_dump())
+        doc = category.model_dump()
+        doc["_id"] = generate_string_id()  # 使用雪花算法ID
+        await collection.insert_one(doc)
 
         logger.info(f"创建大类: {request.primary}")
         return CategoryResponse(
@@ -472,9 +477,11 @@ async def reset_to_default(
         # 清空现有分类
         await collection.delete_many({})
 
-        # 插入默认分类
+        # 插入默认分类（使用雪花算法ID作为_id）
         for category in DEFAULT_CATEGORY_SYSTEM.values():
-            await collection.insert_one(category.model_dump())
+            doc = category.model_dump()
+            doc["_id"] = generate_string_id()  # 使用雪花算法ID
+            await collection.insert_one(doc)
 
         logger.info(f"已重置分类体系为默认值，共 {len(DEFAULT_CATEGORY_SYSTEM)} 个大类")
         return CategoryResponse(
