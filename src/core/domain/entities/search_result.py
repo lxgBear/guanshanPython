@@ -8,6 +8,10 @@ v1.5.0 ID系统统一：
 v2.0.0 多用户数据隔离：
 - ✅ 添加 user_id 字段支持多用户隔离
 - ✅ 添加 created_by 字段记录创建者
+
+v4.28.0 任务名称冗余存储：
+- ✅ 添加 task_name 字段冗余存储任务名称
+- ✅ 避免查询时需要 JOIN search_tasks 表
 """
 
 from dataclasses import dataclass, field
@@ -45,6 +49,8 @@ class SearchResult:
     id: str = field(default_factory=generate_string_id)
     # 关联的任务ID（雪花算法ID）
     task_id: str = ""
+    # v4.28.0: 任务名称（冗余存储，来自 search_tasks.name）
+    task_name: Optional[str] = None
 
     # v2.0.0: 多用户数据隔离
     user_id: str = ""  # 所属用户ID（用于数据隔离查询）

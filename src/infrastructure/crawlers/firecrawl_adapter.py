@@ -98,13 +98,27 @@ class FirecrawlAdapter(CrawlerInterface):
             )
 
             # 处理结果（v2 返回 Document 对象）
+            # 将 DocumentMetadata 对象转换为 dict
+            raw_metadata = getattr(result, 'metadata', None)
+            if raw_metadata is not None and not isinstance(raw_metadata, dict):
+                # DocumentMetadata 对象转换为 dict
+                metadata_dict = {}
+                for attr in ['title', 'description', 'language', 'keywords', 'robots',
+                            'og_title', 'og_description', 'og_url', 'og_image', 'og_locale_alternate',
+                            'og_site_name', 'source_url', 'status_code', 'error']:
+                    value = getattr(raw_metadata, attr, None)
+                    if value is not None:
+                        metadata_dict[attr] = value
+            else:
+                metadata_dict = raw_metadata or {}
+
             crawl_result = CrawlResult(
                 url=url,
                 content=getattr(result, 'content', '') or '',
                 markdown=getattr(result, 'markdown', None),
                 html=getattr(result, 'html', None),
                 raw_html=getattr(result, 'raw_html', None),  # Python SDK uses snake_case
-                metadata=getattr(result, 'metadata', {}),
+                metadata=metadata_dict,
                 screenshot=getattr(result, 'screenshot', None)
             )
 

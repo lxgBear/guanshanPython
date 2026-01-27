@@ -28,8 +28,12 @@ router = APIRouter(prefix="/search-results", tags=["📝 手动添加数据"])
 # ==========================================
 
 class ManualAddRequest(BaseModel):
-    """手动添加搜索结果请求"""
+    """手动添加搜索结果请求
+
+    v4.29.1: user_id/created_by 改为从 Token 自动获取，无需前端传递
+    """
     task_id: str = Field(..., description="关联的任务ID")
+    task_name: Optional[str] = Field(None, description="任务名称（冗余存储，便于查询显示）")
     title: str = Field(..., description="标题", min_length=1, max_length=500)
     url: str = Field(..., description="URL链接")
     content: str = Field(..., description="内容", min_length=1)
@@ -38,20 +42,22 @@ class ManualAddRequest(BaseModel):
     author: Optional[str] = Field(None, description="作者")
     published_date: Optional[datetime] = Field(None, description="发布日期")
     language: Optional[str] = Field(None, description="语言")
-    user_id: str = Field(..., description="用户ID")
-    created_by: str = Field(..., description="创建者")
+    data_source_type: Optional[str] = Field(
+        None,
+        description="数据来源类型 (user_added/url_crawl)，默认 user_added"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "task_id": "1234567890123456789",
+                "task_name": "智能爬取-BBC新闻",
                 "title": "Python异步编程最佳实践",
                 "url": "https://example.com/python-async",
                 "content": "本文介绍Python异步编程的最佳实践...",
                 "source": "web",
                 "language": "zh-CN",
-                "user_id": "user123",
-                "created_by": "user123"
+                "data_source_type": "url_crawl"
             }
         }
 
@@ -154,6 +160,22 @@ def search_result_to_dict(result: SearchResult) -> dict:
     }
 
 
+def search_result_to_mongo_doc(result: SearchResult) -> dict:
+    """将SearchResult实体转换为MongoDB可存储的文档
+
+    处理枚举类型的序列化问题，将Enum转换为其字符串值
+    """
+    doc = result.__dict__.copy()
+    # MongoDB 使用 _id 作为主键
+    doc["_id"] = doc.pop("id")
+    # 转换枚举类型为字符串值
+    if hasattr(doc.get('data_source_type'), 'value'):
+        doc['data_source_type'] = doc['data_source_type'].value
+    if hasattr(doc.get('status'), 'value'):
+        doc['status'] = doc['status'].value
+    return doc
+
+
 # ==========================================
 # API端点
 # ==========================================
@@ -162,51 +184,62 @@ def search_result_to_dict(result: SearchResult) -> dict:
     "/manual",
     response_model=ManualAddResponse,
     summary="手动添加搜索结果",
-    description="用户手动输入标题、URL、内容等信息，添加到搜索结果表。数据来源标记为user_added。"
+    description="用户手动输入标题、URL、内容等信息，添加到搜索结果表。user_id 从 Token 自动获取。"
 )
 async def manual_add_search_result(
     request: ManualAddRequest,
+    current_user: User = Depends(get_current_user),
     db = Depends(get_db)
 ):
     """手动添加搜索结果
 
     **功能说明：**
     - 用户手动输入数据
-    - data_source_type 自动设置为 USER_ADDED
+    - user_id/created_by 从 Token 自动获取（v4.29.1）
+    - data_source_type 支持 user_added 或 url_crawl
     - 自动生成 content_hash 用于去重
     - status 默认为 PENDING
 
     **数据流程：**
-    1. 验证任务ID是否存在
-    2. 创建SearchResult实体
-    3. 生成content_hash
-    4. 保存到数据库
+    1. 从 Token 获取用户信息
+    2. 验证任务ID是否存在（url_crawl 类型跳过）
+    3. 创建SearchResult实体
+    4. 生成content_hash
+    5. 保存到数据库
     """
     try:
-        # 验证任务是否存在
-        task_exists = await validate_task_exists(db, request.task_id)
-        if not task_exists:
-            raise HTTPException(status_code=404, detail=f"任务不存在: {request.task_id}")
+        # 解析 data_source_type（支持前端指定）
+        if request.data_source_type == "url_crawl":
+            source_type = DataSourceType.URL_CRAWL
+        else:
+            source_type = DataSourceType.USER_ADDED
+
+        # v4.29.0: url_crawl 类型跳过任务验证（智能爬取使用前端生成的 task_id）
+        if source_type != DataSourceType.URL_CRAWL:
+            # 验证任务是否存在
+            task_exists = await validate_task_exists(db, request.task_id)
+            if not task_exists:
+                raise HTTPException(status_code=404, detail=f"任务不存在: {request.task_id}")
 
         # 检查URL是否已存在（去重）
         existing = await db.search_results.find_one({
             "url": request.url,
-            "task_id": request.task_id,
             "status": {"$ne": "deleted"}
         })
         if existing:
             logger.warning(f"URL已存在: {request.url}")
             raise HTTPException(
                 status_code=400,
-                detail=f"该URL已存在于任务 {request.task_id} 中"
+                detail=f"该URL已存在"
             )
 
-        # 创建SearchResult实体
+        # 创建SearchResult实体（user_id 从 Token 获取）
         result = SearchResult(
             id=generate_string_id(),
             task_id=request.task_id,
-            user_id=request.user_id,
-            created_by=request.created_by,
+            task_name=request.task_name,  # v4.29.0: 冗余存储任务名称
+            user_id=current_user.id,
+            created_by=current_user.id,
             title=request.title,
             url=request.url,
             snippet=request.snippet or (request.content[:200] + "..." if len(request.content) > 200 else request.content),
@@ -215,7 +248,7 @@ async def manual_add_search_result(
             published_date=request.published_date,
             language=request.language,
             markdown_content=request.content[:5000],  # 限制5000字符
-            data_source_type=DataSourceType.USER_ADDED,  # 标记为用户手动添加
+            data_source_type=source_type,  # 支持 user_added 或 url_crawl
             status=ResultStatus.PENDING,
             created_at=datetime.utcnow()
         )
@@ -224,9 +257,9 @@ async def manual_add_search_result(
         result.ensure_content_hash()
 
         # 保存到数据库
-        await db.search_results.insert_one(result.__dict__)
+        await db.search_results.insert_one(search_result_to_mongo_doc(result))
 
-        logger.info(f"手动添加搜索结果成功: id={result.id}, url={request.url}, user={request.created_by}")
+        logger.info(f"手动添加搜索结果成功: id={result.id}, url={request.url}, user={current_user.id}")
 
         return ManualAddResponse(
             success=True,
@@ -331,7 +364,7 @@ async def crawl_and_add_search_result(
         result.ensure_content_hash()
 
         # 保存到数据库
-        await db.search_results.insert_one(result.__dict__)
+        await db.search_results.insert_one(search_result_to_mongo_doc(result))
 
         logger.info(f"URL爬取添加成功: id={result.id}, url={url_str}, user={request.created_by}")
 
@@ -414,7 +447,7 @@ async def add_translated_content(
         result.ensure_content_hash()
 
         # 保存到数据库
-        await db.search_results.insert_one(result.__dict__)
+        await db.search_results.insert_one(search_result_to_mongo_doc(result))
 
         logger.info(
             f"翻译内容录入成功: id={result.id}, title={request.title[:50]}, user={current_user.id}"
