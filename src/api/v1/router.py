@@ -25,6 +25,8 @@ from src.api.v1.endpoints import review
 from src.api.v1.endpoints import langgraph_transfer
 from src.api.v1.endpoints import category_management
 from src.api.v1.endpoints import search_results_manual  # v2.2.0 手动添加数据
+from src.api.v1.endpoints import unified_results  # v4.24.0 统一聚合结果
+from src.api.v1.endpoints import info_entries  # v4.25.0 信息条目管理
 from src.api.v1.endpoints.auth import router as auth_router
 
 # 权限依赖
@@ -180,6 +182,20 @@ api_router.include_router(
     category_management.router,
     tags=["📂 分类体系管理"],
     dependencies=[Depends(require_permissions("info:update", "system:config"))]
+)
+
+# 统一聚合结果 - 需要 search:basic 权限 (v4.24.0)
+api_router.include_router(
+    unified_results.router,
+    tags=["📊 统一聚合结果"],
+    dependencies=[Depends(require_permissions("search:basic", "search:advanced"))]
+)
+
+# 信息条目管理 - 需要 info:create 或 info:read 权限 (v4.25.0)
+api_router.include_router(
+    info_entries.router,
+    tags=["📝 信息条目"],
+    dependencies=[Depends(require_permissions("info:create", "info:read"))]
 )
 
 # ==========================================

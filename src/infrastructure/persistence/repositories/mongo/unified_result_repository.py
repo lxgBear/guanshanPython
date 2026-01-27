@@ -257,8 +257,13 @@ class UnifiedResultRepository:
             data_source_type = doc.get("data_source_type", "")
             source = doc.get("source", "")
 
-            # 判断是手动录入还是定时任务
-            if data_source_type == "user_added" or source == "translated":
+            # 判断数据来源类型
+            if data_source_type == "url_crawl":
+                # v4.29.0: 智能爬取（URL爬取）
+                origin_site = "智能爬取"
+                source_type = "url-crawl"
+                source_type_name = "智能爬取"
+            elif data_source_type == "user_added" or source == "translated":
                 origin_site = "手动录入"
                 source_type = "manual"
                 source_type_name = "手动录入"
@@ -519,16 +524,25 @@ class UnifiedResultRepository:
             "scheduled": 0,
             "smart-search": 0,
             "chat-search": 0,
-            "upload": 0
+            "upload": 0,
+            "url-crawl": 0,
+            "manual": 0
         }
 
         # 确定要查询的数据源
+        # url-crawl 和 manual 都在 search_results 表中，需要查询 scheduled 然后按 source_type 筛选
         sources_to_query = []
+        post_filter_source_type = None  # 后处理筛选（用于 url-crawl 和 manual）
+
         if source_type == "all":
             sources_to_query = ["scheduled", "smart-search", "chat-search", "upload"]
         elif source_type == "smart-search":
             # 智能搜索包含 smart-search 和 chat-search
             sources_to_query = ["smart-search", "chat-search"]
+        elif source_type in ["url-crawl", "manual"]:
+            # url-crawl 和 manual 都在 search_results 表中
+            sources_to_query = ["scheduled"]
+            post_filter_source_type = source_type
         else:
             sources_to_query = [source_type]
 
@@ -537,7 +551,13 @@ class UnifiedResultRepository:
             try:
                 if src == "scheduled":
                     results = await self._query_search_results(user_id, keyword, time_filter, task_id, time_field)
-                    statistics["scheduled"] = len(results)
+                    # 更新统计：按 source_type 分类
+                    for r in results:
+                        st = r.get("source_type", "scheduled")
+                        if st in statistics:
+                            statistics[st] += 1
+                        else:
+                            statistics["scheduled"] += 1
                     all_results.extend(results)
                 elif src == "smart-search":
                     results = await self._query_instant_search_results(user_id, keyword, time_filter, task_id, time_field)
@@ -554,6 +574,10 @@ class UnifiedResultRepository:
             except Exception as e:
                 logger.warning(f"查询数据源 {src} 失败: {e}")
                 continue
+
+        # v4.29.0: 后处理筛选（用于 url-crawl 和 manual）
+        if post_filter_source_type:
+            all_results = [r for r in all_results if r.get("source_type") == post_filter_source_type]
 
         # 排序
         reverse = sort_order == "desc"

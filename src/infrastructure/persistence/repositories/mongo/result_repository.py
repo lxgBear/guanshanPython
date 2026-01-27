@@ -26,6 +26,9 @@ class MongoResultRepository(IResultRepository):
     MongoDB 搜索结果 Repository 实现
 
     使用 MongoDB 作为数据存储，实现 IResultRepository 接口。
+
+    v4.28.0 更新：
+    - 保存时自动从 search_tasks 获取 task_name
     """
 
     def __init__(self):
@@ -36,6 +39,34 @@ class MongoResultRepository(IResultRepository):
         db = await get_mongodb_database()
         return db[self.collection_name]
 
+    async def _get_task_name_from_search_task(self, task_id: str) -> Optional[str]:
+        """从 search_tasks 获取任务名称
+
+        v4.28.0 新增：用于冗余存储 task_name
+
+        Args:
+            task_id: 搜索任务 ID
+
+        Returns:
+            任务名称，如果不存在则返回 None
+        """
+        if not task_id:
+            return None
+
+        try:
+            db = await get_mongodb_database()
+            collection = db["search_tasks"]
+            doc = await collection.find_one(
+                {"_id": task_id},
+                {"name": 1}
+            )
+            if doc:
+                return doc.get("name")
+            return None
+        except Exception as e:
+            logger.warning(f"获取 search_task name 失败: {e}")
+            return None
+
     def _result_to_dict(self, result: SearchResult) -> Dict[str, Any]:
         """将结果实体转换为 MongoDB 文档 (v2.1.0: 优化后的模型，移除 metadata 存储)
         
@@ -44,6 +75,8 @@ class MongoResultRepository(IResultRepository):
         return {
             "_id": str(result.id),
             "task_id": str(result.task_id),
+            # v4.28.0: 任务名称冗余存储
+            "task_name": result.task_name,
             "title": result.title,
             "url": result.url,
             "snippet": result.snippet,
@@ -101,6 +134,8 @@ class MongoResultRepository(IResultRepository):
         return SearchResult(
             id=result_id,
             task_id=task_id,
+            # v4.28.0: 任务名称冗余存储
+            task_name=data.get("task_name"),
             title=data.get("title", ""),
             url=data.get("url", ""),
             snippet=data.get("snippet"),
@@ -474,12 +509,26 @@ class MongoResultRepository(IResultRepository):
 
         Returns:
             保存统计信息: {"saved": 10, "duplicates": 2, "total": 12}
+
+        v4.28.0 更新：
+            - 自动从 search_tasks 获取 task_name 并设置到结果中
         """
         if not results:
             return {"saved": 0, "duplicates": 0, "total": 0}
 
         try:
             collection = await self._get_collection()
+
+            # v4.28.0: 批量获取 task_name（按 task_id 分组以减少查询次数）
+            task_ids = set(r.task_id for r in results if r.task_id and not r.task_name)
+            task_name_cache: Dict[str, Optional[str]] = {}
+            for task_id in task_ids:
+                task_name_cache[task_id] = await self._get_task_name_from_search_task(task_id)
+
+            # 设置 task_name
+            for result in results:
+                if not result.task_name and result.task_id:
+                    result.task_name = task_name_cache.get(result.task_id)
 
             # 如果不启用去重，直接批量插入
             if not enable_dedup:

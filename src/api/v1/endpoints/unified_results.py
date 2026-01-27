@@ -215,7 +215,7 @@ async def get_unified_results(
                     )
 
         # 验证 source_type
-        valid_source_types = ["all", "scheduled", "smart-search", "chat-search", "upload"]
+        valid_source_types = ["all", "scheduled", "smart-search", "chat-search", "upload", "url-crawl", "manual"]
         if source_type not in valid_source_types:
             raise HTTPException(
                 status_code=400,

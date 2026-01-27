@@ -450,12 +450,6 @@ class ArchiveRequest(UserActionRequest):
     notes: Optional[str] = Field(None, description="留存备注", max_length=500)
 
 
-class RatingRequest(UserActionRequest):
-    """评分请求"""
-    rating: int = Field(..., description="用户评分(1-5)", ge=1, le=5)
-    notes: Optional[str] = Field(None, description="评分备注", max_length=500)
-
-
 class UserActionResponse(BaseModel):
     """用户操作响应"""
     success: bool = Field(..., description="操作是否成功")
@@ -557,49 +551,3 @@ async def delete_search_result(
     )
 
 
-@router.post(
-    "/{task_id}/results/{result_id}/rating",
-    response_model=UserActionResponse,
-    summary="评分搜索结果",
-    description="为搜索结果添加用户评分（1-5星）和可选的评分备注。"
-)
-async def rate_search_result(
-    task_id: str,
-    result_id: str,
-    request: RatingRequest
-):
-    """评分搜索结果 - v2.0.1 用户操作 API"""
-
-    # 验证任务存在
-    await validate_task_exists(task_id)
-
-    # 获取AI处理结果仓储
-    processed_repo = await get_processed_result_repository()
-
-    # 验证结果存在
-    result = await processed_repo.get_by_id(result_id)
-    if not result:
-        raise HTTPException(404, f"搜索结果不存在: {result_id}")
-
-    # 验证结果属于指定任务
-    if str(result.task_id) != task_id:
-        raise HTTPException(404, f"搜索结果不属于任务: {task_id}")
-
-    # 更新评分和备注
-    success = await processed_repo.update_user_action(
-        result_id=result_id,
-        user_rating=request.rating,
-        user_notes=request.notes
-    )
-
-    if not success:
-        raise HTTPException(500, "评分操作失败")
-
-    # 获取更新后的结果
-    updated_result = await processed_repo.get_by_id(result_id)
-
-    return UserActionResponse(
-        success=True,
-        message=f"搜索结果已评分: {request.rating}星",
-        result=processed_result_to_response(updated_result)
-    )

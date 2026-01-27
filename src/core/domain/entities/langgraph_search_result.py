@@ -17,6 +17,9 @@ v4.5.5 更新：
 v4.8.1 更新：
 - 移除所有评分字段：relevance_score, quality_score, credibility_score, final_score
 - 移除 multi_source_bonus, recency_bonus, layer_weight
+
+v4.28.0 更新：
+- 继承父类 SearchResult 的 task_name 字段（冗余存储，来自 chat_conversations.name）
 """
 
 from dataclasses import dataclass, field

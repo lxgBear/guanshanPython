@@ -35,6 +35,9 @@ class MongoLangGraphResultRepository:
     - 独立集合：langgraph_search_results
     - 支持 LangGraph 特定字段
     - 基于 content_hash 去重
+
+    v4.28.0 更新：
+    - 保存时自动从 chat_conversations 获取 task_name
     """
 
     def __init__(self):
@@ -44,6 +47,34 @@ class MongoLangGraphResultRepository:
         """获取 MongoDB 集合"""
         db = await get_mongodb_database()
         return db[self.collection_name]
+
+    async def _get_task_name_from_conversation(self, conversation_id: str) -> Optional[str]:
+        """从 chat_conversations 获取任务名称
+
+        v4.28.0 新增：用于冗余存储 task_name
+
+        Args:
+            conversation_id: 对话会话 ID
+
+        Returns:
+            任务名称（对话标题），如果不存在则返回 None
+        """
+        if not conversation_id:
+            return None
+
+        try:
+            db = await get_mongodb_database()
+            collection = db["chat_conversations"]
+            doc = await collection.find_one(
+                {"_id": conversation_id},
+                {"title": 1}  # chat_conversations 使用 title 字段
+            )
+            if doc:
+                return doc.get("title")
+            return None
+        except Exception as e:
+            logger.warning(f"获取 conversation title 失败: {e}")
+            return None
 
     def _result_to_dict(self, result: LangGraphSearchResult) -> Dict[str, Any]:
         """将 LangGraph 结果实体转换为 MongoDB 文档
@@ -55,6 +86,8 @@ class MongoLangGraphResultRepository:
         base_dict = {
             "_id": str(result.id),
             "task_id": str(result.task_id),
+            # v4.28.0: 任务名称冗余存储（来自 chat_conversations.name）
+            "task_name": result.task_name,
             # v4.6.0: 关联对话会话（用于前端查询历史会话的搜索结果）
             "conversation_id": result.conversation_id,
             "user_id": str(result.user_id),
@@ -126,6 +159,8 @@ class MongoLangGraphResultRepository:
         return LangGraphSearchResult(
             id=str(data.get("_id", data.get("id", ""))),
             task_id=str(data.get("task_id", "")),
+            # v4.28.0: 任务名称冗余存储（来自 chat_conversations.name）
+            task_name=data.get("task_name"),
             # v4.6.0: 关联对话会话
             conversation_id=data.get("conversation_id"),
             user_id=str(data.get("user_id", "")),
@@ -532,12 +567,26 @@ class MongoLangGraphResultRepository:
 
         Returns:
             保存统计信息: {"saved": 10, "duplicates": 2, "total": 12, "skipped_no_title": 1, "url_duplicates": 3}
+
+        v4.28.0 更新：
+            - 自动从 chat_conversations 获取 task_name 并设置到结果中
         """
         if not results:
             return {"saved": 0, "duplicates": 0, "total": 0, "skipped_no_title": 0, "url_duplicates": 0}
 
         try:
             collection = await self._get_collection()
+
+            # v4.28.0: 批量获取 task_name（按 conversation_id 分组以减少查询次数）
+            conversation_ids = set(r.conversation_id for r in results if r.conversation_id and not r.task_name)
+            task_name_cache: Dict[str, Optional[str]] = {}
+            for conv_id in conversation_ids:
+                task_name_cache[conv_id] = await self._get_task_name_from_conversation(conv_id)
+
+            # 设置 task_name
+            for result in results:
+                if not result.task_name and result.conversation_id:
+                    result.task_name = task_name_cache.get(result.conversation_id)
 
             # v4.5.3: 过滤掉 title 为空的记录
             valid_results = []
@@ -911,6 +960,7 @@ class MongoLangGraphResultRepository:
         langgraph_status: Optional[List[str]] = None,  # v4.7.0: 处理状态筛选
         page: int = 1,
         page_size: int = 20,
+        sort_by: str = "created_at",  # v4.8.0: 排序字段
         sort_order: str = "desc"
     ) -> tuple[List[LangGraphSearchResult], int]:
         """分页查询 LangGraph 搜索结果（支持模糊搜索）
