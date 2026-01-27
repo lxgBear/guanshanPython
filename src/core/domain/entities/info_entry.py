@@ -3,6 +3,9 @@
 v1.0.0 初始版本：
 - 支持从多个数据源（定时任务、智能搜索、文档上传）选择数据合并创建条目
 - 统一字段名，兼容各数据源的内容格式
+
+v1.1.0 优化版本：
+- RawDataRef 新增 task_name 字段（仅 scheduled/manual 类型有值）
 """
 
 from dataclasses import dataclass, field
@@ -57,6 +60,9 @@ class RawDataRef:
     translated_content: str = ""               # 翻译后内容
     translated_at: Optional[datetime] = None   # 翻译时间
 
+    # v1.1.0: 任务名称（仅 scheduled/manual 类型有值）
+    task_name: str = ""
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -74,6 +80,7 @@ class RawDataRef:
             "translated_title": self.translated_title,
             "translated_content": self.translated_content,
             "translated_at": self.translated_at.isoformat() if self.translated_at else None,
+            "task_name": self.task_name,  # v1.1.0 新增
         }
 
     @classmethod
@@ -94,6 +101,7 @@ class RawDataRef:
             translated_title=data.get("translated_title", ""),
             translated_content=data.get("translated_content", ""),
             translated_at=datetime.fromisoformat(data["translated_at"]) if data.get("translated_at") else None,
+            task_name=data.get("task_name", ""),  # v1.1.0 新增
         )
 
 

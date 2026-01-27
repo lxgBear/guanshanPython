@@ -35,18 +35,12 @@ router = APIRouter(prefix="/info-entries", tags=["📝 信息条目"])
 # ==================== 请求模型 ====================
 
 class RawDataRefInput(BaseModel):
-    """原始数据引用输入"""
+    """原始数据引用输入（简化版）
+
+    v1.1.0: 移除快照字段，只传 data_type + data_id，后台自动查询完整数据
+    """
     data_id: str = Field(..., description="原始数据ID")
     data_type: str = Field(..., description="数据类型: scheduled/smart-search/chat-search/upload/manual")
-    source_task_id: Optional[str] = Field(None, description="来源任务ID")
-
-    # 可选：前端传来的快照数据（用于兜底）
-    title: Optional[str] = None
-    url: Optional[str] = None
-    snippet: Optional[str] = None
-    origin_site: Optional[str] = None
-    original_content: Optional[str] = None
-    translated_content: Optional[str] = None
 
 
 class CreateEntryRequest(BaseModel):
@@ -78,21 +72,25 @@ class UpdateEntryRequest(BaseModel):
 # ==================== 响应模型 ====================
 
 class RawDataRefResponse(BaseModel):
-    """原始数据引用响应"""
+    """原始数据引用响应
+
+    v1.1.0: 字段加默认值，兼容数据库中的 None 值；新增 task_name 字段
+    """
     ref_id: str
     data_id: str
     data_type: str
     source_collection: str
-    title: str
-    url: str
-    origin_site: str
+    title: str = ""
+    url: str = ""
+    origin_site: str = ""
     published_date: Optional[str] = None
-    markdown_content: str
-    html_content: str
-    snippet: str
-    translated_title: str
-    translated_content: str
+    markdown_content: str = ""
+    html_content: str = ""
+    snippet: str = ""
+    translated_title: str = ""
+    translated_content: str = ""
     translated_at: Optional[str] = None
+    task_name: str = ""  # 新增：任务名称（仅 scheduled/manual 类型有值）
 
 
 class EntryResponse(BaseModel):
@@ -151,16 +149,17 @@ def entry_to_response(entry: InfoEntry) -> EntryResponse:
                 data_id=ref.data_id,
                 data_type=ref.data_type,
                 source_collection=ref.source_collection,
-                title=ref.title,
-                url=ref.url,
-                origin_site=ref.origin_site,
+                title=ref.title or "",
+                url=ref.url or "",
+                origin_site=ref.origin_site or "",
                 published_date=ref.published_date.isoformat() if ref.published_date else None,
-                markdown_content=ref.markdown_content,
-                html_content=ref.html_content,
-                snippet=ref.snippet,
-                translated_title=ref.translated_title,
-                translated_content=ref.translated_content,
+                markdown_content=ref.markdown_content or "",
+                html_content=ref.html_content or "",
+                snippet=ref.snippet or "",
+                translated_title=ref.translated_title or "",
+                translated_content=ref.translated_content or "",
                 translated_at=ref.translated_at.isoformat() if ref.translated_at else None,
+                task_name=ref.task_name or "",  # 新增
             )
             for ref in entry.raw_data_refs
         ],
@@ -184,7 +183,12 @@ async def create_entry(
     current_user: User = Depends(get_current_user),
     db=Depends(get_mongodb_database),
 ):
-    """创建信息条目"""
+    """创建信息条目
+
+    v1.1.0: 简化请求，只传 data_type + data_id，后台自动查询完整数据
+    - 移除快照兜底逻辑
+    - 数据获取失败直接返回 400 错误
+    """
     try:
         repo = InfoEntryRepository(db)
 
@@ -193,34 +197,25 @@ async def create_entry(
             {
                 "data_id": ref.data_id,
                 "data_type": ref.data_type,
-                "source_task_id": ref.source_task_id,
             }
             for ref in request.raw_data_refs
         ]
 
         raw_data_refs = await repo.fetch_raw_data_from_sources(data_refs_input)
 
-        # 如果从数据源获取失败，使用前端传来的快照数据
-        if len(raw_data_refs) < len(request.raw_data_refs):
-            logger.warning(
-                f"部分原始数据获取失败: 期望 {len(request.raw_data_refs)}, 实际 {len(raw_data_refs)}"
-            )
-            # 补充使用前端数据
+        # v1.1.0: 校验必须全部获取成功，不再使用快照兜底
+        if len(raw_data_refs) != len(request.raw_data_refs):
             fetched_ids = {ref.data_id for ref in raw_data_refs}
-            for ref_input in request.raw_data_refs:
-                if ref_input.data_id not in fetched_ids:
-                    # 使用前端传来的快照数据
-                    raw_data_refs.append(RawDataRef(
-                        data_id=ref_input.data_id,
-                        data_type=ref_input.data_type,
-                        source_collection="frontend_snapshot",
-                        title=ref_input.title or "",
-                        url=ref_input.url or "",
-                        origin_site=ref_input.origin_site or "",
-                        snippet=ref_input.snippet or "",
-                        markdown_content=ref_input.original_content or "",
-                        translated_content=ref_input.translated_content or "",
-                    ))
+            requested_ids = {ref.data_id for ref in request.raw_data_refs}
+            failed_ids = requested_ids - fetched_ids
+            logger.warning(
+                f"部分原始数据获取失败: 期望 {len(request.raw_data_refs)}, "
+                f"实际 {len(raw_data_refs)}, 失败ID: {failed_ids}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"以下数据获取失败: {', '.join(failed_ids)}"
+            )
 
         # 生成合并内容（如果前端没有传）
         combined_content = request.combined_content

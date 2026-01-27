@@ -191,6 +191,7 @@ class InfoEntryRepository:
             translated_title=translated_title,
             translated_content=translated_content,
             translated_at=translated_at,
+            task_name=doc.get("task_name", ""),  # v1.1.0 新增
         )
 
     async def _fetch_from_instant_search_results(self, data_id: str) -> Optional[RawDataRef]:
