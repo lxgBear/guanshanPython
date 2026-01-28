@@ -118,6 +118,57 @@ async def create_user(
         )
 
 
+# v2.8.0: 审核员列表接口 - 必须在 /{user_id} 路由之前定义，避免路由冲突
+class ReviewerInfo(BaseModel):
+    """审核员信息"""
+    id: str
+    username: str
+    display_name: Optional[str] = None
+    department: Optional[str] = None
+
+
+class ReviewerListResponse(BaseModel):
+    """审核员列表响应"""
+    items: List[ReviewerInfo]
+    total: int
+
+
+@router.get(
+    "/reviewers",
+    response_model=ReviewerListResponse,
+    summary="获取可选审核员列表"
+)
+async def get_reviewers(
+    keyword: Optional[str] = Query(None, description="搜索关键词"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    获取所有拥有审批权限的用户列表
+
+    用于提交审批时选择审核员
+    """
+    user_service = UserService()
+
+    # 获取所有有 review:approve 权限的用户
+    users, total = await user_service.list_users_by_permission(
+        permission_code="review:approve",
+        keyword=keyword,
+        exclude_user_id=current_user.id  # 排除自己
+    )
+
+    items = [
+        ReviewerInfo(
+            id=user.id,
+            username=user.username,
+            display_name=user.display_name,
+            department=user.department
+        )
+        for user in users
+    ]
+
+    return ReviewerListResponse(items=items, total=len(items))
+
+
 @router.get(
     "/{user_id}",
     response_model=User,
@@ -370,53 +421,3 @@ async def remove_user_role(
             detail={"code": e.code, "message": e.message}
         )
 
-
-# v2.8.0: 审核员列表接口
-class ReviewerInfo(BaseModel):
-    """审核员信息"""
-    id: str
-    username: str
-    display_name: Optional[str] = None
-    department: Optional[str] = None
-
-
-class ReviewerListResponse(BaseModel):
-    """审核员列表响应"""
-    items: List[ReviewerInfo]
-    total: int
-
-
-@router.get(
-    "/reviewers",
-    response_model=ReviewerListResponse,
-    summary="获取可选审核员列表"
-)
-async def get_reviewers(
-    keyword: Optional[str] = Query(None, description="搜索关键词"),
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    获取所有拥有审批权限的用户列表
-
-    用于提交审批时选择审核员
-    """
-    user_service = UserService()
-
-    # 获取所有有 review:approve 权限的用户
-    users, total = await user_service.list_users_by_permission(
-        permission_code="review:approve",
-        keyword=keyword,
-        exclude_user_id=current_user.id  # 排除自己
-    )
-
-    items = [
-        ReviewerInfo(
-            id=user.id,
-            username=user.username,
-            display_name=user.display_name,
-            department=user.department
-        )
-        for user in users
-    ]
-
-    return ReviewerListResponse(items=items, total=len(items))
