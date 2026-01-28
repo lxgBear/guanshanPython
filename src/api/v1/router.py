@@ -27,6 +27,7 @@ from src.api.v1.endpoints import category_management
 from src.api.v1.endpoints import search_results_manual  # v2.2.0 手动添加数据
 from src.api.v1.endpoints import unified_results  # v4.24.0 统一聚合结果
 from src.api.v1.endpoints import info_entries  # v4.25.0 信息条目管理
+from src.api.v1.endpoints import review_entries  # v4.29.0 审核条目管理
 from src.api.v1.endpoints.auth import router as auth_router
 
 # 权限依赖
@@ -196,6 +197,13 @@ api_router.include_router(
     info_entries.router,
     tags=["📝 信息条目"],
     dependencies=[Depends(require_permissions("info:create", "info:read"))]
+)
+
+# 审核条目管理 - 需要 info:create 或 archive:review 权限 (v4.29.0)
+api_router.include_router(
+    review_entries.router,
+    tags=["📋 审核条目"],
+    dependencies=[Depends(require_permissions("info:create", "archive:review"))]
 )
 
 # ==========================================

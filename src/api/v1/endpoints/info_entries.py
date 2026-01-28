@@ -69,6 +69,36 @@ class UpdateEntryRequest(BaseModel):
     status: Optional[str] = Field(None, description="状态: draft/published/archived")
 
 
+class CreateFromSingleRequest(BaseModel):
+    """从单条信息创建条目请求
+
+    用于将 compile 页面编辑的单条信息保存到 info_entries
+    """
+    # 原始数据信息
+    source_data_id: str = Field(..., description="原数据 ID")
+    source_data_type: str = Field(..., description="数据类型: scheduled/smart-search/chat-search/upload/manual")
+    source_collection: str = Field(..., description="来源集合名")
+
+    # 内容字段
+    title: str = Field(..., description="标题", min_length=1, max_length=200)
+    markdown_content: str = Field("", description="原文内容")
+    translated_content: str = Field("", description="译文内容")
+    translated_title: str = Field("", description="翻译后标题")
+    snippet: str = Field("", description="摘要")
+    url: str = Field("", description="原文 URL")
+    origin_site: str = Field("", description="来源网站")
+    published_date: Optional[datetime] = Field(None, description="发布日期")
+
+    # 分类
+    primary_category: str = Field("", description="大类")
+    secondary_category: str = Field("", description="类别")
+    tertiary_category: str = Field("", description="地域")
+    tags: List[str] = Field(default_factory=list, description="标签列表")
+
+    # 状态
+    status: str = Field("draft", description="状态: draft/published")
+
+
 # ==================== 响应模型 ====================
 
 class RawDataRefResponse(BaseModel):
@@ -389,3 +419,72 @@ async def delete_entry(
         return {"success": True, "message": "删除成功"}
     else:
         raise HTTPException(status_code=500, detail="删除失败")
+
+
+@router.post(
+    "/from-single",
+    response_model=CreateEntryResponse,
+    summary="从单条信息创建条目",
+    description="将 compile 页面编辑的单条信息保存到 info_entries，raw_data_count = 1",
+)
+async def create_from_single(
+    request: CreateFromSingleRequest,
+    current_user: User = Depends(get_current_user),
+    db=Depends(get_mongodb_database),
+):
+    """从单条信息创建条目
+
+    - 创建包含 1 条原始数据引用的条目
+    - combined_content 存储译文内容
+    - raw_data_count 固定为 1
+    """
+    try:
+        repo = InfoEntryRepository(db)
+
+        # 创建原始数据引用（1条）
+        raw_data_ref = RawDataRef(
+            data_id=request.source_data_id,
+            data_type=request.source_data_type,
+            source_collection=request.source_collection,
+            title=request.title,
+            url=request.url,
+            origin_site=request.origin_site,
+            published_date=request.published_date,
+            markdown_content=request.markdown_content,
+            snippet=request.snippet,
+            translated_title=request.translated_title,
+            translated_content=request.translated_content,
+        )
+
+        # 创建条目实体
+        entry = InfoEntry(
+            title=request.title,
+            description="",  # 单条信息不需要描述
+            summary="",
+            combined_content=request.translated_content,  # 译文作为合并内容
+            tags=request.tags,
+            primary_category=request.primary_category,
+            secondary_category=request.secondary_category,
+            tertiary_category=request.tertiary_category,
+            status=EntryStatus(request.status),
+            raw_data_refs=[raw_data_ref],
+            user_id=current_user.id,
+        )
+
+        # 保存到数据库
+        created_entry = await repo.create(entry)
+
+        logger.info(
+            f"从单条信息创建条目成功: id={created_entry.id}, title={request.title}, "
+            f"source_data_id={request.source_data_id}, user={current_user.id}"
+        )
+
+        return CreateEntryResponse(
+            success=True,
+            message="单条信息保存成功",
+            entry=entry_to_response(created_entry),
+        )
+
+    except Exception as e:
+        logger.error(f"从单条信息创建条目失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
