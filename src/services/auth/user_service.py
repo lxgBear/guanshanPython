@@ -250,3 +250,52 @@ class UserService:
         await self.user_repo.remove_role(user_id, role_code)
 
         return await self.get_user(user_id)
+
+    async def list_users_by_permission(
+        self,
+        permission_code: str,
+        keyword: Optional[str] = None,
+        exclude_user_id: Optional[str] = None
+    ) -> Tuple[List[User], int]:
+        """
+        获取拥有指定权限的用户列表
+
+        v2.8.0: 用于获取可选审核员列表
+
+        Args:
+            permission_code: 权限代码
+            keyword: 搜索关键词
+            exclude_user_id: 排除的用户ID
+
+        Returns:
+            Tuple[List[User], int]: (用户列表, 总数)
+        """
+        users, total = await self.user_repo.list_users_by_permission(
+            permission_code=permission_code,
+            keyword=keyword,
+            exclude_user_id=exclude_user_id
+        )
+
+        result = []
+        for u in users:
+            role_codes = u.get("roles", [])
+            result.append(User(
+                id=u["_id"],
+                username=u["username"],
+                email=u.get("email"),
+                display_name=u.get("display_name"),
+                phone=u.get("phone"),
+                department=u.get("department"),
+                is_active=u.get("is_active", True),
+                is_locked=u.get("is_locked", False),
+                lock_reason=u.get("lock_reason"),
+                last_login=u.get("last_login"),
+                login_attempts=u.get("login_attempts", 0),
+                created_at=u.get("created_at"),
+                updated_at=u.get("updated_at"),
+                created_by=u.get("created_by"),
+                roles=role_codes,
+                permissions=[]  # 列表不需要返回权限详情
+            ))
+
+        return result, total

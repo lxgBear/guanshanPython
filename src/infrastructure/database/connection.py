@@ -153,6 +153,164 @@ async def close_database_connections():
         logger.warning(f"Redis关闭失败: {e}")
 
 
+# 权限定义（用于同步到数据库）
+PERMISSION_DEFINITIONS = {
+    # 用户管理
+    "user:create": {"name": "创建用户", "module": "user", "description": "创建新用户账户"},
+    "user:read": {"name": "查看用户", "module": "user", "description": "查看用户信息"},
+    "user:update": {"name": "更新用户", "module": "user", "description": "修改用户信息"},
+    "user:delete": {"name": "删除用户", "module": "user", "description": "删除用户账户"},
+    "user:list": {"name": "用户列表", "module": "user", "description": "查看用户列表"},
+
+    # 角色管理
+    "role:create": {"name": "创建角色", "module": "role", "description": "创建新角色"},
+    "role:read": {"name": "查看角色", "module": "role", "description": "查看角色信息"},
+    "role:update": {"name": "更新角色", "module": "role", "description": "修改角色信息"},
+    "role:delete": {"name": "删除角色", "module": "role", "description": "删除角色"},
+    "role:assign": {"name": "分配角色", "module": "role", "description": "为用户分配角色"},
+
+    # 信息采集
+    "info:create": {"name": "创建信息", "module": "info", "description": "创建信息条目"},
+    "info:read": {"name": "查看信息", "module": "info", "description": "查看信息详情"},
+    "info:update": {"name": "更新信息", "module": "info", "description": "修改信息条目"},
+    "info:delete": {"name": "删除信息", "module": "info", "description": "删除信息条目"},
+
+    # 校审管理
+    "review:assign": {"name": "分配校审", "module": "review", "description": "分配校审任务"},
+    "review:execute": {"name": "执行校审", "module": "review", "description": "执行校审操作"},
+    "review:approve": {"name": "审批通过", "module": "review", "description": "审批通过校审"},
+    "review:read": {"name": "查看校审", "module": "review", "description": "查看校审记录"},
+    "review:approve_final": {"name": "终审权限", "module": "review", "description": "终审权限，可直接结束审批流程"},
+
+    # NL搜索
+    "search:basic": {"name": "基础搜索", "module": "search", "description": "使用基础搜索功能"},
+    "search:advanced": {"name": "高级搜索", "module": "search", "description": "使用高级搜索功能"},
+    "search:multilang": {"name": "多语言搜索", "module": "search", "description": "使用多语言搜索"},
+
+    # 系统管理
+    "system:config": {"name": "系统配置", "module": "system", "description": "修改系统配置"},
+    "system:log": {"name": "系统日志", "module": "system", "description": "查看系统日志"},
+    "system:api": {"name": "API管理", "module": "system", "description": "管理API配置"},
+
+    # v2.7.0: 档案管理
+    "archive:create": {"name": "创建档案", "module": "archive", "description": "创建新档案"},
+    "archive:read": {"name": "读取档案", "module": "archive", "description": "读取自己的和已审核的档案"},
+    "archive:update": {"name": "更新档案", "module": "archive", "description": "更新档案内容"},
+    "archive:delete": {"name": "删除档案", "module": "archive", "description": "删除档案"},
+    "archive:review": {"name": "审核档案", "module": "archive", "description": "审核档案（通过/驳回）"},
+    "archive:read_all": {"name": "读取全部档案", "module": "archive", "description": "读取所有状态的档案（含待审核）"},
+
+    # v2.8.0: 审批流程权限
+    "workflow:create": {"name": "创建审批流程", "module": "workflow", "description": "创建新的审批流程"},
+    "workflow:read": {"name": "查看审批流程", "module": "workflow", "description": "查看审批流程详情"},
+    "workflow:update": {"name": "修改审批流程", "module": "workflow", "description": "修改审批流程配置"},
+    "workflow:delete": {"name": "删除审批流程", "module": "workflow", "description": "删除审批流程"},
+
+    # v2.8.0: 页面权限
+    "page:dashboard": {"name": "工作台", "module": "page", "description": "访问工作台页面"},
+    "page:collect": {"name": "信息采集", "module": "page", "description": "访问信息采集页面"},
+    "page:compile": {"name": "整编页面", "module": "page", "description": "访问整编页面"},
+    "page:generate": {"name": "信息生成", "module": "page", "description": "访问信息生成页面"},
+    "page:review_pending": {"name": "待审批列表", "module": "page", "description": "访问待审批列表"},
+    "page:review_history": {"name": "审批历史", "module": "page", "description": "访问审批历史页面"},
+    "page:user_management": {"name": "用户管理", "module": "page", "description": "访问用户管理页面"},
+    "page:role_permissions": {"name": "角色权限管理", "module": "page", "description": "访问角色权限管理页面"},
+    "page:system_settings": {"name": "系统设置", "module": "page", "description": "访问系统设置页面"},
+    "page:data_sources": {"name": "数据源管理", "module": "page", "description": "访问数据源管理页面"},
+    "page:archives": {"name": "档案管理", "module": "page", "description": "访问档案管理页面"},
+
+    # v2.8.0: 按钮权限
+    "button:export": {"name": "导出", "module": "button", "description": "导出数据功能"},
+    "button:batch_delete": {"name": "批量删除", "module": "button", "description": "批量删除数据"},
+    "button:submit_review": {"name": "提交审核", "module": "button", "description": "提交内容进行审核"},
+    "button:create_user": {"name": "创建用户按钮", "module": "button", "description": "创建用户按钮权限"},
+    "button:reset_password": {"name": "重置密码", "module": "button", "description": "重置用户密码"},
+    "button:lock_user": {"name": "锁定用户", "module": "button", "description": "锁定/解锁用户"},
+    "button:assign_role": {"name": "分配角色按钮", "module": "button", "description": "分配角色按钮权限"},
+}
+
+
+async def sync_permissions_to_database():
+    """
+    同步权限定义到数据库 auth_permissions 集合
+    确保所有 PermissionCode 枚举中的权限都存在于数据库中
+    """
+    try:
+        from src.infrastructure.persistence.auth.mongodb.role_repository import MongoPermissionRepository
+
+        permission_repo = MongoPermissionRepository()
+        created_count = 0
+
+        for code, info in PERMISSION_DEFINITIONS.items():
+            # 检查权限是否已存在
+            existing = await permission_repo.get_by_code(code)
+            if not existing:
+                # 创建新权限
+                await permission_repo.create(
+                    code=code,
+                    name=info["name"],
+                    module=info["module"],
+                    description=info.get("description")
+                )
+                created_count += 1
+
+        if created_count > 0:
+            logger.info(f"✅ 权限同步完成，新增 {created_count} 个权限")
+        else:
+            logger.debug("权限数据已是最新")
+
+    except Exception as e:
+        logger.warning(f"⚠️ 权限同步失败: {e}")
+
+
+# 同步默认角色权限到数据库
+async def sync_default_role_permissions():
+    """
+    同步 DEFAULT_ROLE_PERMISSIONS 中定义的权限到数据库角色
+    确保数据库中的角色拥有代码中定义的所有默认权限
+    """
+    try:
+        from src.core.domain.entities.auth.permission import DEFAULT_ROLE_PERMISSIONS, PermissionCode
+        from src.infrastructure.persistence.auth.mongodb.role_repository import MongoRoleRepository
+        
+        role_repo = MongoRoleRepository()
+        
+        for role_code, permission_codes in DEFAULT_ROLE_PERMISSIONS.items():
+            # 获取数据库中的角色
+            role = await role_repo.get_by_code(role_code)
+            if not role:
+                logger.debug(f"角色 {role_code} 不存在于数据库中，跳过权限同步")
+                continue
+            
+            # 将 PermissionCode 枚举转换为字符串
+            default_permissions = [p.value if isinstance(p, PermissionCode) else p for p in permission_codes]
+            
+            # 获取当前权限
+            current_permissions = set(role.get("permissions", []))
+            default_permissions_set = set(default_permissions)
+            
+            # 检查是否需要更新（只添加缺失的权限，不删除现有权限）
+            missing_permissions = default_permissions_set - current_permissions
+            
+            if missing_permissions:
+                # 合并权限：保留现有权限 + 添加缺失的默认权限
+                merged_permissions = list(current_permissions | default_permissions_set)
+                
+                # 更新角色权限
+                success = await role_repo.assign_permissions(role["_id"], merged_permissions)
+                if success:
+                    logger.info(f"✅ 角色 {role_code} 权限同步完成，新增 {len(missing_permissions)} 个权限")
+                else:
+                    logger.warning(f"⚠️ 角色 {role_code} 权限同步失败")
+            else:
+                logger.debug(f"角色 {role_code} 权限已是最新")
+                
+        logger.info("✅ 默认角色权限同步完成")
+    except Exception as e:
+        logger.warning(f"⚠️ 默认角色权限同步失败: {e}")
+        # 不抛出异常，让应用继续启动
+
+
 # 数据库启动和关闭事件
 async def init_database():
     """初始化数据库连接"""
@@ -162,6 +320,12 @@ async def init_database():
 
         # 创建必要的索引
         await create_indexes()
+
+        # v2.8.0: 同步权限定义到数据库
+        await sync_permissions_to_database()
+
+        # 同步默认角色权限（v2.8.0）
+        await sync_default_role_permissions()
 
         # 初始化Redis连接（可选）
         try:

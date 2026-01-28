@@ -16,6 +16,10 @@ class PermissionModule(str, Enum):
     SEARCH = "search"
     SYSTEM = "system"
     ARCHIVE = "archive"  # v2.7.0: 档案管理模块
+    # v2.8.0: 新增权限模块
+    PAGE = "page"        # 页面权限
+    BUTTON = "button"    # 按钮权限
+    WORKFLOW = "workflow"  # 审批流程
 
 
 class PermissionAction(str, Enum):
@@ -29,6 +33,10 @@ class PermissionAction(str, Enum):
     EXECUTE = "execute"
     APPROVE = "approve"
     CONFIG = "config"
+    # v2.8.0: 新增操作类型
+    FINAL = "final"        # 终审操作
+    VIEW = "view"          # 查看操作（用于页面）
+    SUBMIT = "submit"      # 提交操作
 
 
 class PermissionCode(str, Enum):
@@ -77,6 +85,35 @@ class PermissionCode(str, Enum):
     ARCHIVE_REVIEW = "archive:review"      # 审核档案（通过/驳回）
     ARCHIVE_READ_ALL = "archive:read_all"  # 读取所有状态档案（含待审核）
 
+    # v2.8.0: 审批流程权限
+    REVIEW_APPROVE_FINAL = "review:approve_final"  # 终审权限（可直接结束流程）
+    WORKFLOW_CREATE = "workflow:create"    # 创建审批流程
+    WORKFLOW_READ = "workflow:read"        # 查看审批流程
+    WORKFLOW_UPDATE = "workflow:update"    # 修改审批流程
+    WORKFLOW_DELETE = "workflow:delete"    # 删除审批流程
+
+    # v2.8.0: 页面权限
+    PAGE_DASHBOARD = "page:dashboard"              # 工作台
+    PAGE_COLLECT = "page:collect"                  # 信息采集
+    PAGE_COMPILE = "page:compile"                  # 整编页面
+    PAGE_GENERATE = "page:generate"                # 信息生成
+    PAGE_REVIEW_PENDING = "page:review_pending"    # 待审批列表
+    PAGE_REVIEW_HISTORY = "page:review_history"    # 审批历史
+    PAGE_USER_MANAGEMENT = "page:user_management"  # 用户管理
+    PAGE_ROLE_PERMISSIONS = "page:role_permissions"  # 角色权限管理
+    PAGE_SYSTEM_SETTINGS = "page:system_settings"  # 系统设置
+    PAGE_DATA_SOURCES = "page:data_sources"        # 数据源管理
+    PAGE_ARCHIVES = "page:archives"                # 档案管理
+
+    # v2.8.0: 按钮权限
+    BUTTON_EXPORT = "button:export"                # 导出
+    BUTTON_BATCH_DELETE = "button:batch_delete"    # 批量删除
+    BUTTON_SUBMIT_REVIEW = "button:submit_review"  # 提交审核
+    BUTTON_CREATE_USER = "button:create_user"      # 创建用户
+    BUTTON_RESET_PASSWORD = "button:reset_password"  # 重置密码
+    BUTTON_LOCK_USER = "button:lock_user"          # 锁定用户
+    BUTTON_ASSIGN_ROLE = "button:assign_role"      # 分配角色
+
 
 class PermissionBase(BaseModel):
     """权限基础模型"""
@@ -88,8 +125,9 @@ class PermissionBase(BaseModel):
     @field_validator('code')
     @classmethod
     def validate_code(cls, v: str) -> str:
-        if not re.match(r'^[a-z]+:[a-z_]+$', v):
-            raise ValueError('权限代码格式必须为 module:action')
+        # v2.8.0: 支持 module:action 和 module:action_subaction 格式
+        if not re.match(r'^[a-z]+:[a-z][a-z_]*$', v):
+            raise ValueError('权限代码格式必须为 module:action 或 module:action_subaction')
         return v
 
 
@@ -121,6 +159,7 @@ class PermissionList(BaseModel):
 
 # 角色权限配置（用于初始化）
 # v2.7.0: 新增档案管理权限
+# v2.8.0: 新增页面权限、按钮权限、审批流程权限
 DEFAULT_ROLE_PERMISSIONS = {
     "admin": [
         # 所有权限
@@ -137,6 +176,19 @@ DEFAULT_ROLE_PERMISSIONS = {
         # v2.7.0: 档案管理全部权限
         PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
         PermissionCode.ARCHIVE_DELETE, PermissionCode.ARCHIVE_REVIEW, PermissionCode.ARCHIVE_READ_ALL,
+        # v2.8.0: 审批流程权限
+        PermissionCode.REVIEW_APPROVE_FINAL,
+        PermissionCode.WORKFLOW_CREATE, PermissionCode.WORKFLOW_READ,
+        PermissionCode.WORKFLOW_UPDATE, PermissionCode.WORKFLOW_DELETE,
+        # v2.8.0: 所有页面权限
+        PermissionCode.PAGE_DASHBOARD, PermissionCode.PAGE_COLLECT, PermissionCode.PAGE_COMPILE,
+        PermissionCode.PAGE_GENERATE, PermissionCode.PAGE_REVIEW_PENDING, PermissionCode.PAGE_REVIEW_HISTORY,
+        PermissionCode.PAGE_USER_MANAGEMENT, PermissionCode.PAGE_ROLE_PERMISSIONS,
+        PermissionCode.PAGE_SYSTEM_SETTINGS, PermissionCode.PAGE_DATA_SOURCES, PermissionCode.PAGE_ARCHIVES,
+        # v2.8.0: 所有按钮权限
+        PermissionCode.BUTTON_EXPORT, PermissionCode.BUTTON_BATCH_DELETE, PermissionCode.BUTTON_SUBMIT_REVIEW,
+        PermissionCode.BUTTON_CREATE_USER, PermissionCode.BUTTON_RESET_PASSWORD,
+        PermissionCode.BUTTON_LOCK_USER, PermissionCode.BUTTON_ASSIGN_ROLE,
     ],
     "chief_reviewer": [
         PermissionCode.USER_CREATE, PermissionCode.USER_READ, PermissionCode.USER_UPDATE,
@@ -150,6 +202,16 @@ DEFAULT_ROLE_PERMISSIONS = {
         # v2.7.0: 档案管理（含审核权限）
         PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
         PermissionCode.ARCHIVE_DELETE, PermissionCode.ARCHIVE_REVIEW, PermissionCode.ARCHIVE_READ_ALL,
+        # v2.8.0: 终审权限
+        PermissionCode.REVIEW_APPROVE_FINAL,
+        PermissionCode.WORKFLOW_READ,
+        # v2.8.0: 页面权限
+        PermissionCode.PAGE_DASHBOARD, PermissionCode.PAGE_COLLECT, PermissionCode.PAGE_COMPILE,
+        PermissionCode.PAGE_GENERATE, PermissionCode.PAGE_REVIEW_PENDING, PermissionCode.PAGE_REVIEW_HISTORY,
+        PermissionCode.PAGE_USER_MANAGEMENT, PermissionCode.PAGE_DATA_SOURCES, PermissionCode.PAGE_ARCHIVES,
+        # v2.8.0: 按钮权限
+        PermissionCode.BUTTON_EXPORT, PermissionCode.BUTTON_BATCH_DELETE, PermissionCode.BUTTON_SUBMIT_REVIEW,
+        PermissionCode.BUTTON_CREATE_USER, PermissionCode.BUTTON_RESET_PASSWORD, PermissionCode.BUTTON_LOCK_USER,
     ],
     "direction_reviewer": [
         PermissionCode.USER_READ, PermissionCode.USER_LIST,
@@ -161,24 +223,47 @@ DEFAULT_ROLE_PERMISSIONS = {
         # v2.7.0: 档案管理（含审核权限）
         PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
         PermissionCode.ARCHIVE_DELETE, PermissionCode.ARCHIVE_REVIEW, PermissionCode.ARCHIVE_READ_ALL,
+        # v2.8.0: 审批权限
+        PermissionCode.WORKFLOW_READ,
+        # v2.8.0: 页面权限
+        PermissionCode.PAGE_DASHBOARD, PermissionCode.PAGE_COLLECT, PermissionCode.PAGE_COMPILE,
+        PermissionCode.PAGE_GENERATE, PermissionCode.PAGE_REVIEW_PENDING, PermissionCode.PAGE_REVIEW_HISTORY,
+        PermissionCode.PAGE_DATA_SOURCES, PermissionCode.PAGE_ARCHIVES,
+        # v2.8.0: 按钮权限
+        PermissionCode.BUTTON_EXPORT, PermissionCode.BUTTON_SUBMIT_REVIEW,
     ],
     "reviewer": [
         PermissionCode.INFO_CREATE, PermissionCode.INFO_READ, PermissionCode.INFO_UPDATE,
-        PermissionCode.REVIEW_EXECUTE, PermissionCode.REVIEW_READ,
+        PermissionCode.REVIEW_EXECUTE, PermissionCode.REVIEW_APPROVE, PermissionCode.REVIEW_READ,
         PermissionCode.SEARCH_BASIC, PermissionCode.SEARCH_ADVANCED, PermissionCode.SEARCH_MULTILANG,
         # v2.7.0: 档案管理（含审核权限）
         PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
         PermissionCode.ARCHIVE_REVIEW, PermissionCode.ARCHIVE_READ_ALL,
+        # v2.8.0: 审批权限
+        PermissionCode.WORKFLOW_READ,
+        # v2.8.0: 页面权限
+        PermissionCode.PAGE_DASHBOARD, PermissionCode.PAGE_COLLECT, PermissionCode.PAGE_COMPILE,
+        PermissionCode.PAGE_GENERATE, PermissionCode.PAGE_REVIEW_PENDING, PermissionCode.PAGE_REVIEW_HISTORY,
+        PermissionCode.PAGE_ARCHIVES,
+        # v2.8.0: 按钮权限
+        PermissionCode.BUTTON_EXPORT, PermissionCode.BUTTON_SUBMIT_REVIEW,
     ],
     "collector": [
         PermissionCode.INFO_CREATE, PermissionCode.INFO_READ, PermissionCode.INFO_UPDATE,
         PermissionCode.SEARCH_BASIC, PermissionCode.SEARCH_ADVANCED,
         # v2.7.0: 档案管理（仅基本CRUD，无审核权限）
         PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ, PermissionCode.ARCHIVE_UPDATE,
+        # v2.8.0: 页面权限
+        PermissionCode.PAGE_DASHBOARD, PermissionCode.PAGE_COLLECT, PermissionCode.PAGE_COMPILE,
+        PermissionCode.PAGE_GENERATE, PermissionCode.PAGE_ARCHIVES,
+        # v2.8.0: 按钮权限
+        PermissionCode.BUTTON_SUBMIT_REVIEW,
     ],
     "customer": [
         PermissionCode.SEARCH_BASIC,
         # v2.7.0: 档案管理（仅创建和读取自己的）
         PermissionCode.ARCHIVE_CREATE, PermissionCode.ARCHIVE_READ,
+        # v2.8.0: 页面权限
+        PermissionCode.PAGE_DASHBOARD, PermissionCode.PAGE_ARCHIVES,
     ],
 }

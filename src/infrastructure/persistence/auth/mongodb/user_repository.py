@@ -325,6 +325,62 @@ class MongoUserRepository:
 
         return await cursor.to_list(length=limit)
 
+    async def list_users_by_permission(
+        self,
+        permission_code: str,
+        keyword: Optional[str] = None,
+        exclude_user_id: Optional[str] = None
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        获取拥有指定权限的用户列表
+
+        v2.8.0: 用于获取可选审核员列表
+
+        通过角色关联查找拥有指定权限的用户
+        """
+        db = await get_mongodb_database()
+        users_collection = await self._get_collection()
+        roles_collection = db["auth_roles"]
+
+        # 1. 先找出拥有该权限的角色
+        roles_with_permission = await roles_collection.find(
+            {"permissions": permission_code, "is_active": True},
+            {"code": 1}
+        ).to_list(length=100)
+
+        role_codes = [r["code"] for r in roles_with_permission]
+
+        if not role_codes:
+            return [], 0
+
+        # 2. 查找拥有这些角色的用户
+        query: Dict[str, Any] = {
+            "roles": {"$in": role_codes},
+            "is_active": True,
+            "is_locked": {"$ne": True}
+        }
+
+        # 排除指定用户
+        if exclude_user_id:
+            query["_id"] = {"$ne": exclude_user_id}
+
+        # 关键词搜索
+        if keyword:
+            query["$or"] = [
+                {"username": {"$regex": keyword, "$options": "i"}},
+                {"display_name": {"$regex": keyword, "$options": "i"}},
+                {"department": {"$regex": keyword, "$options": "i"}}
+            ]
+
+        # 获取总数
+        total = await users_collection.count_documents(query)
+
+        # 查询用户列表（不分页，通常审核员数量不会太多）
+        cursor = users_collection.find(query).sort("username", 1)
+        users = await cursor.to_list(length=200)  # 最多返回200个
+
+        return users, total
+
 
 async def create_auth_indexes():
     """创建认证相关索引"""
