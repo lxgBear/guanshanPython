@@ -71,8 +71,22 @@ class ReviewEntryRepository:
         status: Optional[str] = None,
         entry_type: Optional[str] = None,
         keyword: Optional[str] = None,
+        sort_by: str = "updated_at",
+        sort_order: int = -1,
     ) -> Tuple[List[ReviewEntry], int]:
-        """获取用户的审核条目列表"""
+        """
+        获取用户的审核条目列表
+        
+        Args:
+            user_id: 用户ID
+            page: 页码
+            page_size: 每页数量
+            status: 状态筛选
+            entry_type: 条目类型筛选
+            keyword: 关键词搜索
+            sort_by: 排序字段 (updated_at, created_at, submitted_at, title)
+            sort_order: 排序方向 (-1=降序, 1=升序)
+        """
         query: Dict[str, Any] = {"user_id": user_id}
 
         if status:
@@ -90,8 +104,9 @@ class ReviewEntryRepository:
         # 获取总数
         total = await self.collection.count_documents(query)
 
-        # 分页查询
-        cursor = self.collection.find(query).sort("updated_at", -1)
+        # 分页查询，支持动态排序
+        sort_field = sort_by if sort_by in ["updated_at", "created_at", "submitted_at", "title"] else "updated_at"
+        cursor = self.collection.find(query).sort(sort_field, sort_order)
         cursor = cursor.skip((page - 1) * page_size).limit(page_size)
 
         entries = []

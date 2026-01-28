@@ -56,6 +56,7 @@ class CreateReviewEntryRequest(BaseModel):
     entry_type: str = Field("single", description="条目类型: single/batch")
     raw_data_refs: List[RawDataRefInput] = Field(..., description="原始数据引用列表", min_length=1)
     source_entry_id: Optional[str] = Field("", description="关联的 info_entry ID（可选）")
+    reviewer_id: Optional[str] = Field(None, description="指定审核员ID（提交时使用）")
 
 
 class UpdateReviewEntryRequest(BaseModel):
@@ -124,6 +125,29 @@ class ReviewEntryResponse(BaseModel):
 class ReviewEntryListResponse(BaseModel):
     """审核条目列表响应"""
     items: List[ReviewEntryResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class MyEntryResponse(BaseModel):
+    """我的条目响应（简化版，用于 dashboard 列表）"""
+    id: str
+    title: str
+    status: str
+    entry_type: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    submitted_at: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    reviewer_id: str = ""
+    review_comment: str = ""
+
+
+class MyEntryListResponse(BaseModel):
+    """我的条目列表响应"""
+    items: List[MyEntryResponse]
     total: int
     page: int
     page_size: int
@@ -245,6 +269,7 @@ async def create_review_entry(
             raw_data_refs=raw_data_refs,
             source_entry_id=request.source_entry_id or "",
             user_id=current_user.id,
+            reviewer_id=request.reviewer_id or "",  # 指定审核员
         )
 
         # 保存到数据库
@@ -266,6 +291,71 @@ async def create_review_entry(
     except Exception as e:
         logger.error(f"创建审核条目失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"创建条目失败: {str(e)}")
+
+
+@router.get(
+    "/my",
+    response_model=MyEntryListResponse,
+    summary="获取我的条目列表",
+    description="获取当前用户的所有条目（草稿+审核流程），支持分页、筛选、搜索、排序",
+)
+async def get_my_entries(
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    status: Optional[str] = Query(None, description="状态筛选: draft/pending_review/approved/rejected"),
+    keyword: Optional[str] = Query(None, description="关键词搜索（标题、描述）"),
+    sort_by: str = Query("updated_at", description="排序字段: updated_at/created_at/submitted_at/title"),
+    sort_order: str = Query("desc", description="排序方向: asc/desc"),
+    current_user: User = Depends(get_current_user),
+    db=Depends(get_mongodb_database),
+):
+    """
+    获取当前用户的所有条目列表
+    
+    用于 dashboard 展示：
+    - 草稿列表
+    - 提交审核后的流程状态列表
+    """
+    repo = ReviewEntryRepository(db)
+    
+    # 转换排序方向
+    sort_order_int = 1 if sort_order == "asc" else -1
+    
+    entries, total = await repo.list_by_user(
+        user_id=current_user.id,
+        page=page,
+        page_size=page_size,
+        status=status,
+        keyword=keyword,
+        sort_by=sort_by,
+        sort_order=sort_order_int,
+    )
+    
+    total_pages = (total + page_size - 1) // page_size
+    
+    items = [
+        MyEntryResponse(
+            id=entry.id,
+            title=entry.title,
+            status=entry.status.value,
+            entry_type=entry.entry_type.value,
+            created_at=entry.created_at.isoformat() if entry.created_at else None,
+            updated_at=entry.updated_at.isoformat() if entry.updated_at else None,
+            submitted_at=entry.submitted_at.isoformat() if entry.submitted_at else None,
+            reviewed_at=entry.reviewed_at.isoformat() if entry.reviewed_at else None,
+            reviewer_id=entry.reviewer_id or "",
+            review_comment=entry.review_comment or "",
+        )
+        for entry in entries
+    ]
+    
+    return MyEntryListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
 
 
 @router.get(
