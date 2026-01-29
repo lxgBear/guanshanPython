@@ -28,6 +28,7 @@ from src.core.domain.entities.info_entry import RawDataRef
 from src.infrastructure.persistence.repositories.mongo.review_entry_repository import (
     ReviewEntryRepository,
 )
+from src.infrastructure.persistence.auth.mongodb.user_repository import MongoUserRepository
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -71,6 +72,11 @@ class UpdateReviewEntryRequest(BaseModel):
     tertiary_category: Optional[str] = Field(None, description="地域")
 
 
+class SubmitForReviewRequest(BaseModel):
+    """提交审核请求"""
+    reviewer_id: str = Field(..., description="审核员ID")
+
+
 class ReviewActionRequest(BaseModel):
     """审核操作请求"""
     comment: Optional[str] = Field("", description="审核意见")
@@ -89,7 +95,6 @@ class RawDataRefResponse(BaseModel):
     origin_site: str = ""
     published_date: Optional[str] = None
     markdown_content: str = ""
-    html_content: str = ""
     snippet: str = ""
     translated_title: str = ""
     translated_content: str = ""
@@ -114,11 +119,13 @@ class ReviewEntryResponse(BaseModel):
     raw_data_count: int
     source_entry_id: str
     user_id: str
+    author_name: str = ""  # 作者用户名（display_name 或 username）
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     submitted_at: Optional[str] = None
     reviewed_at: Optional[str] = None
     reviewer_id: str
+    reviewer_name: str = ""  # 审核员用户名（display_name 或 username）
     review_comment: str
 
 
@@ -163,8 +170,38 @@ class CreateReviewEntryResponse(BaseModel):
 
 # ==================== 辅助函数 ====================
 
-def entry_to_response(entry: ReviewEntry) -> ReviewEntryResponse:
+# 用户名缓存（避免重复查询）
+_user_name_cache: dict = {}
+
+
+async def get_user_display_name(user_id: str) -> str:
+    """获取用户显示名称（优先 display_name，其次 username）"""
+    if not user_id:
+        return ""
+
+    # 检查缓存
+    if user_id in _user_name_cache:
+        return _user_name_cache[user_id]
+
+    try:
+        user_repo = MongoUserRepository()
+        user = await user_repo.get_by_id(user_id)
+        if user:
+            name = user.get("display_name") or user.get("username") or ""
+            _user_name_cache[user_id] = name
+            return name
+    except Exception as e:
+        logger.warning(f"获取用户名失败: user_id={user_id}, error={e}")
+
+    return ""
+
+
+async def entry_to_response(entry: ReviewEntry) -> ReviewEntryResponse:
     """将 ReviewEntry 转换为响应模型"""
+    # 获取用户名
+    author_name = await get_user_display_name(entry.user_id)
+    reviewer_name = await get_user_display_name(entry.reviewer_id)
+
     return ReviewEntryResponse(
         id=entry.id,
         title=entry.title,
@@ -188,7 +225,6 @@ def entry_to_response(entry: ReviewEntry) -> ReviewEntryResponse:
                 origin_site=ref.origin_site or "",
                 published_date=ref.published_date.isoformat() if ref.published_date else None,
                 markdown_content=ref.markdown_content or "",
-                html_content=ref.html_content or "",
                 snippet=ref.snippet or "",
                 translated_title=ref.translated_title or "",
                 translated_content=ref.translated_content or "",
@@ -200,11 +236,13 @@ def entry_to_response(entry: ReviewEntry) -> ReviewEntryResponse:
         raw_data_count=entry.raw_data_count,
         source_entry_id=entry.source_entry_id,
         user_id=entry.user_id,
+        author_name=author_name,
         created_at=entry.created_at.isoformat() if entry.created_at else None,
         updated_at=entry.updated_at.isoformat() if entry.updated_at else None,
         submitted_at=entry.submitted_at.isoformat() if entry.submitted_at else None,
         reviewed_at=entry.reviewed_at.isoformat() if entry.reviewed_at else None,
         reviewer_id=entry.reviewer_id,
+        reviewer_name=reviewer_name,
         review_comment=entry.review_comment,
     )
 
@@ -283,7 +321,7 @@ async def create_review_entry(
         return CreateReviewEntryResponse(
             success=True,
             message=f"草稿保存成功，包含 {len(raw_data_refs)} 条原始数据",
-            entry=entry_to_response(created_entry),
+            entry=await entry_to_response(created_entry),
         )
 
     except HTTPException:
@@ -386,8 +424,11 @@ async def list_review_entries(
 
     total_pages = (total + page_size - 1) // page_size
 
+    # 异步转换所有条目
+    items = [await entry_to_response(e) for e in entries]
+
     return ReviewEntryListResponse(
-        items=[entry_to_response(e) for e in entries],
+        items=items,
         total=total,
         page=page,
         page_size=page_size,
@@ -421,8 +462,11 @@ async def list_pending_reviews(
 
     total_pages = (total + page_size - 1) // page_size
 
+    # 异步转换所有条目
+    items = [await entry_to_response(e) for e in entries]
+
     return ReviewEntryListResponse(
-        items=[entry_to_response(e) for e in entries],
+        items=items,
         total=total,
         page=page,
         page_size=page_size,
@@ -448,12 +492,18 @@ async def get_review_entry(
     if not entry:
         raise HTTPException(status_code=404, detail="条目不存在")
 
-    # 只允许条目所有者或管理员查看
-    # TODO: 添加管理员权限校验
-    if entry.user_id != current_user.id:
+    # 权限检查：允许条目所有者、指定审核员、具有审核权限的用户或管理员查看
+    is_owner = entry.user_id == current_user.id
+    is_assigned_reviewer = entry.reviewer_id and entry.reviewer_id == current_user.id
+    is_admin = "admin" in current_user.roles if current_user.roles else False
+    # 有审核权限的用户可以查看待审核状态的条目
+    has_review_permission = "review:approve" in (current_user.permissions or [])
+    can_view_pending = has_review_permission and entry.status == ReviewStatus.PENDING_REVIEW
+
+    if not (is_owner or is_assigned_reviewer or is_admin or can_view_pending):
         raise HTTPException(status_code=403, detail="无权访问此条目")
 
-    return entry_to_response(entry)
+    return await entry_to_response(entry)
 
 
 @router.put(
@@ -475,15 +525,31 @@ async def update_review_entry(
     if not entry:
         raise HTTPException(status_code=404, detail="条目不存在")
 
-    if entry.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="无权修改此条目")
+    # 权限和状态检查
+    is_owner = entry.user_id == current_user.id
+    is_assigned_reviewer = entry.reviewer_id and entry.reviewer_id == current_user.id
+    is_admin = "admin" in current_user.roles if current_user.roles else False
+    has_review_permission = "review:approve" in (current_user.permissions or [])
+    can_edit_pending = has_review_permission and entry.status == ReviewStatus.PENDING_REVIEW
 
-    # 只有草稿和退回状态可以编辑
-    if entry.status not in [ReviewStatus.DRAFT, ReviewStatus.REJECTED]:
+    # 所有者只能编辑草稿和退回状态
+    if is_owner and not is_admin and entry.status not in [ReviewStatus.DRAFT, ReviewStatus.REJECTED]:
         raise HTTPException(
             status_code=400,
             detail=f"当前状态（{entry.status.value}）不允许编辑"
         )
+
+    # 审核员只能编辑待审核状态
+    if (is_assigned_reviewer or can_edit_pending) and not is_owner and not is_admin:
+        if entry.status != ReviewStatus.PENDING_REVIEW:
+            raise HTTPException(
+                status_code=400,
+                detail=f"当前状态（{entry.status.value}）不允许审核员编辑"
+            )
+
+    # 既不是所有者也不是审核员也不是管理员
+    if not (is_owner or is_assigned_reviewer or is_admin or can_edit_pending):
+        raise HTTPException(status_code=403, detail="无权修改此条目")
 
     # 更新字段
     if request.title is not None:
@@ -504,7 +570,7 @@ async def update_review_entry(
         entry.tertiary_category = request.tertiary_category
 
     updated_entry = await repo.update(entry)
-    return entry_to_response(updated_entry)
+    return await entry_to_response(updated_entry)
 
 
 @router.delete(
@@ -545,14 +611,20 @@ async def delete_review_entry(
     "/{entry_id}/submit",
     response_model=ReviewEntryResponse,
     summary="提交审核",
-    description="将条目提交审核",
+    description="将条目提交审核，需指定审核员",
 )
 async def submit_for_review(
     entry_id: str,
+    request: SubmitForReviewRequest,
     current_user: User = Depends(get_current_user),
     db=Depends(get_mongodb_database),
 ):
-    """提交审核"""
+    """提交审核
+
+    Args:
+        entry_id: 条目ID
+        request: 提交审核请求，包含审核员ID
+    """
     repo = ReviewEntryRepository(db)
     entry = await repo.get_by_id(entry_id)
 
@@ -569,12 +641,22 @@ async def submit_for_review(
             detail=f"当前状态（{entry.status.value}）不允许提交审核"
         )
 
-    updated_entry = await repo.submit_for_review(entry_id)
+    # 验证审核员ID不能为空
+    if not request.reviewer_id:
+        raise HTTPException(status_code=400, detail="必须指定审核员")
+
+    updated_entry = await repo.submit_for_review(
+        entry_id=entry_id,
+        reviewer_id=request.reviewer_id
+    )
     if not updated_entry:
         raise HTTPException(status_code=500, detail="提交审核失败")
 
-    logger.info(f"条目提交审核: id={entry_id}, user={current_user.id}")
-    return entry_to_response(updated_entry)
+    logger.info(
+        f"条目提交审核: id={entry_id}, user={current_user.id}, "
+        f"reviewer={request.reviewer_id}"
+    )
+    return await entry_to_response(updated_entry)
 
 
 @router.post(
@@ -589,13 +671,19 @@ async def approve_entry(
     current_user: User = Depends(get_current_user),
     db=Depends(get_mongodb_database),
 ):
-    """通过审核（管理员）"""
-    # TODO: 添加管理员权限校验
+    """通过审核（具有审核权限的用户）"""
     repo = ReviewEntryRepository(db)
     entry = await repo.get_by_id(entry_id)
 
     if not entry:
         raise HTTPException(status_code=404, detail="条目不存在")
+
+    # 权限检查：允许指定审核员、具有审核权限的用户或管理员操作
+    is_assigned_reviewer = entry.reviewer_id and entry.reviewer_id == current_user.id
+    is_admin = "admin" in current_user.roles if current_user.roles else False
+    has_review_permission = "review:approve" in (current_user.permissions or [])
+    if not (is_assigned_reviewer or is_admin or has_review_permission):
+        raise HTTPException(status_code=403, detail="无权审核此条目")
 
     if entry.status != ReviewStatus.PENDING_REVIEW:
         raise HTTPException(
@@ -612,7 +700,7 @@ async def approve_entry(
         raise HTTPException(status_code=500, detail="审核操作失败")
 
     logger.info(f"条目审核通过: id={entry_id}, reviewer={current_user.id}")
-    return entry_to_response(updated_entry)
+    return await entry_to_response(updated_entry)
 
 
 @router.post(
@@ -627,13 +715,19 @@ async def reject_entry(
     current_user: User = Depends(get_current_user),
     db=Depends(get_mongodb_database),
 ):
-    """退回审核（管理员）"""
-    # TODO: 添加管理员权限校验
+    """退回审核（具有审核权限的用户）"""
     repo = ReviewEntryRepository(db)
     entry = await repo.get_by_id(entry_id)
 
     if not entry:
         raise HTTPException(status_code=404, detail="条目不存在")
+
+    # 权限检查：允许指定审核员、具有审核权限的用户或管理员操作
+    is_assigned_reviewer = entry.reviewer_id and entry.reviewer_id == current_user.id
+    is_admin = "admin" in current_user.roles if current_user.roles else False
+    has_review_permission = "review:approve" in (current_user.permissions or [])
+    if not (is_assigned_reviewer or is_admin or has_review_permission):
+        raise HTTPException(status_code=403, detail="无权审核此条目")
 
     if entry.status != ReviewStatus.PENDING_REVIEW:
         raise HTTPException(
@@ -650,4 +744,4 @@ async def reject_entry(
         raise HTTPException(status_code=500, detail="审核操作失败")
 
     logger.info(f"条目审核退回: id={entry_id}, reviewer={current_user.id}")
-    return entry_to_response(updated_entry)
+    return await entry_to_response(updated_entry)
