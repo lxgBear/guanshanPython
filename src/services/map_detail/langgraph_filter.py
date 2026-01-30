@@ -29,15 +29,21 @@ class UrlFilterState(TypedDict, total=False):
 # LLM Prompt 模板
 DETAIL_PAGE_FILTER_PROMPT = """你是一个URL分类专家。请判断以下URL哪些是"详情页"，哪些是"导航页/列表页"。
 
-详情页特征：
-- 包含具体文章、新闻、产品的完整内容
-- URL通常包含文章ID、日期、slug等标识
-- 例如: /news/2024/01/article-title, /post/12345, /p/abc123, /articles/xyz
+【重要】这是一次100%准确的过滤任务，请严格区分：
 
-导航页/列表页特征：
-- 展示多个内容的链接列表
-- URL通常是分类、标签、首页等
-- 例如: /news/, /blog/, /products/, /category/tech
+详情页特征（必须包含具体内容的页面）：
+- 包含文章ID、数字ID、日期格式(YYYY-MM-DD或YYYY/MM/DD)
+- URL包含长slug（多个短横线分隔的描述性文本）
+- 例如: /news/2024/01/article-title, /post/12345, /p/abc123, /articles/xyz, /blog/my-first-post
+- 包含视频ID、产品ID等具体标识符
+
+导航页/列表页特征（必须过滤）：
+- 纯分类页：/news/, /blog/, /products/, /category/xxx, /tag/yyy
+- 首页：/, /home, /index
+- 分页：包含 ?page=, /page/2, /p/2 等分页参数
+- 作者页：/author/xxx, /user/yyy
+- 归档页：/archive/, /2024/, /2024/01/
+- 搜索页：/search?q=xxx
 
 请分析以下URL列表，返回JSON格式：
 {{
@@ -153,41 +159,51 @@ class LLMClient:
             }
         """
         if not urls:
+            logger.info(f"[LLMClient] 输入 URL 列表为空")
             return {"detail_pages": [], "navigation_pages": []}
 
         # 构建 prompt
         urls_text = "\n".join(f"- {url}" for url in urls)
         prompt = DETAIL_PAGE_FILTER_PROMPT.format(urls=urls_text)
 
+        logger.info(f"[LLMClient] ========== LLM 分类开始 ==========")
+        logger.info(f"[LLMClient] Provider: {self.provider}, Model: {self._model}")
+        logger.info(f"[LLMClient] 待分类 URL 数量: {len(urls)}")
+
         try:
             if self.provider == "custom_claude":
                 # 使用 httpx 直接调用自定义 Claude API
+                logger.info(f"[LLMClient] 使用 custom_claude 调用...")
                 content = await self._call_custom_claude(prompt)
             elif self.provider == "openai":
                 client = self._get_client()
                 # OpenAI 调用
+                logger.info(f"[LLMClient] 使用 OpenAI 调用: {self._model}")
                 response = await client.chat.completions.create(
                     model=self._model,
                     messages=[
-                        {"role": "system", "content": "你是一个URL分类专家，专门判断页面类型。"},
+                        {"role": "system", "content": "你是一个URL分类专家，专门判断页面类型。请严格区分详情页和导航页。"},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.1,
+                    temperature=0.0,  # 降低温度以提高准确性
                     response_format={"type": "json_object"}
                 )
                 content = response.choices[0].message.content
+                logger.debug(f"[LLMClient] OpenAI 响应 ID: {response.id}")
             else:
                 # 标准 Claude 调用 (使用 Anthropic SDK)
                 client = self._get_client()
+                logger.info(f"[LLMClient] 使用 Anthropic Claude 调用: {self._model}")
                 response = await client.messages.create(
                     model=self._model,
                     max_tokens=4096,
-                    temperature=0.1,
+                    temperature=0.0,  # 降低温度以提高准确性
                     messages=[
                         {"role": "user", "content": prompt}
                     ]
                 )
                 content = response.content[0].text
+                logger.debug(f"[LLMClient] Claude 响应 ID: {response.id}")
 
             logger.info(f"[LLMClient] LLM 响应内容长度: {len(content)} 字符")
             logger.debug(f"[LLMClient] LLM 响应内容: {content[:500]}...")
@@ -201,8 +217,9 @@ class LLMClient:
                 content_stripped = content_stripped[3:]
             if content_stripped.endswith("```"):
                 content_stripped = content_stripped[:-3]
-            
+
             result = json.loads(content_stripped.strip())
+            logger.debug(f"[LLMClient] 解析后的 JSON: {result}")
 
             # 验证结果格式
             detail_pages = result.get("detail_pages", [])
@@ -213,13 +230,36 @@ class LLMClient:
             detail_pages = [u for u in detail_pages if u in url_set]
             navigation_pages = [u for u in navigation_pages if u in url_set]
 
-            logger.info(f"[LLMClient] 分类结果: 详情页 {len(detail_pages)}, 导航页 {len(navigation_pages)}")
+            # 检查是否有遗漏
+            classified = set(detail_pages) | set(navigation_pages)
+            unclassified = url_set - classified
+            if unclassified:
+                logger.warning(f"[LLMClient] LLM 未分类的 URL ({len(unclassified)}个): {list(unclassified)}")
+                # 将未分类的 URL 保守地视为详情页
+                detail_pages.extend(list(unclassified))
+
+            logger.info(f"[LLMClient] ========== LLM 分类结果 ==========")
+            logger.info(f"[LLMClient] 详情页: {len(detail_pages)} 个")
+            for idx, url in enumerate(detail_pages, 1):
+                logger.info(f"[LLMClient]   ✓ 详情页 [{idx}]: {url}")
+            logger.info(f"[LLMClient] 导航页: {len(navigation_pages)} 个")
+            for idx, url in enumerate(navigation_pages, 1):
+                logger.info(f"[LLMClient]   ✗ 导航页 [{idx}]: {url}")
+            logger.info(f"[LLMClient] 分类率: {len(classified)}/{len(urls)} = {len(classified)/len(urls)*100:.1f}%")
 
             return {
                 "detail_pages": detail_pages,
                 "navigation_pages": navigation_pages
             }
 
+        except json.JSONDecodeError as e:
+            logger.error(f"[LLMClient] JSON 解析失败: {e}", exc_info=True)
+            logger.error(f"[LLMClient] 原始响应: {content}")
+            # 失败时返回空结果，不过滤
+            return {
+                "detail_pages": urls,  # 保守策略：保留所有 URL
+                "navigation_pages": []
+            }
         except Exception as e:
             logger.error(f"[LLMClient] 分类失败: {e}", exc_info=True)
             # 失败时返回空结果，不过滤

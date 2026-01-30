@@ -60,6 +60,24 @@ class NavigationBlacklist:
         r'/privacy\b',
         r'/terms\b',
         r'/policy\b',
+
+        # 新增：媒体中心类
+        r'/media\b',
+        r'/videos\b',
+        r'/video\b',
+        r'/audio\b',
+        r'/photos\b',
+        r'/gallery\b',
+        r'/reel\b',
+        r'/av\b',
+
+        # 新增：新闻聚合类
+        r'/news/?$',  # /news 或 /news/ 结尾
+        r'/blog/?$',
+        r'/articles/?$',
+        r'/posts/?$',
+        r'/press/?$',
+        r'/releases/?$',
     ]
 
     # 文件扩展名黑名单
@@ -124,6 +142,12 @@ class NavigationBlacklist:
             logger.info(f"[NavigationBlacklist] 检查 2: 导航类路径模式...")
             for pattern in cls.NAVIGATION_PATTERNS:
                 if re.search(pattern, path):
+                    # 特殊处理：如果路径是 /blog, /news 等，但有详情页标识参数，可能是详情页
+                    # 检查查询参数中是否有 p, id, post, article 等详情页标识
+                    detail_id_patterns = ['p=', 'id=', 'post=', 'article=', 'story=']
+                    if any(dp in query for dp in detail_id_patterns):
+                        logger.info(f"[NavigationBlacklist] 检测到详情页参数，忽略路径模式匹配")
+                        break
                     logger.info(f"[NavigationBlacklist] ✗ 结果: 导航页 (匹配模式: {pattern})")
                     return True
             logger.info(f"[NavigationBlacklist] 检查 2: 通过 (未匹配导航模式)")
@@ -184,6 +208,33 @@ class NavigationBlacklist:
                 logger.info(f"[NavigationBlacklist] ✗ 结果: 导航页 (单级路径: /{last_part})")
                 return True
             logger.info(f"[NavigationBlacklist] 检查 6: 通过 (路径深度 > 1)")
+
+            # 6c. 新增：检查二级纯分类路径 (如 /news/world, /blog/tech)
+            # 如果路径只有2部分且第二部分是常见分��词，可能是分类页
+            if len(path_parts) == 2:
+                # 二级分类关键词检测
+                SECOND_LEVEL_CATEGORY_KEYWORDS = {
+                    'world', 'uk', 'us', 'politics', 'business', 'tech', 'technology',
+                    'science', 'health', 'education', 'entertainment', 'arts', 'sport',
+                    'sports', 'weather', 'climate', 'environment', 'travel', 'food',
+                    'autos', 'fashion', 'beauty', 'opinion', 'editorial', 'videos',
+                    'video', 'audio', 'photos', 'pictures', 'gallery', 'reel', 'av',
+                    'live', 'blog', 'blogs', 'magazine', 'features', 'special',
+                    'topics', 'subjects', 'regions', 'countries', 'cities', 'latest',
+                    'trending', 'popular', 'newest', 'recent', 'more', 'all',
+                }
+                if last_part.lower() in SECOND_LEVEL_CATEGORY_KEYWORDS:
+                    logger.info(f"[NavigationBlacklist] ✗ 结果: 导航页 (二级分类关键词: {last_part})")
+                    return True
+                # 第一部分是常见分类词，第二部分可能也是分类
+                first_part = path_parts[0]
+                if first_part.lower() in {'news', 'blog', 'articles', 'posts', 'press', 'videos'}:
+                    # 检查第二部分是否看起来像详情页（有数字、日期、长slug）
+                    if not (last_part.isdigit() or '-' in last_part or len(last_part) > 20):
+                        logger.info(f"[NavigationBlacklist] ✗ 结果: 导航页 (二级分类: /{first_part}/{last_part})")
+                        return True
+                logger.info(f"[NavigationBlacklist] 检查 6c: 通过 (二级路径有详情页特征)")
+            logger.info(f"[NavigationBlacklist] 检查 6c: 通过 (路径深度 > 2)")
 
             # 7. 检查二级分类页面
             logger.info(f"[NavigationBlacklist] 检查 7: 详情页特征分析...")
