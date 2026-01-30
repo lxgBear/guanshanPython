@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     # LLM配置
     LLM_PROVIDER: str = Field(default="openai", env="LLM_PROVIDER")
     OPENAI_API_KEY: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
+    OPENAI_BASE_URL: Optional[str] = Field(default=None, env="OPENAI_BASE_URL")
     OPENAI_MODEL: str = Field(default="gpt-4", env="OPENAI_MODEL")
     CLAUDE_API_KEY: Optional[str] = Field(default=None, env="CLAUDE_API_KEY")
     CLAUDE_MODEL: str = Field(default="claude-3-opus", env="CLAUDE_MODEL")

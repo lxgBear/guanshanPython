@@ -22,6 +22,7 @@ class TaskType(Enum):
     CRAWL_WEBSITE = "crawl_website"          # 网站爬取模式（Crawl API 递归爬取整个网站）
     SCRAPE_URL = "scrape_url"                # 单页面爬取模式（Scrape API 爬取单个页面）
     MAP_SCRAPE_WEBSITE = "map_scrape_website"  # Map + Scrape 组合模式（Map API 发现 + 批量Scrape + 时间过滤）
+    MAP_DETAIL = "map_detail"                # Map + Detail 模式（Map API + 规则过滤 + LLM判断 + 批量Scrape）
 
 
 class TaskStatus(Enum):
