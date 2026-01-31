@@ -244,6 +244,7 @@ class SearchResult(BaseModel):
     layer_name: str = Field(default="", description="媒体来源中文名称 (如 英国广播公司新闻)")
     published_date: str | None = Field(default=None, description="发布日期")
     layer: int = Field(default=5, ge=0, le=5, description="关键词层级")
+    score: float | None = Field(default=None, description="相关性评分 (0.0-1.0)")
 
 
 # ============================================================================
