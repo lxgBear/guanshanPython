@@ -4,6 +4,7 @@
 根据任务类型创建对应的执行器实例
 
 v2.1.0: 添加 MultilangSearchExecutor 支持多语言搜索
+v4.30.0: 添加 MapDetailExecutor 支持 Map+Detail 详情页爬取
 """
 
 import logging
@@ -16,7 +17,8 @@ from .executors import (
     SearchExecutor,
     ScrapeExecutor,
     MapScrapeExecutor,
-    MultilangSearchExecutor
+    MultilangSearchExecutor,
+    MapDetailExecutor
 )
 
 
@@ -38,7 +40,8 @@ class ExecutorFactory:
         TaskType.SEARCH_KEYWORD: SearchExecutor,
         TaskType.SCRAPE_URL: ScrapeExecutor,
         TaskType.MAP_SCRAPE_WEBSITE: MapScrapeExecutor,
-        TaskType.SEARCH_MULTILANG: MultilangSearchExecutor
+        TaskType.SEARCH_MULTILANG: MultilangSearchExecutor,
+        TaskType.MAP_DETAIL: MapDetailExecutor
     }
 
     @classmethod

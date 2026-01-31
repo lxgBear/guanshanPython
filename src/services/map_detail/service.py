@@ -13,6 +13,7 @@ from src.core.domain.entities.search_task import SearchTask
 from src.core.domain.entities.search_result import SearchResult, ResultStatus
 from src.infrastructure.crawlers.firecrawl_adapter import FirecrawlAdapter
 from src.infrastructure.database.repositories import SearchResultRepository
+from src.services.firecrawl.credits_calculator import FirecrawlCreditsCalculator
 from src.utils.logger import get_logger
 
 from .url_filter import UrlFilter, FilterStats
@@ -81,8 +82,9 @@ class MapDetailResult:
     task_id: str
     success: bool
     stats: MapDetailStats
-    error_message: Optional[str] = None
     results: List[SearchResult] = field(default_factory=list)
+    error_message: Optional[str] = None
+    credits_used: Optional[int] = None
 
 
 class MapDetailService:
@@ -132,7 +134,8 @@ class MapDetailService:
                 task_id=str(task.id),
                 success=False,
                 stats=stats,
-                error_message="crawl_url 未设置"
+                error_message="crawl_url 未设置",
+                credits_used=0
             )
 
         try:
@@ -157,7 +160,8 @@ class MapDetailService:
                     task_id=str(task.id),
                     success=True,
                     stats=stats,
-                    results=[]
+                    results=[],
+                    credits_used=1  # Map API 至少消耗1积分
                 )
 
             # Step 2: URL 去重
@@ -174,7 +178,8 @@ class MapDetailService:
                     task_id=str(task.id),
                     success=True,
                     stats=stats,
-                    results=[]
+                    results=[],
+                    credits_used=1  # Map API 至少消耗1积分
                 )
 
             # Step 3: 规则过滤
@@ -203,7 +208,8 @@ class MapDetailService:
                     task_id=str(task.id),
                     success=True,
                     stats=stats,
-                    results=[]
+                    results=[],
+                    credits_used=1  # Map API 至少消耗1积分
                 )
 
             # Step 4: LLM 判断
@@ -240,7 +246,8 @@ class MapDetailService:
                     task_id=str(task.id),
                     success=True,
                     stats=stats,
-                    results=[]
+                    results=[],
+                    credits_used=1  # Map API 至少消耗1积分
                 )
 
             # Step 5: 批量 Scrape 爬取
@@ -271,7 +278,11 @@ class MapDetailService:
                 task_id=str(task.id),
                 success=True,
                 stats=stats,
-                results=results
+                results=results,
+                credits_used=FirecrawlCreditsCalculator.calculate_map_scrape_credits(
+                    urls_discovered=stats.total_urls_found,
+                    pages_scraped=stats.urls_scraped
+                )
             )
 
         except Exception as e:
@@ -280,7 +291,8 @@ class MapDetailService:
                 task_id=str(task.id),
                 success=False,
                 stats=stats,
-                error_message=str(e)
+                error_message=str(e),
+                credits_used=0
             )
 
     async def _execute_map(self, url: str, stats: MapDetailStats) -> List[str]:

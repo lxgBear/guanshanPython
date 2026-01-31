@@ -6,7 +6,7 @@
 """
 
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 
@@ -48,148 +48,84 @@ async def get_task_repository():
 # ==========================================
 
 class SearchTaskCreate(BaseModel):
-    """创建搜索任务请求"""
+    """创建搜索任务请求
+
+    v4.30.0: 前端字段为主，简化API接口
+
+    字段说明：
+    - name: 任务名称
+    - url: 监控URL（内部映射到 crawl_url）
+    - type: 监控类型 "website" | "social"（内部映射到 task_type: map_detail | search_keyword）
+    - frequency: 执行频率 "1h"|"2h"|"12h"|"1d"|"custom"（内部映射到 schedule_interval）
+    - custom_frequency_hours: 自定义频率小时数（当 frequency="custom" 时使用）
+    - fetch_limit: 每次采集数量 "20"|"30"|"40"|"50"|"unlimited"（内部映射到 search_config.limit）
+    - duration: 任务有效期天数 "7"|"14"|"30"|"60"|"90"|"unlimited"（内部映射到 crawl_config.duration_days）
+    - is_active: 是否启用任务
+    """
+    # 基础字段
     name: str = Field(..., description="任务名称", min_length=1, max_length=100)
-    description: Optional[str] = Field(None, description="任务描述", max_length=500)
-    query: Optional[str] = Field(None, description="搜索关键词（SEARCH_KEYWORD模式必填）", min_length=1, max_length=200)
-    target_website: Optional[str] = Field(None, description="主要目标网站（例如：www.gnlm.com.mm）", max_length=200)
-    crawl_url: Optional[str] = Field(None, description="爬取的URL（CRAWL_WEBSITE和SCRAPE_URL模式必填）", max_length=500)
 
-    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website | v2.1.0: 新增 search_multilang
-    task_type: Optional[str] = Field(
+    # 前端简化字段（内部自动映射到后端模型）
+    url: str = Field(..., description="监控URL", max_length=500)
+    type: Literal["website", "social"] = Field(
+        "website",
+        description="监控类型：website（网站监控）、social（社交媒体）"
+    )
+    frequency: Literal["1h", "2h", "12h", "1d", "custom"] = Field(
+        "2h",
+        description="执行频率：1h、2h、12h、1d、custom"
+    )
+    custom_frequency_hours: Optional[str] = Field(
         None,
-        description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website、search_multilang",
-        pattern="^(search_keyword|crawl_website|scrape_url|map_scrape_website|search_multilang)$"
+        description="自定义频率小时数（1-168，当frequency=custom时使用）",
+        min_length=1,
+        max_length=3
     )
-
-    # 配置字段
-    search_config: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="搜索配置（用于SEARCH_KEYWORD和SCRAPE_URL模式）"
+    fetch_limit: Literal["20", "30", "40", "50", "unlimited"] = Field(
+        "30",
+        description="每次采集数量"
     )
-    crawl_config: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="网站爬取配置（用于CRAWL_WEBSITE模式）"
+    duration: Literal["7", "14", "30", "60", "90", "unlimited"] = Field(
+        "30",
+        description="任务有效期天数"
     )
-
-    # v2.1.0 新增：多语言搜索配置
-    enable_multilang: bool = Field(False, description="是否启用多语言搜索（启用后将使用Claude翻译查询词进行多语言并行搜索）")
-    languages: Optional[List[str]] = Field(
-        default=["zh"],
-        description="搜索语言列表，支持: zh（中文）、en（英语）、ja（日语）、ko（韩语）"
-    )
-    auto_translate: bool = Field(True, description="是否使用Claude自动翻译查询词（仅在enable_multilang=True时生效）")
-
-    schedule_interval: str = Field("DAILY", description="调度间隔")
-    is_active: bool = Field(True, description="是否启用")
+    is_active: bool = Field(True, description="是否启用任务")
     execute_immediately: bool = Field(True, description="创建后是否立即执行一次")
-    
-    class Config:
-        json_schema_extra = {
-            "examples": [
-                {
-                    "name": "示例1：关键词搜索任务",
-                    "value": {
-                        "name": "AI新闻监控",
-                        "description": "监控人工智能领域最新进展",
-                        "query": "人工智能 深度学习 最新进展",
-                        "task_type": "search_keyword",
-                        "target_website": "www.36kr.com",
-                        "search_config": {
-                            "limit": 10,
-                            "language": "zh",
-                            "enable_detail_scrape": True,
-                            "max_concurrent_scrapes": 3,
-                            "include_domains": ["www.36kr.com", "tech.sina.com.cn"]
-                        },
-                        "schedule_interval": "DAILY",
-                        "is_active": True,
-                        "execute_immediately": True
-                    }
-                },
-                {
-                    "name": "示例2：网站爬取任务",
-                    "value": {
-                        "name": "技术博客归档",
-                        "description": "定期爬取技术博客的所有文章",
-                        "crawl_url": "https://example.com/blog",
-                        "task_type": "crawl_website",
-                        "crawl_config": {
-                            "limit": 100,
-                            "max_depth": 3,
-                            "include_paths": ["/blog/*", "/articles/*"],
-                            "exclude_paths": ["/admin/*"],
-                            "only_main_content": True
-                        },
-                        "schedule_interval": "WEEKLY",
-                        "is_active": True,
-                        "execute_immediately": False
-                    }
-                },
-                {
-                    "name": "示例3：单页面爬取任务",
-                    "value": {
-                        "name": "官网首页监控",
-                        "description": "定期监控官网首页内容变化",
-                        "crawl_url": "https://example.com",
-                        "task_type": "scrape_url",
-                        "search_config": {
-                            "only_main_content": True,
-                            "wait_for": 2000,
-                            "exclude_tags": ["nav", "footer", "header"]
-                        },
-                        "schedule_interval": "HOURLY",
-                        "is_active": True,
-                        "execute_immediately": True
-                    }
-                },
-                {
-                    "name": "示例4：多语言并行搜索任务",
-                    "value": {
-                        "name": "缅甸局势多语言监控",
-                        "description": "使用Claude翻译查询词，同时搜索中英日韩四种语言的新闻",
-                        "query": "缅甸 军事政变 最新局势",
-                        "task_type": "search_keyword",
-                        "enable_multilang": True,
-                        "languages": ["zh", "en", "ja", "ko"],
-                        "auto_translate": True,
-                        "search_config": {
-                            "limit": 10,
-                            "language": "zh"
-                        },
-                        "schedule_interval": "DAILY",
-                        "is_active": True,
-                        "execute_immediately": True
-                    }
-                }
-            ]
-        }
 
 
 class SearchTaskUpdate(BaseModel):
-    """更新搜索任务请求"""
+    """更新搜索任务请求
+
+    v4.30.0: 前端字段为主，简化API接口
+    """
+    # 基础字段
     name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
-    query: Optional[str] = Field(None, min_length=1, max_length=200)
-    target_website: Optional[str] = Field(None, max_length=200)
-    crawl_url: Optional[str] = Field(None, max_length=500)
 
-    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website | v2.1.0: 新增 search_multilang
-    task_type: Optional[str] = Field(
+    # 前端简化字段（内部自动映射到后端模型）
+    url: Optional[str] = Field(None, description="监控URL", max_length=500)
+    type: Optional[Literal["website", "social"]] = Field(
         None,
-        description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website、search_multilang",
-        pattern="^(search_keyword|crawl_website|scrape_url|map_scrape_website|search_multilang)$"
+        description="监控类型：website（网站监控）、social（社交媒体）"
     )
-
-    search_config: Optional[Dict[str, Any]] = None
-    crawl_config: Optional[Dict[str, Any]] = None
-    schedule_interval: Optional[str] = None
-    is_active: Optional[bool] = None
-
-    # v2.1.0 新增：多语言搜索配置
-    enable_multilang: Optional[bool] = Field(None, description="是否启用多语言搜索")
-    languages: Optional[List[str]] = Field(None, description="搜索语言列表")
-    auto_translate: Optional[bool] = Field(None, description="是否使用Claude自动翻译查询词")
+    frequency: Optional[Literal["1h", "2h", "12h", "1d", "custom"]] = Field(
+        None,
+        description="执行频率：1h、2h、12h、1d、custom"
+    )
+    custom_frequency_hours: Optional[str] = Field(
+        None,
+        description="自定义频率小时数（1-168，当frequency=custom时使用）",
+        min_length=1,
+        max_length=3
+    )
+    fetch_limit: Optional[Literal["20", "30", "40", "50", "unlimited"]] = Field(
+        None,
+        description="每次采集数量"
+    )
+    duration: Optional[Literal["7", "14", "30", "60", "90", "unlimited"]] = Field(
+        None,
+        description="任务有效期天数"
+    )
+    is_active: Optional[bool] = Field(None, description="是否启用任务")
 
 
 class SearchTaskStatusUpdate(BaseModel):
@@ -198,42 +134,30 @@ class SearchTaskStatusUpdate(BaseModel):
 
 
 class SearchTaskResponse(BaseModel):
-    """搜索任务响应（统一的任务信息模型，包含完整的执行统计和状态信息）"""
+    """搜索任务响应
+
+    v4.30.0: 前端字段为主，简化API响应
+    """
+    # 前端简化字段
     id: str = Field(..., description="任务ID")
     name: str = Field(..., description="任务名称")
-    description: Optional[str] = Field(None, description="任务描述")
-    query: Optional[str] = Field(None, description="搜索关键词")
-    target_website: Optional[str] = Field(None, description="主要目标网站")
-    crawl_url: Optional[str] = Field(None, description="爬取的URL")
-
-    # v2.0.0 新增：任务类型 | v2.1.1: 新增 map_scrape_website | v2.1.0: 新增 search_multilang
-    task_type: str = Field(..., description="任务类型：search_keyword、crawl_website、scrape_url、map_scrape_website、search_multilang")
-    task_mode: str = Field(..., description="任务模式描述（用于前端显示）")
-
-    # v2.1.0 新增：多语言搜索配置
-    enable_multilang: bool = Field(False, description="是否启用多语言搜索")
-    languages: List[str] = Field(default_factory=lambda: ["zh"], description="搜索语言列表")
-    auto_translate: bool = Field(True, description="是否使用Claude自动翻译查询词")
-
-    search_config: Dict[str, Any] = Field(..., description="搜索配置")
-    crawl_config: Optional[Dict[str, Any]] = Field(None, description="网站爬取配置")
-    schedule_interval: str = Field(..., description="调度间隔值")
-    schedule_display: str = Field(..., description="调度间隔显示名称")
-    schedule_description: str = Field(..., description="调度间隔说明")
+    url: str = Field(..., description="监控URL")
+    type: str = Field(..., description="监控类型：website、social")
+    frequency: str = Field(..., description="执行频率：1h、2h、12h、1d、custom")
+    fetch_limit: str = Field(..., description="每次采集数量：20、30、40、50、unlimited")
+    duration: str = Field(..., description="任务有效期天数：7、14、30、60、90、unlimited")
     is_active: bool = Field(..., description="是否启用")
     status: str = Field(..., description="任务状态")
-    created_by: str = Field(..., description="创建者")
-    created_at: datetime = Field(..., description="创建时间")
-    updated_at: datetime = Field(..., description="更新时间")
-    last_executed_at: Optional[datetime] = Field(None, description="最后执行时间")
-    next_run_time: Optional[datetime] = Field(None, description="下次运行时间")
+
+    # 任务展示字段
+    task_type: str = Field(..., description="任务类型（用于展示）")
+    task_mode: str = Field(..., description="任务模式描述（用于前端显示）")
+
+    # 统计字段
     execution_count: int = Field(..., description="总执行次数")
-    success_count: int = Field(..., description="成功次数")
-    failure_count: int = Field(..., description="失败次数")
-    success_rate: float = Field(..., description="成功率（%）")
-    average_results: float = Field(..., description="平均结果数")
     total_results: int = Field(..., description="总结果数")
-    total_credits_used: int = Field(..., description="总消耗积分")
+    last_executed_at: Optional[datetime] = Field(None, description="最后执行时间")
+    created_at: datetime = Field(..., description="创建时间")
 
 
 class SearchTaskListResponse(BaseModel):
@@ -257,53 +181,87 @@ class ScheduleIntervalOption(BaseModel):
 # 辅助函数
 # ==========================================
 
-def task_to_response(task: SearchTask) -> SearchTaskResponse:
-    """将任务实体转换为响应模型"""
-    interval = task.get_schedule_interval()
-    task_type = task.get_task_type()
+def _map_task_type_to_monitor_type(task_type: str) -> Optional[str]:
+    """将后端 task_type 映射到前端 monitor type"""
+    type_mapping = {
+        "crawl_website": "website",
+        "scrape_url": "website",
+        "map_scrape_website": "website",
+        "map_detail": "website",       # v4.30.0: Map+Detail 详情页爬取
+        "search_keyword": "social",    # 暂时映射
+        "search_multilang": "social",
+    }
+    return type_mapping.get(task_type)
 
-    # 获取任务模式描述（v2.1.1: 新增 map_scrape_website | v2.1.0: 新增 search_multilang）
+
+def _map_schedule_interval_to_frequency(schedule_interval: str) -> Optional[str]:
+    """将后端 schedule_interval 映射到前端 frequency"""
+    frequency_mapping = {
+        "HOURLY_1": "1h",
+        "HOURLY_6": "2h",
+        "HOURLY_12": "12h",
+        "DAILY": "1d",
+        "DAYS_3": "3d",
+        "WEEKLY": "7d",
+    }
+    return frequency_mapping.get(schedule_interval, "2h")
+
+
+def _map_limit_to_fetch_limit(search_config: Dict[str, Any]) -> Optional[str]:
+    """将后端 search_config.limit 映射到前端 fetch_limit"""
+    limit = search_config.get("limit")
+    if limit is None:
+        return "30"  # 默认值
+    if limit == 0 or limit is False:
+        return "unlimited"
+    return str(limit)
+
+
+def _map_duration_days_to_duration(crawl_config: Dict[str, Any]) -> Optional[str]:
+    """将后端 crawl_config.duration_days 映射到前端 duration"""
+    duration_days = crawl_config.get("duration_days")
+    if duration_days is None:
+        return "30"  # 默认值
+    return "unlimited" if duration_days == "unlimited" else str(duration_days)
+
+
+def task_to_response(task: SearchTask) -> SearchTaskResponse:
+    """将任务实体转换为响应模型
+
+    v4.30.0: 前端字段为主，简化响应
+    """
+    task_type_enum = task.get_task_type()
+
+    # 获取任务模式描述
     task_mode_map = {
         "search_keyword": "关键词搜索 + 详情页爬取",
         "crawl_website": "网站递归爬取",
         "scrape_url": "单页面爬取",
         "map_scrape_website": "Map + Scrape 组合模式",
-        "search_multilang": "多语言并行搜索（Claude翻译）"
+        "search_multilang": "多语言并行搜索（Claude翻译）",
+        "map_detail": "Map + Detail 智能过滤模式"
     }
-    task_mode = task_mode_map.get(task_type.value, task_type.value)
+    task_mode = task_mode_map.get(task_type_enum.value, task_type_enum.value)
 
     return SearchTaskResponse(
+        # 前端简化字段
         id=task.get_id_string(),
         name=task.name,
-        description=task.description,
-        query=task.query,
-        target_website=task.target_website,
-        crawl_url=task.crawl_url,
-        task_type=task_type.value,
-        task_mode=task_mode,
-        # v2.1.0 新增：多语言搜索配置
-        enable_multilang=getattr(task, 'enable_multilang', False),
-        languages=getattr(task, 'languages', ["zh"]) or ["zh"],
-        auto_translate=getattr(task, 'auto_translate', True),
-        search_config=task.search_config,
-        crawl_config=task.crawl_config if hasattr(task, 'crawl_config') else {},
-        schedule_interval=task.schedule_interval,
-        schedule_display=interval.display_name,
-        schedule_description=interval.description,
+        url=task.crawl_url or "",
+        type=_map_task_type_to_monitor_type(task_type_enum.value) or "website",
+        frequency=_map_schedule_interval_to_frequency(task.schedule_interval) or "2h",
+        fetch_limit=_map_limit_to_fetch_limit(task.search_config) or "30",
+        duration=_map_duration_days_to_duration(task.crawl_config) or "30",
         is_active=task.is_active,
         status=task.status.value,
-        created_by=task.created_by,
-        created_at=task.created_at,
-        updated_at=task.updated_at,
-        last_executed_at=task.last_executed_at,
-        next_run_time=task.next_run_time,
+        # 任务展示字段
+        task_type=task_type_enum.value,
+        task_mode=task_mode,
+        # 统计字段
         execution_count=task.execution_count,
-        success_count=task.success_count,
-        failure_count=task.failure_count,
-        success_rate=task.success_rate,
-        average_results=task.average_results,
         total_results=task.total_results,
-        total_credits_used=task.total_credits_used
+        last_executed_at=task.last_executed_at,
+        created_at=task.created_at
     )
 
 
@@ -330,75 +288,85 @@ async def get_schedule_intervals():
     description="创建新的定时搜索任务。任务创建后将按照指定的调度间隔自动执行搜索。"
 )
 async def create_search_task(task_data: SearchTaskCreate):
-    """创建新的搜索任务"""
+    """创建新的搜索任务
+
+    v4.30.0: 前端字段为主，简化API
+    """
     try:
-        # 验证调度间隔
-        try:
-            ScheduleInterval.from_value(task_data.schedule_interval)
-        except ValueError as e:
-            raise HTTPException(400, f"无效的调度间隔: {str(e)}")
+        # ==========================================
+        # v4.30.0: 前端字段映射到后端模型
+        # ==========================================
+        # type -> task_type 映射
+        type_mapping = {
+            "website": "map_detail",
+            "social": "search_keyword"
+        }
+        task_type = type_mapping.get(task_data.type, "map_detail")
 
-        # 验证 crawl_url 和 include_domains 的互斥关系
-        validate_task_creation(
-            crawl_url=task_data.crawl_url,
-            query=task_data.query,
-            search_config=task_data.search_config
-        )
+        # frequency -> schedule_interval 映射（使用 ScheduleInterval 枚举值）
+        frequency_mapping = {
+            "1h": "HOURLY_1",
+            "2h": "HOURLY_6",
+            "12h": "HOURLY_12",
+            "1d": "DAILY",
+        }
+        if task_data.frequency == "custom" and task_data.custom_frequency_hours:
+            hours = int(task_data.custom_frequency_hours)
+            schedule_interval_map = {
+                1: "HOURLY_1", 2: "HOURLY_6", 3: "HOURLY_6", 4: "HOURLY_6", 5: "HOURLY_6",
+                6: "HOURLY_6", 12: "HOURLY_12", 24: "DAILY", 168: "WEEKLY"
+            }
+            schedule_interval = schedule_interval_map.get(hours, "HOURLY_6")
+        else:
+            schedule_interval = frequency_mapping.get(task_data.frequency, "HOURLY_6")
 
-        # 使用安全ID创建任务
+        # fetch_limit -> search_config.limit 映射
+        search_config = {"limit": None if task_data.fetch_limit == "unlimited" else int(task_data.fetch_limit)}
+
+        # duration -> crawl_config.duration_days 映射
+        crawl_config = {"duration_days": None if task_data.duration == "unlimited" else int(task_data.duration)}
+
+        # 创建任务
         task = SearchTask.create_with_secure_id(
             name=task_data.name,
-            description=task_data.description,
-            query=task_data.query or "",  # 允许为空（crawl/scrape模式不需要query）
-            target_website=task_data.target_website,
-            crawl_url=task_data.crawl_url,
-            task_type=task_data.task_type,  # v2.0.0 新增
-            search_config=task_data.search_config or {},
-            crawl_config=task_data.crawl_config or {},  # v2.0.0 新增
-            # v2.1.0 新增：多语言搜索配置
-            enable_multilang=task_data.enable_multilang,
-            languages=task_data.languages or ["zh"],
-            auto_translate=task_data.auto_translate,
-            schedule_interval=task_data.schedule_interval,
+            crawl_url=task_data.url,
+            task_type=task_type,
+            search_config=search_config,
+            crawl_config=crawl_config,
+            schedule_interval=schedule_interval,
             is_active=task_data.is_active,
-            created_by="current_user",  # TODO: 从JWT token获取用户信息
+            created_by="current_user",
             status=TaskStatus.ACTIVE if task_data.is_active else TaskStatus.DISABLED
         )
 
-        # 如果 target_website 为空，自动从 search_config 提取
+        # 自动提取 target_website
         task.sync_target_website()
 
         # 保存到仓储
         repo = await get_task_repository()
         await repo.create(task)
 
-        logger.info(f"创建搜索任务: {task.name} (ID: {task.get_id_string()}, 目标网站: {task.target_website})")
+        logger.info(f"创建搜索任务: {task.name} (ID: {task.get_id_string()}, type: {task_type})")
 
-        # 将任务添加到调度器（修复：创建任务后需要注册到调度器才能定时执行）
+        # 添加到调度器
         if task.is_active:
             try:
                 scheduler = await get_scheduler()
                 if scheduler.is_running():
                     await scheduler.add_task(task)
                     logger.info(f"✅ 任务已添加到调度器: {task.name}")
-                else:
-                    logger.warning(f"⚠️ 调度器未运行，任务未添加到调度器: {task.name}")
             except Exception as e:
                 logger.warning(f"⚠️ 添加任务到调度器失败（不影响任务创建）: {e}")
 
-        # 首次立即执行（如果启用且 execute_immediately=True）
+        # 首次立即执行
         if task.is_active and task_data.execute_immediately:
             try:
                 scheduler = await get_scheduler()
                 if scheduler.is_running():
-                    # 异步触发首次执行（不阻塞API响应）
                     import asyncio
                     asyncio.create_task(scheduler.execute_task_now(str(task.id)))
                     logger.info(f"✅ 已触发首次立即执行: {task.name} (ID: {task.get_id_string()})")
-                else:
-                    logger.warning(f"⚠️ 调度器未运行，跳过首次执行: {task.name}")
             except Exception as e:
-                # 首次执行失败不影响任务创建
                 logger.warning(f"⚠️ 触发首次执行失败（不影响任务创建）: {e}")
 
         return task_to_response(task)
@@ -484,63 +452,66 @@ async def get_search_task(task_id: str):
     description="更新搜索任务的基本信息，如名称、描述、查询关键词、配置和调度间隔等。"
 )
 async def update_search_task(task_id: str, task_data: SearchTaskUpdate):
-    """更新搜索任务"""
+    """更新搜索任务
+
+    v4.30.0: 前端字段为主，简化API
+    """
     repo = await get_task_repository()
     task = await repo.get_by_id(task_id)
     if not task:
         raise HTTPException(404, f"任务不存在: {task_id}")
 
-    # 更新字段
+    # ==========================================
+    # v4.30.0: 前端字段映射到后端模型
+    # ==========================================
     if task_data.name is not None:
         task.name = task_data.name
 
-    if task_data.description is not None:
-        task.description = task_data.description
+    if task_data.url is not None:
+        task.crawl_url = task_data.url
 
-    if task_data.query is not None:
-        task.query = task_data.query
+    # type -> task_type 映射
+    if task_data.type is not None:
+        type_mapping = {
+            "website": "map_detail",
+            "social": "search_keyword"
+        }
+        task.task_type = type_mapping.get(task_data.type, task.task_type)
 
-    if task_data.crawl_url is not None:
-        task.crawl_url = task_data.crawl_url
+    # frequency -> schedule_interval 映射
+    if task_data.frequency is not None:
+        frequency_mapping = {
+            "1h": "HOURLY_1",
+            "2h": "HOURLY_6",
+            "12h": "HOURLY_12",
+            "1d": "DAILY",
+        }
+        if task_data.frequency == "custom" and task_data.custom_frequency_hours:
+            hours = int(task_data.custom_frequency_hours)
+            schedule_interval_map = {
+                1: "HOURLY_1", 2: "HOURLY_6", 3: "HOURLY_6", 4: "HOURLY_6", 5: "HOURLY_6",
+                6: "HOURLY_6", 12: "HOURLY_12", 24: "DAILY", 168: "WEEKLY"
+            }
+            task.schedule_interval = schedule_interval_map.get(hours, "HOURLY_6")
+        else:
+            task.schedule_interval = frequency_mapping.get(
+                task_data.frequency,
+                task.schedule_interval
+            )
 
-    # v2.0.0 新增：任务类型
-    if task_data.task_type is not None:
-        task.task_type = task_data.task_type
+    # fetch_limit -> search_config.limit 映射
+    if task_data.fetch_limit is not None:
+        limit = None if task_data.fetch_limit == "unlimited" else int(task_data.fetch_limit)
+        if task.search_config is None:
+            task.search_config = {}
+        task.search_config["limit"] = limit
 
-    # 标记是否显式更新了 target_website
-    target_website_explicitly_updated = False
-
-    if task_data.target_website is not None:
-        task.target_website = task_data.target_website
-        target_website_explicitly_updated = True
-
-    if task_data.search_config is not None:
-        task.search_config = task_data.search_config
-        # 如果更新了 search_config 但没有显式更新 target_website，则自动同步
-        if not target_website_explicitly_updated:
-            # 强制更新 target_website 为新的第一个域名
-            task.target_website = task.extract_target_website()
-
-    # v2.0.0 新增：网站爬取配置
-    if task_data.crawl_config is not None:
-        task.crawl_config = task_data.crawl_config
-
-    # v2.1.0 新增：多语言搜索配置
-    if task_data.enable_multilang is not None:
-        task.enable_multilang = task_data.enable_multilang
-
-    if task_data.languages is not None:
-        task.languages = task_data.languages
-
-    if task_data.auto_translate is not None:
-        task.auto_translate = task_data.auto_translate
-
-    if task_data.schedule_interval is not None:
-        try:
-            ScheduleInterval.from_value(task_data.schedule_interval)
-            task.schedule_interval = task_data.schedule_interval
-        except ValueError as e:
-            raise HTTPException(400, f"无效的调度间隔: {str(e)}")
+    # duration -> crawl_config.duration_days 映射
+    if task_data.duration is not None:
+        duration_days = None if task_data.duration == "unlimited" else int(task_data.duration)
+        if task.crawl_config is None:
+            task.crawl_config = {}
+        task.crawl_config["duration_days"] = duration_days
 
     if task_data.is_active is not None:
         task.is_active = task_data.is_active
@@ -551,17 +522,16 @@ async def update_search_task(task_id: str, task_data: SearchTaskUpdate):
     # 更新到仓储
     await repo.update(task)
 
-    logger.info(f"更新搜索任务: {task.name} (ID: {task_id}, 目标网站: {task.target_website})")
+    logger.info(f"更新搜索任务: {task.name} (ID: {task_id})")
 
-    # 同步到调度器（修复：更新任务后需要同步调度器才能应用新的调度配置）
+    # 同步到调度器
     try:
         scheduler = await get_scheduler()
         if scheduler.is_running():
             await scheduler.update_task(task)
-            logger.info(f"已同步任务到调度器: {task.name}")
+            logger.info(f"✅ 调度器已更新: {task.name}")
     except Exception as e:
-        logger.warning(f"同步任务到调度器失败: {e}")
-        # 不影响主流程，继续返回
+        logger.warning(f"⚠️ 更新调度器失败（不影响任务更新）: {e}")
 
     return task_to_response(task)
 
