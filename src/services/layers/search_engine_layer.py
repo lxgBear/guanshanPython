@@ -407,18 +407,18 @@ class SearchEngineLayer(ISearchLayer):
                     markdown_content=raw.get("markdown") or raw.get("content"),
                     html_content=raw.get("html"),
                     search_position=idx + 1,
-                    # LangGraph 特定字段
+                    # LangGraph 特定字段 (v4.8.1: 移除评分字段)
                     layer=raw.get("layer", 0),
                     layer_name=self._get_layer_name(raw.get("layer", 0)),
                     source_tier=raw.get("source_tier", 3),
-                    credibility_score=raw.get("credibility_score", 0.5),
-                    final_score=raw.get("score", 0.0),
                     category=raw.get("category"),
-                    # 元数据
+                    # 元数据 (保存评分到 metadata 供参考)
                     metadata={
                         "keyword": metadata.get("keyword"),
                         "source": metadata.get("source"),
                         "engine": "gsac",
+                        "credibility_score": raw.get("credibility_score", 0.5),
+                        "final_score": raw.get("score", 0.0),
                     },
                     data_source_type="gsac",
                     created_at=datetime.utcnow(),
