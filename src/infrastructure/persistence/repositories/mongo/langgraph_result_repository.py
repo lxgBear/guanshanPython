@@ -457,6 +457,8 @@ class MongoLangGraphResultRepository:
         """根据任务 ID 查询搜索结果"""
         try:
             collection = await self._get_collection()
+            query = {"task_id": task_id}
+            cursor = collection.find(query)
 
             if limit:
                 cursor = cursor.limit(limit)
@@ -481,6 +483,7 @@ class MongoLangGraphResultRepository:
         try:
             collection = await self._get_collection()
             query = {"task_id": task_id, "layer": layer}
+            cursor = collection.find(query)
 
             if limit:
                 cursor = cursor.limit(limit)
