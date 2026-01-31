@@ -14,6 +14,7 @@ from ..config.settings import get_settings
 def get_openai_llm(
     model: str | None = None,
     api_key: str | None = None,
+    base_url: str | None = None,
     temperature: float | None = None,
 ) -> BaseChatModel:
     """获取OpenAI LLM实例"""
@@ -21,11 +22,19 @@ def get_openai_llm(
 
     settings = get_settings()
 
-    return ChatOpenAI(
-        model=model or settings.llm_model,
-        api_key=api_key or settings.llm_api_key,
-        temperature=temperature if temperature is not None else settings.llm_temperature,
-    )
+    # 构建参数
+    kwargs = {
+        "model": model or settings.llm_model,
+        "api_key": api_key or settings.llm_api_key,
+        "temperature": temperature if temperature is not None else settings.llm_temperature,
+    }
+
+    # 如果有 base_url，添加到参数中（支持第三方 API 代理）
+    actual_base_url = base_url or settings.llm_base_url
+    if actual_base_url:
+        kwargs["base_url"] = actual_base_url
+
+    return ChatOpenAI(**kwargs)
 
 
 def get_anthropic_llm(
