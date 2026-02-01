@@ -127,6 +127,7 @@ class EntryResponse(BaseModel):
     """条目响应"""
     id: str
     title: str
+    translated_title: str = ""  # 翻译后的标题
     description: str
     summary: str
     combined_content: str
@@ -162,9 +163,15 @@ class CreateEntryResponse(BaseModel):
 
 def entry_to_response(entry: InfoEntry) -> EntryResponse:
     """将 InfoEntry 转换为响应模型"""
+    # 获取翻译标题（从第一个原始数据引用中获取）
+    translated_title = ""
+    if entry.raw_data_refs and len(entry.raw_data_refs) > 0:
+        translated_title = entry.raw_data_refs[0].translated_title or ""
+    
     return EntryResponse(
         id=entry.id,
         title=entry.title,
+        translated_title=translated_title,
         description=entry.description,
         summary=entry.summary,
         combined_content=entry.combined_content,

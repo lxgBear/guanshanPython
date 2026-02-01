@@ -104,12 +104,12 @@ Firecrawl 搜索API适配器
         try:
             # 配置httpx客户端 - 显式禁用代理但保留DNS解析
             # Firecrawl API不需要代理，直接连接
-            # 注意: trust_env=False会导致DNS解析问题,因此只显式设置proxies={}来禁用代理
+            # 注意: httpx 0.28+ 移除了 proxies 参数，使用 proxy=None 禁用代理
             # Search API 通常需要更长的超时时间（90秒），因为需要爬取多个搜索结果
             # 增加超时以应对网络波动和慢速响应
             search_timeout = config.get('timeout', 90)
             client_config = {
-                "proxies": {},  # 空字典禁用代理,但不影响DNS
+                "proxy": None,  # 显式禁用代理（httpx 0.28+ 语法）
                 "timeout": search_timeout
             }
 

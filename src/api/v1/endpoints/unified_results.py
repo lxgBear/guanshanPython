@@ -30,7 +30,8 @@ router = APIRouter(prefix="/unified-results", tags=["📊 统一聚合结果"])
 class UnifiedResultItem(BaseModel):
     """统一结果项"""
     id: str = Field(..., description="结果ID")
-    title: str = Field(..., description="标题")
+    title: str = Field(..., description="标题（原始语言）")
+    translated_title: Optional[str] = Field(None, description="翻译后的标题（中文）")
     url: str = Field("", description="URL链接")
     snippet: Optional[str] = Field(None, description="内容摘要（原始格式，可能是TipTap JSON）")
     snippet_text: Optional[str] = Field(None, description="内容摘要（纯文本，用于列表显示）")

@@ -71,12 +71,18 @@ class MongoResultRepository(IResultRepository):
         """将结果实体转换为 MongoDB 文档 (v2.1.0: 优化后的模型，移除 metadata 存储)
         
         v2.3.0: 移除评分字段存储 - relevance_score, quality_score 不再存入数据库
+        v4.32.0: 添加 user_id, created_by, data_source_type 字段存储
         """
         return {
             "_id": str(result.id),
             "task_id": str(result.task_id),
             # v4.28.0: 任务名称冗余存储
             "task_name": result.task_name,
+            # v4.32.0: 多用户数据隔离字段
+            "user_id": result.user_id,
+            "created_by": result.created_by,
+            "data_source_type": result.data_source_type.value if result.data_source_type else "scheduled_crawl",
+            # 核心字段
             "title": result.title,
             "url": result.url,
             "snippet": result.snippet,

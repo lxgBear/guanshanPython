@@ -139,11 +139,22 @@ class ReviewEntryListResponse(BaseModel):
 
 
 class MyEntryResponse(BaseModel):
-    """我的条目响应（简化版，用于 dashboard 列表）"""
+    """我的条目响应（扩展版，用于 dashboard 列表）"""
     id: str
     title: str
+    translated_title: str = ""  # 翻译后的标题
     status: str
     entry_type: str
+    # 扩展字段 - 用于草稿箱列表展示和筛选
+    summary: str = ""
+    primary_category: str = ""
+    secondary_category: str = ""
+    tertiary_category: str = ""
+    tags: List[str] = []
+    raw_data_count: int = 0
+    # 审核相关
+    reviewer_name: str = ""  # 审核员用户名
+    # 时间字段
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     submitted_at: Optional[str] = None
@@ -371,21 +382,41 @@ async def get_my_entries(
     
     total_pages = (total + page_size - 1) // page_size
     
-    items = [
-        MyEntryResponse(
+    # v4.32.0: 构建扩展响应，包含分类、标签等字段用于前端列表展示
+    items = []
+    for entry in entries:
+        # 获取审核员用户名
+        reviewer_name = ""
+        if entry.reviewer_id:
+            reviewer_name = await get_user_display_name(entry.reviewer_id)
+
+        # 获取翻译标题（从第一个原始数据引用中获取）
+        translated_title = ""
+        if entry.raw_data_refs and len(entry.raw_data_refs) > 0:
+            translated_title = entry.raw_data_refs[0].translated_title or ""
+
+        items.append(MyEntryResponse(
             id=entry.id,
             title=entry.title,
+            translated_title=translated_title,
             status=entry.status.value,
             entry_type=entry.entry_type.value,
+            # 新增字段
+            summary=entry.summary or "",
+            primary_category=entry.primary_category or "",
+            secondary_category=entry.secondary_category or "",
+            tertiary_category=entry.tertiary_category or "",
+            tags=entry.tags or [],
+            raw_data_count=entry.raw_data_count,
+            reviewer_name=reviewer_name,
+            # 时间字段
             created_at=entry.created_at.isoformat() if entry.created_at else None,
             updated_at=entry.updated_at.isoformat() if entry.updated_at else None,
             submitted_at=entry.submitted_at.isoformat() if entry.submitted_at else None,
             reviewed_at=entry.reviewed_at.isoformat() if entry.reviewed_at else None,
             reviewer_id=entry.reviewer_id or "",
             review_comment=entry.review_comment or "",
-        )
-        for entry in entries
-    ]
+        ))
     
     return MyEntryListResponse(
         items=items,

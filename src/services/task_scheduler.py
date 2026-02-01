@@ -353,6 +353,11 @@ class TaskSchedulerService(ITaskScheduler):
                 try:
                     result_repo = await self._get_result_repository()
                     if result_repo:
+                        # v4.32.0: 为每个结果设置 user_id（用于数据隔离查询）
+                        for result in result_batch.results:
+                            result.user_id = task.created_by
+                            result.created_by = task.created_by
+
                         # 1. 保存原始结果到 search_results（纯数据存储）
                         await result_repo.save_results(result_batch.results)
                         logger.info(f"✅ 原始搜索结果已保存: {len(result_batch.results)}条")

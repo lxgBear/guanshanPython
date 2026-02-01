@@ -275,9 +275,24 @@ class UnifiedResultRepository:
             # 获取原始内容
             raw_content = doc.get("markdown_content") or doc.get("snippet", "")
 
+            # v4.32.0: 从 news_results 嵌套字段获取翻译内容
+            news_results = doc.get("news_results", {}) or {}
+            translated_content = (
+                news_results.get("content_zh", "") or
+                news_results.get("content", "") or
+                doc.get("translated_content", "")
+            )
+            # v4.33.0: 从 news_results 获取翻译后的标题
+            translated_title = (
+                news_results.get("title_zh", "") or
+                news_results.get("title", "") or
+                doc.get("translated_title", "")
+            )
+
             results.append({
                 "id": str(doc.get("_id") or doc.get("id", "")),
                 "title": doc.get("title", ""),
+                "translated_title": translated_title or None,
                 "url": doc.get("url", ""),
                 "snippet": doc.get("snippet", ""),  # 原始格式（可能是 TipTap JSON）
                 "snippet_text": extract_text_from_tiptap(doc.get("snippet", "")),  # 纯文本，用于列表显示
@@ -291,7 +306,7 @@ class UnifiedResultRepository:
                 "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
                 "original_content": raw_content,  # 原始格式（TipTap JSON），用于编辑
                 "original_content_text": extract_text_from_tiptap(raw_content),  # 纯文本，用于显示
-                "translated_content": doc.get("translated_content", ""),
+                "translated_content": translated_content,  # v4.32.0: 优先从 news_results 获取
                 "_sort_date": doc.get("created_at")
             })
 
@@ -334,9 +349,12 @@ class UnifiedResultRepository:
             origin_site = doc.get("source", "")
             snippet = doc.get("snippet", "")
             raw_content = doc.get("markdown_content") or doc.get("content") or snippet
+            # v4.33.0: 翻译后的标题
+            translated_title = doc.get("translated_title", "")
             results.append({
                 "id": str(doc.get("_id") or doc.get("id", "")),
                 "title": doc.get("title", ""),
+                "translated_title": translated_title or None,
                 "url": doc.get("url", ""),
                 "snippet": snippet,  # 原始格式
                 "snippet_text": extract_text_from_tiptap(snippet),  # 纯文本，用于列表显示
@@ -393,9 +411,12 @@ class UnifiedResultRepository:
             origin_site = doc.get("source", "")
             snippet = doc.get("snippet", "")
             raw_content = doc.get("markdown_content") or doc.get("content") or snippet
+            # v4.33.0: 翻译后的标题
+            translated_title = doc.get("translated_title", "")
             results.append({
                 "id": str(doc.get("_id") or doc.get("id", "")),
                 "title": doc.get("title", ""),
+                "translated_title": translated_title or None,
                 "url": doc.get("url", ""),
                 "snippet": snippet,  # 原始格式
                 "snippet_text": extract_text_from_tiptap(snippet),  # 纯文本，用于列表显示
@@ -459,6 +480,7 @@ class UnifiedResultRepository:
             results.append({
                 "id": file_id,
                 "title": title,
+                "translated_title": None,  # 文件上传不涉及翻译
                 "url": doc.get("storage_url", ""),
                 "snippet": snippet,  # 原始格式
                 "snippet_text": extract_text_from_tiptap(snippet),  # 纯文本，用于列表显示
