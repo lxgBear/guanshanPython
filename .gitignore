@@ -254,3 +254,4 @@ package-lock.json
 pnpm-lock.yaml
 .worktrees/
 data/
+.playwright-mcp/
