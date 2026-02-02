@@ -300,24 +300,47 @@ async def create_entry(
     "/",
     response_model=EntryListResponse,
     summary="获取条目列表",
-    description="获取当前用户的条目列表，支持分页和筛选",
+    description="获取当前用户的条目列表，支持分页、筛选、排序",
 )
 async def list_entries(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     status: Optional[str] = Query(None, description="状态筛选: draft/published/archived"),
-    keyword: Optional[str] = Query(None, description="关键词搜索"),
+    keyword: Optional[str] = Query(None, description="关键词搜索（标题/描述）"),
+    primary_category: Optional[str] = Query(None, description="大类筛选"),
+    secondary_category: Optional[str] = Query(None, description="类别筛选"),
+    tertiary_category: Optional[str] = Query(None, description="地域筛选"),
+    tag_search: Optional[str] = Query(None, description="标签搜索（模糊匹配）"),
+    start_date: Optional[datetime] = Query(None, description="开始日期（创建时间）"),
+    end_date: Optional[datetime] = Query(None, description="结束日期（创建时间）"),
+    sort_by: str = Query("created_at", description="排序字段: created_at/updated_at/title"),
+    sort_order: str = Query("desc", description="排序方向: asc/desc"),
     current_user: User = Depends(get_current_user),
     db=Depends(get_mongodb_database),
 ):
-    """获取条目列表"""
+    """获取条目列表
+
+    v4.34.0: 新增分类筛选、标签搜索、时间范围筛选、排序参数
+    """
     repo = InfoEntryRepository(db)
+
+    # 转换排序方向
+    sort_order_int = -1 if sort_order == "desc" else 1
+
     entries, total = await repo.list_by_user(
         user_id=current_user.id,
         page=page,
         page_size=page_size,
         status=status,
         keyword=keyword,
+        primary_category=primary_category,
+        secondary_category=secondary_category,
+        tertiary_category=tertiary_category,
+        tag_search=tag_search,
+        start_date=start_date,
+        end_date=end_date,
+        sort_by=sort_by,
+        sort_order=sort_order_int,
     )
 
     total_pages = (total + page_size - 1) // page_size

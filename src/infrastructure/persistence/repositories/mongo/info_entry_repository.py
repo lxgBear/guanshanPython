@@ -71,8 +71,19 @@ class InfoEntryRepository:
         page_size: int = 20,
         status: Optional[str] = None,
         keyword: Optional[str] = None,
+        primary_category: Optional[str] = None,
+        secondary_category: Optional[str] = None,
+        tertiary_category: Optional[str] = None,
+        tag_search: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        sort_by: str = "created_at",
+        sort_order: int = -1,
     ) -> Tuple[List[InfoEntry], int]:
-        """获取用户的条目列表"""
+        """获取用户的条目列表
+
+        v4.34.0: 新增分类筛选、标签搜索、时间范围筛选、排序参数
+        """
         query: Dict[str, Any] = {"user_id": user_id}
 
         if status:
@@ -84,11 +95,35 @@ class InfoEntryRepository:
                 {"description": {"$regex": keyword, "$options": "i"}},
             ]
 
+        # v4.34.0: 分类筛选
+        if primary_category:
+            query["primary_category"] = primary_category
+
+        if secondary_category:
+            query["secondary_category"] = secondary_category
+
+        if tertiary_category:
+            query["tertiary_category"] = tertiary_category
+
+        # v4.34.0: 标签模糊搜索
+        if tag_search:
+            query["tags"] = {"$regex": tag_search, "$options": "i"}
+
+        # v4.34.0: 时间范围筛选
+        if start_date or end_date:
+            time_query = {}
+            if start_date:
+                time_query["$gte"] = start_date
+            if end_date:
+                time_query["$lte"] = end_date
+            query["created_at"] = time_query
+
         # 获取总数
         total = await self.collection.count_documents(query)
 
-        # 分页查询
-        cursor = self.collection.find(query).sort("created_at", -1)
+        # 分页查询，支持动态排序
+        sort_field = sort_by if sort_by in ["created_at", "updated_at", "title"] else "created_at"
+        cursor = self.collection.find(query).sort(sort_field, sort_order)
         cursor = cursor.skip((page - 1) * page_size).limit(page_size)
 
         entries = []
