@@ -72,7 +72,7 @@ class SearchResult:
     
     # Firecrawl 特定字段 - 优化版
     markdown_content: Optional[str] = None  # Markdown 格式内容(最大5000字符)
-    html_content: Optional[str] = None  # HTML格式内容(用于富文本显示和分析)
+    # v4.9.2: 移除 html_content 字段，不再存储 HTML 内容
     article_tag: Optional[str] = None  # 文章标签 (article:tag)
     article_published_time: Optional[str] = None  # 文章发布时间 (article:published_time)
 

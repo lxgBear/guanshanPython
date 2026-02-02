@@ -387,10 +387,20 @@ class SearchEngineLayer(ISearchLayer):
         from src.infrastructure.id_generator import generate_string_id
 
         results = []
+        skipped_count = 0
         for idx, raw in enumerate(raw_results):
             try:
                 # 从 metadata 中提取额外信息
                 metadata = raw.get("metadata", {})
+
+                # v4.9.2: 获取 markdown 内容
+                markdown_content = raw.get("markdown") or raw.get("content")
+
+                # v4.9.2: 过滤 - markdown 为空则跳过，不保存到数据库
+                if not markdown_content or not markdown_content.strip():
+                    logger.debug(f"[SearchEngineLayer] Skipping result without markdown: {raw.get('url')}")
+                    skipped_count += 1
+                    continue
 
                 result = LangGraphSearchResult(
                     id=generate_string_id(),
@@ -404,8 +414,8 @@ class SearchEngineLayer(ISearchLayer):
                     snippet=raw.get("snippet", ""),
                     source=raw.get("source_domain", "web"),
                     published_date=self._parse_published_date(raw.get("published_date")),
-                    markdown_content=raw.get("markdown") or raw.get("content"),
-                    html_content=raw.get("html"),
+                    markdown_content=markdown_content,
+                    # v4.9.2: 移除 html_content 字段
                     search_position=idx + 1,
                     # LangGraph 特定字段 (v4.8.1: 移除评分字段)
                     layer=raw.get("layer", 0),
@@ -428,7 +438,10 @@ class SearchEngineLayer(ISearchLayer):
                 logger.warning(f"[SearchEngineLayer] Failed to convert result: {e}")
                 continue
 
-        logger.info(f"[SearchEngineLayer] Converted {len(results)} results to LangGraphSearchResult")
+        logger.info(
+            f"[SearchEngineLayer] Converted {len(results)} results to LangGraphSearchResult, "
+            f"skipped {skipped_count} without markdown"
+        )
         return results
 
     def _get_layer_name(self, layer: int) -> str:

@@ -100,7 +100,7 @@ class MongoLangGraphResultRepository:
             "author": result.author,
             "language": result.language,
             "markdown_content": result.markdown_content,
-            "html_content": result.html_content,
+            # v4.9.2: 移除 html_content 字段
             "article_tag": result.article_tag,
             "article_published_time": result.article_published_time,
             "source_url": result.source_url,
@@ -173,7 +173,7 @@ class MongoLangGraphResultRepository:
             author=data.get("author"),
             language=data.get("language"),
             markdown_content=data.get("markdown_content"),
-            html_content=data.get("html_content"),
+            # v4.9.2: 移除 html_content 字段（旧数据读取时忽略）
             article_tag=article_tag,
             article_published_time=data.get("article_published_time"),
             source_url=data.get("source_url"),

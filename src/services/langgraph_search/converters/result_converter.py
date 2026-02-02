@@ -84,7 +84,7 @@ class ResultConverter:
             published_date=published_date,
             language=langgraph_result.language,
             markdown_content=langgraph_result.markdown_content,
-            html_content=langgraph_result.html_content,
+            # v4.9.2: 移除 html_content 字段
             metadata=metadata,
             relevance_score=langgraph_result.relevance_score,
             quality_score=langgraph_result.credibility_score,
@@ -122,7 +122,7 @@ class ResultConverter:
             credibility_score=db_result.quality_score,
             final_score=metadata.get("final_score", 0.0),
             markdown_content=db_result.markdown_content,
-            html_content=db_result.html_content,
+            # v4.9.2: 移除 html_content 字段
             language=db_result.language or "en",
             published_date=(
                 db_result.published_date.isoformat()
@@ -196,7 +196,7 @@ class ResultConverter:
 
         if include_content:
             response["markdown_content"] = db_result.markdown_content
-            response["html_content"] = db_result.html_content
+            # v4.9.2: 移除 html_content 字段
 
         return response
 

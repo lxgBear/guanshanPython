@@ -105,9 +105,8 @@ class SearchResult:
     source_tier: int = 1              # 1-6 可信度���级
 
 
-    # 内容
+    # 内容 (v4.9.2: 移除 html_content)
     markdown_content: Optional[str] = None
-    html_content: Optional[str] = None
 
     # 元数据
     language: str = "en"
@@ -125,7 +124,7 @@ class SearchResult:
             "layer_name": self.layer_name,
             "source_tier": self.source_tier,
             "markdown_content": self.markdown_content,
-            "html_content": self.html_content,
+            # v4.9.2: 移除 html_content
             "language": self.language,
             "published_date": self.published_date,
             "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None,
@@ -147,7 +146,7 @@ class SearchResult:
             layer_name=data.get("layer_name", "官方来源"),
             source_tier=data.get("source_tier", 1),
             markdown_content=data.get("markdown_content"),
-            html_content=data.get("html_content"),
+            # v4.9.2: 移除 html_content
             language=data.get("language", "en"),
             published_date=data.get("published_date"),
             fetched_at=fetched_at,

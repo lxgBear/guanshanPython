@@ -58,7 +58,7 @@ class LangGraphSearchResult(SearchResult):
     继承 SearchResult 的所有字段：
     - id, task_id, user_id, created_by
     - title, url, snippet, source
-    - markdown_content, html_content, article_tag, article_published_time
+    - markdown_content, article_tag, article_published_time (v4.9.2: 移除 html_content)
     - content_hash, metadata, status, created_at, processed_at
 
     新增 LangGraph 特定字段：

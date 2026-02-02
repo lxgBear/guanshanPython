@@ -246,7 +246,7 @@ class LangGraphTransferService:
             content=langgraph_result.markdown_content or langgraph_result.snippet or "",
             snippet=langgraph_result.snippet,
             markdown_content=langgraph_result.markdown_content,
-            html_content=langgraph_result.html_content,
+            # v4.9.2: 移除 html_content 字段
             author=langgraph_result.author,
             published_date=langgraph_result.published_date,
             language=langgraph_result.language,

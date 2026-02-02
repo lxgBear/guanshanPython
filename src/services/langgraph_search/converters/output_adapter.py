@@ -308,8 +308,7 @@ class OutputAdapter:
         # 内容字段
         if "markdown_content" in result:
             adapted["markdown_content"] = result["markdown_content"]
-        if "html_content" in result:
-            adapted["html_content"] = result["html_content"]
+        # v4.9.2: 移除 html_content 字段
         if "published_date" in result:
             adapted["published_date"] = result["published_date"]
         if "language" in result:

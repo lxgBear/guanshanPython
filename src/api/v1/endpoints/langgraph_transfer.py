@@ -187,11 +187,9 @@ class LangGraphResultItem(BaseModel):
     layer: int = Field(0, description="搜索层级 (0-4)")
     layer_name: str = Field("", description="层级名称")
     source_tier: int = Field(1, description="来源可信度等级 (1-6)")
-    # 内容
+    # 内容 (v4.9.2: 移除 html_content)
     has_markdown_content: bool = Field(False, description="是否有 Markdown 内容")
-    has_html_content: bool = Field(False, description="是否有 HTML 内容")
     markdown_content: Optional[str] = Field(None, description="Markdown 内容")
-    html_content: Optional[str] = Field(None, description="HTML 内容")
     # 时间
     created_at: Optional[datetime] = Field(None, description="创建时间")
     published_date: Optional[datetime] = Field(None, description="发布时间")
@@ -531,7 +529,7 @@ async def get_langgraph_results(
     page_size: int = Query(20, ge=1, le=100, description="每页数量（最大 100）"),
     sort_by: str = Query("created_at", description="排序字段 (created_at, layer, source_tier)"),
     sort_order: str = Query("desc", description="排序方向 (asc/desc)"),
-    include_content: bool = Query(True, description="是否包含完整内容（markdown_content, html_content）"),
+    include_content: bool = Query(True, description="是否包含完整内容（markdown_content）"),
     current_user: Dict[str, Any] = Depends(require_permissions(["langgraph:read", "search:basic"]))
 ):
     """分页查询 LangGraph 搜索结果
@@ -606,6 +604,7 @@ async def get_langgraph_results(
         )
 
         # 转换为响应模型（v4.5.5: 新增翻译状态和转移状态字段）
+        # v4.9.2: 移除 html_content 字段
         data = []
         for r in results:
             item = LangGraphResultItem(
@@ -621,9 +620,8 @@ async def get_langgraph_results(
                 source_tier=r.source_tier,
                 # v4.8.1: 移除评分字段
                 has_markdown_content=bool(r.markdown_content),
-                has_html_content=bool(r.html_content),
                 markdown_content=r.markdown_content if include_content else None,
-                html_content=r.html_content if include_content else None,
+                # v4.9.2: 移除 html_content
                 created_at=r.created_at,
                 published_date=r.published_date,
                 # v4.5.5: AI 翻译状态
@@ -789,3 +787,54 @@ async def batch_update_langgraph_results_status(
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"批量更新失败: {str(e)}")
+
+
+# ========== v4.9.0: 删除端点 ==========
+
+@router.delete("/results/{result_id}")
+async def delete_langgraph_result(
+    result_id: str,
+    current_user: Dict[str, Any] = Depends(require_permissions(["langgraph:write"]))
+):
+    """删除单条 LangGraph 搜索结果
+
+    v4.9.0 新增：支持从前端删除搜索结果
+
+    权限: langgraph:write
+
+    Args:
+        result_id: 结果 ID
+
+    Returns:
+        { success: bool, message: str }
+
+    Raises:
+        HTTPException 404: 如果结果不存在
+    """
+    try:
+        from src.infrastructure.persistence.repositories.mongo.langgraph_result_repository import (
+            MongoLangGraphResultRepository
+        )
+
+        repo = MongoLangGraphResultRepository()
+
+        # 先检查结果是否存在
+        existing = await repo.get_by_id(result_id)
+        if not existing:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到 ID 为 {result_id} 的结果"
+            )
+
+        # 执行删除
+        success = await repo.delete(result_id)
+
+        return {
+            "success": success,
+            "message": "删除成功" if success else "删除失败"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")

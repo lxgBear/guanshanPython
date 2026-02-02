@@ -232,7 +232,7 @@ class GSAICrawlEngine:
                 "snippet": r.description,  # 映射 description -> snippet
                 "content": r.content,
                 "markdown": getattr(r, 'markdown', None),
-                "html": getattr(r, 'html', None),
+                # v4.9.2: 移除 html 字段，不再返回 HTML 内容
                 "layer": r.layer,
                 "score": r.score,
                 "source_domain": r.source_domain,
