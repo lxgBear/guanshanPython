@@ -17,7 +17,7 @@ def get_openai_llm(
     base_url: str | None = None,
     temperature: float | None = None,
 ) -> BaseChatModel:
-    """获取OpenAI LLM实例"""
+    """获取OpenAI LLM实例（支持第三方 API 代理）"""
     from langchain_openai import ChatOpenAI
 
     settings = get_settings()

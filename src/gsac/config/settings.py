@@ -37,7 +37,7 @@ class Settings(BaseSettings):
         description="LLM提供者 (openai, anthropic, ollama, custom_claude)",
     )
     llm_model: str = Field(
-        default="GLM-4.7-FlashX",
+        default="gpt-4o-mini",
         description="LLM模型名称",
     )
     llm_api_key: str | None = Field(

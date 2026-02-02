@@ -32,6 +32,9 @@ from src.services.layers import SearchEngineLayer, AIProcessingLayer
 from src.services.orchestrators import ChatOrchestrator, ChatOrchestratorConfig
 from src.infrastructure.database.chat_task_repository import chat_task_repository
 from src.infrastructure.database.chat_conversation_repository import chat_conversation_repository
+from src.infrastructure.persistence.repositories.mongo.langgraph_result_repository import (
+    mongo_langgraph_result_repository,
+)
 from src.core.domain.entities.auth.user import User
 from src.api.dependencies.auth import get_current_active_user
 from src.services.chat_search_service import get_chat_search_service
@@ -715,6 +718,10 @@ async def get_chat_task_detail(
 
     返回指定任务的详细信息，包括搜索要素、结果等。
 
+    **v4.34.0 更新**:
+    - 从 langgraph_search_results 表查询最新数据（包含翻译内容）
+    - 将 translator_dict 中的翻译内容映射到结果中
+
     Args:
         task_id: 任务ID
 
@@ -728,6 +735,43 @@ async def get_chat_task_detail(
         if not task:
             raise HTTPException(status_code=404, detail="任务不存在或无权访问")
 
+        # v4.34.0: 从 langgraph_search_results 表查询最新数据（包含翻译内容）
+        result = task.get("result")
+        if result and task.get("status") == "completed":
+            try:
+                langgraph_results = await mongo_langgraph_result_repository.find_by_task_id(task_id)
+                if langgraph_results:
+                    # 将 LangGraphSearchResult 实体转换为字典，并提取翻译内容
+                    enriched_results = []
+                    for lr in langgraph_results:
+                        result_dict = {
+                            "id": lr.id,
+                            "url": lr.url,
+                            "title": lr.title,
+                            "snippet": lr.snippet,
+                            "content": lr.markdown_content,
+                            "markdown_content": lr.markdown_content,
+                            "source": lr.source,
+                            "published_date": lr.published_date.isoformat() if lr.published_date else None,
+                            "layer": lr.layer,
+                            "layer_name": lr.layer_name,
+                            # v4.34.0: 从 translator_dict 提取翻译内容
+                            "translated_title": (lr.translator_dict or {}).get("title_zh", ""),
+                            "translated_content": (lr.translator_dict or {}).get("content_zh", ""),
+                            "translator_status": lr.translator_status,
+                        }
+                        enriched_results.append(result_dict)
+
+                    # 更新 result 中的 results 数组
+                    result = {
+                        **result,
+                        "results": enriched_results,
+                        "result_count": len(enriched_results),
+                    }
+                    logger.info(f"[ChatV2] 从 langgraph_search_results 加载了 {len(enriched_results)} 条结果")
+            except Exception as e:
+                logger.warning(f"[ChatV2] 从 langgraph_search_results 加载结果失败，使用原始数据: {e}")
+
         return ChatTaskDetailResponse(
             task_id=task["_id"],
             status=task.get("status", "unknown"),
@@ -737,7 +781,7 @@ async def get_chat_task_detail(
             completed_at=task.get("completed_at", "").isoformat() if task.get("completed_at") else None,
             extracted_elements=task.get("extracted_elements"),
             confirmed_elements=task.get("confirmed_elements"),
-            result=task.get("result"),
+            result=result,
             error_message=task.get("error_message"),
             progress_message=task.get("progress_message"),
             progress_percentage=task.get("progress_percentage"),
