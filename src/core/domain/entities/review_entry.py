@@ -87,9 +87,14 @@ class ReviewEntry:
         self.combined_content = content
         self.updated_at = datetime.utcnow()
 
-    def submit_for_review(self) -> None:
-        """提交审核"""
+    def submit_for_review(self, reviewer_id: str) -> None:
+        """提交审核
+
+        Args:
+            reviewer_id: 审核员ID
+        """
         self.status = ReviewStatus.PENDING_REVIEW
+        self.reviewer_id = reviewer_id
         self.submitted_at = datetime.utcnow()
         self.updated_at = datetime.utcnow()
 

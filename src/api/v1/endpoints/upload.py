@@ -20,7 +20,8 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.api.dependencies.auth import require_permissions
+from src.api.dependencies.auth import require_permissions, get_current_active_user
+from src.core.domain.entities.auth.user import User
 from src.infrastructure.storage.local_storage import LocalStorageService
 from src.infrastructure.database.file_upload_repository import MongoFileUploadRepository
 from src.core.domain.entities.file_upload import (
@@ -132,9 +133,9 @@ class DeleteResponse(BaseModel):
 @router.post("/upload", response_model=UploadResponse, summary="上传文件")
 async def upload_file(
     file: UploadFile = File(..., description="要上传的文件"),
-    user_id: Optional[str] = Query(None, description="用户ID"),
     category: Optional[str] = Query(None, description="文件分类"),
     tags: Optional[str] = Query(None, description="文件标签（逗号分隔，例如：重要,合同,2024）"),
+    current_user: User = Depends(get_current_active_user),
     storage_service: LocalStorageService = Depends(get_storage_service),
     file_repository: MongoFileUploadRepository = Depends(get_file_repository),
     document_extractor: DocumentExtractor = Depends(get_document_extractor)
@@ -149,7 +150,6 @@ async def upload_file(
     4. 保存元数据到 MongoDB
 
     - **file**: 要上传的文件（仅支持 PDF 和 DOCX）
-    - **user_id**: 用户ID(可选)
     - **category**: 文件分类(可选)
     - **tags**: 文件标签，逗号分隔（可选，例如："重要,合同,2024"）
 
@@ -255,7 +255,7 @@ async def upload_file(
             storage_url=access_url,
             status=UploadStatus.COMPLETED,
             content_hash=content_hash,
-            uploaded_by=user_id,
+            uploaded_by=current_user.id,
             upload_progress=100,
             created_at=now,
             updated_at=now,
@@ -395,16 +395,15 @@ async def delete_file(
 
 @router.get("/files", response_model=FileListResponse, summary="获取文件列表")
 async def list_files(
-    user_id: Optional[str] = Query(None, description="用户ID筛选"),
     category: Optional[str] = Query(None, description="分类筛选"),
     limit: int = Query(50, ge=1, le=100, description="返回数量"),
     offset: int = Query(0, ge=0, description="偏移量"),
+    current_user: User = Depends(get_current_active_user),
     file_repository: MongoFileUploadRepository = Depends(get_file_repository)
 ):
     """
     获取文件列表
 
-    - **user_id**: 按用户ID筛选(可选)
     - **category**: 按分类筛选(可选)
     - **limit**: 返回数量,默认50,最大100
     - **offset**: 偏移量,默认0
@@ -413,13 +412,13 @@ async def list_files(
     """
     try:
         logger.info(
-            f"📋 查询文件列表: user_id={user_id}, category={category}, "
+            f"📋 查询文件列表: user_id={current_user.id}, category={category}, "
             f"limit={limit}, offset={offset}"
         )
 
         # 从数据库查询文件列表
         files = await file_repository.find_all(
-            uploaded_by=user_id,
+            uploaded_by=current_user.id,
             status="completed",  # 只返回上传完成的文件
             limit=limit,
             skip=offset
@@ -427,7 +426,7 @@ async def list_files(
 
         # 统计总数
         total = await file_repository.count(
-            uploaded_by=user_id,
+            uploaded_by=current_user.id,
             status="completed"
         )
 

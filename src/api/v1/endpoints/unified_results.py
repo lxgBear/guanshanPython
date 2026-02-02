@@ -118,8 +118,54 @@ async def get_unified_repository() -> UnifiedResultRepository:
 
 
 # ==========================================
+# Pydantic 模型 - 批量获取
+# ==========================================
+
+class BatchGetRequest(BaseModel):
+    """批量获取请求"""
+    ids: List[str] = Field(..., description="结果ID列表", min_length=1, max_length=100)
+
+
+class BatchGetResponse(BaseModel):
+    """批量获取响应"""
+    items: List[UnifiedResultItem] = Field(..., description="结果列表")
+    total: int = Field(..., description="返回数量")
+
+
+# ==========================================
 # API 端点
 # ==========================================
+
+@router.post(
+    "/batch",
+    response_model=BatchGetResponse,
+    summary="按ID列表批量获取统一结果",
+    description="根据ID列表批量获取多个数据源的结果，最多100条。"
+)
+async def batch_get_results(
+    request: BatchGetRequest,
+    current_user: User = Depends(get_current_active_user),
+    repository: UnifiedResultRepository = Depends(get_unified_repository)
+):
+    try:
+        logger.info(f"[UnifiedResults] 批量获取: user={current_user.id}, ids={len(request.ids)}")
+
+        items = await repository.get_by_ids(
+            user_id=current_user.id,
+            ids=request.ids
+        )
+
+        result_items = [UnifiedResultItem(**item) for item in items]
+
+        return BatchGetResponse(
+            items=result_items,
+            total=len(result_items)
+        )
+
+    except Exception as e:
+        logger.error(f"[UnifiedResults] 批量获取失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"批量获取失败: {str(e)}")
+
 
 @router.get(
     "/",

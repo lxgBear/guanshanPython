@@ -147,13 +147,18 @@ class ReviewEntryRepository:
 
         return entries, total
 
-    async def submit_for_review(self, entry_id: str) -> Optional[ReviewEntry]:
-        """提交审核"""
+    async def submit_for_review(self, entry_id: str, reviewer_id: str) -> Optional[ReviewEntry]:
+        """提交审核
+
+        Args:
+            entry_id: 条目ID
+            reviewer_id: 审核员ID
+        """
         entry = await self.get_by_id(entry_id)
         if not entry:
             return None
 
-        entry.submit_for_review()
+        entry.submit_for_review(reviewer_id)
         return await self.update(entry)
 
     async def approve(

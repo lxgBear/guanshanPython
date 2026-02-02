@@ -28,6 +28,10 @@ from src.core.domain.entities.info_entry import RawDataRef
 from src.infrastructure.persistence.repositories.mongo.review_entry_repository import (
     ReviewEntryRepository,
 )
+from src.infrastructure.persistence.repositories.mongo.published_entry_repository import (
+    PublishedEntryRepository,
+)
+from src.core.domain.entities.published_entry import PublishedEntry, PublishedStatus
 from src.infrastructure.persistence.auth.mongodb.user_repository import MongoUserRepository
 from src.utils.logger import get_logger
 
@@ -692,9 +696,8 @@ async def submit_for_review(
 
 @router.post(
     "/{entry_id}/approve",
-    response_model=ReviewEntryResponse,
     summary="通过审核",
-    description="通过审核（管理员）",
+    description="通过审核，将内容发布到 published_entries 并删除草稿",
 )
 async def approve_entry(
     entry_id: str,
@@ -702,9 +705,17 @@ async def approve_entry(
     current_user: User = Depends(get_current_user),
     db=Depends(get_mongodb_database),
 ):
-    """通过审核（具有审核权限的用户）"""
-    repo = ReviewEntryRepository(db)
-    entry = await repo.get_by_id(entry_id)
+    """通过审核（具有审核权限的用户）
+
+    流程：
+    1. 权限校验和状态校验
+    2. 读取 review_entries 完整数据
+    3. 创建 PublishedEntry 写入 published_entries
+    4. 物理删除 review_entries 中的记录
+    5. 返回 PublishedEntryResponse
+    """
+    review_repo = ReviewEntryRepository(db)
+    entry = await review_repo.get_by_id(entry_id)
 
     if not entry:
         raise HTTPException(status_code=404, detail="条目不存在")
@@ -722,16 +733,51 @@ async def approve_entry(
             detail=f"当前状态（{entry.status.value}）不允许审核操作"
         )
 
-    updated_entry = await repo.approve(
-        entry_id=entry_id,
-        reviewer_id=current_user.id,
-        comment=request.comment or "",
-    )
-    if not updated_entry:
-        raise HTTPException(status_code=500, detail="审核操作失败")
+    now = datetime.utcnow()
 
-    logger.info(f"条目审核通过: id={entry_id}, reviewer={current_user.id}")
-    return await entry_to_response(updated_entry)
+    # 创建 PublishedEntry（从草稿复制内容 + 审核溯源）
+    published_entry = PublishedEntry(
+        title=entry.title,
+        description=entry.description,
+        summary=entry.summary,
+        combined_content=entry.combined_content,
+        tags=entry.tags,
+        primary_category=entry.primary_category,
+        secondary_category=entry.secondary_category,
+        tertiary_category=entry.tertiary_category,
+        entry_type=entry.entry_type.value,
+        raw_data_refs=entry.raw_data_refs,
+        author_id=entry.user_id,
+        reviewer_id=current_user.id,
+        review_comment=request.comment or "",
+        submitted_at=entry.submitted_at,
+        reviewed_at=now,
+        status=PublishedStatus.PUBLISHED,
+        published_at=now,
+    )
+
+    # 先插入 published_entries（安全机制：插入失败不删除草稿）
+    pub_repo = PublishedEntryRepository(db)
+    try:
+        await pub_repo.create(published_entry)
+    except Exception as e:
+        logger.error(f"创建发布条目失败: {e}")
+        raise HTTPException(status_code=500, detail="发布失败，草稿未删除")
+
+    # 插入成功后，删除 review_entries 中的草稿
+    try:
+        await review_repo.delete(entry_id)
+    except Exception as e:
+        logger.warning(f"删除草稿失败（发布已成功）: id={entry_id}, error={e}")
+
+    logger.info(
+        f"条目审核通过并发布: review_id={entry_id}, "
+        f"published_id={published_entry.id}, reviewer={current_user.id}"
+    )
+
+    # 返回发布条目信息
+    from src.api.v1.endpoints.published_entries import published_entry_to_response
+    return await published_entry_to_response(published_entry)
 
 
 @router.post(

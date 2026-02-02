@@ -665,5 +665,25 @@ async def create_indexes():
 
         logger.info("✅ LangGraph 搜索结果索引创建完成（v4.5.2 数据隔离 + v4.5.3 AI处理状态 + v4.6.0 会话关联）")
 
+        # ==================== 发布条目索引 ====================
+
+        published_entries = db.published_entries
+
+        await published_entries.create_index("status", name="idx_pub_status")
+        await published_entries.create_index("author_id", name="idx_pub_author")
+        await published_entries.create_index("reviewer_id", name="idx_pub_reviewer")
+        await published_entries.create_index("primary_category", name="idx_pub_category")
+        await published_entries.create_index("published_at", name="idx_pub_published_at")
+        await published_entries.create_index(
+            [("status", 1), ("published_at", -1)],
+            name="idx_pub_status_time"
+        )
+        await published_entries.create_index(
+            [("primary_category", 1), ("published_at", -1)],
+            name="idx_pub_category_time"
+        )
+
+        logger.info("✅ 发布条目索引创建完成")
+
     except Exception as e:
         logger.warning(f"创建索引失败: {e}")

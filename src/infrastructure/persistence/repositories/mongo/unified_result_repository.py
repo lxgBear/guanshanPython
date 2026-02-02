@@ -411,8 +411,12 @@ class UnifiedResultRepository:
             origin_site = doc.get("source", "")
             snippet = doc.get("snippet", "")
             raw_content = doc.get("markdown_content") or doc.get("content") or snippet
-            # v4.33.0: 翻译后的标题
-            translated_title = doc.get("translated_title", "")
+
+            # v4.34.0: 从 translator_dict 中提取翻译内容（与 langgraph_search_result 实体结构保持一致）
+            translator_dict = doc.get("translator_dict", {}) or {}
+            translated_title = translator_dict.get("title_zh", "")
+            translated_content = translator_dict.get("content_zh", "")
+
             results.append({
                 "id": str(doc.get("_id") or doc.get("id", "")),
                 "title": doc.get("title", ""),
@@ -430,7 +434,7 @@ class UnifiedResultRepository:
                 "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
                 "original_content": raw_content,  # 原始格式（TipTap JSON），用于编辑
                 "original_content_text": extract_text_from_tiptap(raw_content),  # 纯文本，用于显示
-                "translated_content": doc.get("translated_content", ""),
+                "translated_content": translated_content,
                 "_sort_date": doc.get("created_at")
             })
 
@@ -499,6 +503,181 @@ class UnifiedResultRepository:
             })
 
         return results
+
+    async def get_by_ids(
+        self,
+        user_id: str,
+        ids: List[str]
+    ) -> List[Dict]:
+        """
+        按 ID 列表批量获取统一结果
+
+        遍历所有数据源集合，按 ID 匹配。
+        """
+        if not ids:
+            return []
+
+        results_map: Dict[str, Dict] = {}
+
+        # 1. search_results (scheduled) - ID 来自 _id 或 id
+        try:
+            collection = self.db.search_results
+            cursor = collection.find({
+                "$or": [
+                    {"_id": {"$in": ids}},
+                    {"id": {"$in": ids}}
+                ]
+            })
+            async for doc in cursor:
+                doc_id = str(doc.get("_id") or doc.get("id", ""))
+                if doc_id in ids and doc_id not in results_map:
+                    translated_title = doc.get("translated_title", "")
+                    content = doc.get("markdown_content", "") or doc.get("content", "")
+                    snippet = doc.get("snippet", "") or (content[:500] + "..." if len(content) > 500 else content)
+                    results_map[doc_id] = {
+                        "id": doc_id,
+                        "title": doc.get("title", ""),
+                        "translated_title": translated_title or None,
+                        "url": doc.get("url", ""),
+                        "snippet": snippet,
+                        "snippet_text": extract_text_from_tiptap(snippet),
+                        "source_type": "scheduled",
+                        "source_type_name": "定时任务",
+                        "origin_site": doc.get("origin_site", ""),
+                        "task_id": str(doc.get("task_id", "")),
+                        "task_name": None,
+                        "published_date": doc.get("published_date").isoformat() if doc.get("published_date") else None,
+                        "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
+                        "original_content": content,
+                        "original_content_text": extract_text_from_tiptap(content),
+                        "translated_content": doc.get("translated_content", ""),
+                    }
+        except Exception as e:
+            logger.warning(f"[BatchGet] search_results 查询失败: {e}")
+
+        remaining = [i for i in ids if i not in results_map]
+        if not remaining:
+            return [results_map[i] for i in ids if i in results_map]
+
+        # 2. instant_search_results (smart-search) - ID 来自 _id 或 id
+        try:
+            collection = self.db.instant_search_results
+            cursor = collection.find({
+                "$or": [
+                    {"_id": {"$in": remaining}},
+                    {"id": {"$in": remaining}}
+                ]
+            })
+            async for doc in cursor:
+                doc_id = str(doc.get("_id") or doc.get("id", ""))
+                if doc_id in remaining and doc_id not in results_map:
+                    translated_title = doc.get("translated_title", "")
+                    content = doc.get("markdown_content", "") or doc.get("content", "")
+                    snippet = doc.get("snippet", "") or (content[:500] + "..." if len(content) > 500 else content)
+                    results_map[doc_id] = {
+                        "id": doc_id,
+                        "title": doc.get("title", ""),
+                        "translated_title": translated_title or None,
+                        "url": doc.get("url", ""),
+                        "snippet": snippet,
+                        "snippet_text": extract_text_from_tiptap(snippet),
+                        "source_type": "smart-search",
+                        "source_type_name": "智能搜索",
+                        "origin_site": doc.get("origin_site", ""),
+                        "task_id": str(doc.get("task_id", "")),
+                        "task_name": None,
+                        "published_date": doc.get("published_date").isoformat() if doc.get("published_date") else None,
+                        "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
+                        "original_content": content,
+                        "original_content_text": extract_text_from_tiptap(content),
+                        "translated_content": doc.get("translated_content", ""),
+                    }
+        except Exception as e:
+            logger.warning(f"[BatchGet] instant_search_results 查询失败: {e}")
+
+        remaining = [i for i in ids if i not in results_map]
+        if not remaining:
+            return [results_map[i] for i in ids if i in results_map]
+
+        # 3. langgraph_search_results (chat-search)
+        try:
+            collection = self.db.langgraph_search_results
+            cursor = collection.find({
+                "$or": [
+                    {"_id": {"$in": remaining}},
+                    {"id": {"$in": remaining}}
+                ]
+            })
+            async for doc in cursor:
+                doc_id = str(doc.get("_id") or doc.get("id", ""))
+                if doc_id in remaining and doc_id not in results_map:
+                    translated_title = doc.get("translated_title", "")
+                    translator_dict = doc.get("translator", {}) or {}
+                    translated_content = translator_dict.get("content_zh", "")
+                    content = doc.get("markdown_content", "") or doc.get("content", "")
+                    snippet = doc.get("snippet", "") or (content[:500] + "..." if len(content) > 500 else content)
+                    results_map[doc_id] = {
+                        "id": doc_id,
+                        "title": doc.get("title", ""),
+                        "translated_title": translated_title or None,
+                        "url": doc.get("url", ""),
+                        "snippet": snippet,
+                        "snippet_text": extract_text_from_tiptap(snippet),
+                        "source_type": "chat-search",
+                        "source_type_name": "对话搜索",
+                        "origin_site": doc.get("origin_site", ""),
+                        "task_id": str(doc.get("task_id", "") or doc.get("session_id", "")),
+                        "task_name": None,
+                        "published_date": doc.get("published_date").isoformat() if doc.get("published_date") else None,
+                        "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
+                        "original_content": content,
+                        "original_content_text": extract_text_from_tiptap(content),
+                        "translated_content": translated_content,
+                    }
+        except Exception as e:
+            logger.warning(f"[BatchGet] langgraph_search_results 查询失败: {e}")
+
+        remaining = [i for i in ids if i not in results_map]
+        if not remaining:
+            return [results_map[i] for i in ids if i in results_map]
+
+        # 4. file_uploads (upload) - ID 来自 file_id
+        try:
+            collection = self.db.file_uploads
+            cursor = collection.find({
+                "file_id": {"$in": remaining},
+                "uploaded_by": user_id,
+                "status": {"$nin": ["deleted", "failed"]}
+            })
+            async for doc in cursor:
+                file_id = doc.get("file_id", "")
+                if file_id in remaining and file_id not in results_map:
+                    title = doc.get("title") or doc.get("display_name") or doc.get("original_filename", "")
+                    content = doc.get("content", "")
+                    snippet = content[:500] + "..." if len(content) > 500 else content
+                    results_map[file_id] = {
+                        "id": file_id,
+                        "title": title,
+                        "translated_title": None,
+                        "url": doc.get("storage_url", ""),
+                        "snippet": snippet,
+                        "snippet_text": extract_text_from_tiptap(snippet),
+                        "source_type": "upload",
+                        "source_type_name": "文档上传",
+                        "origin_site": "本地上传",
+                        "task_id": file_id,
+                        "task_name": title,
+                        "published_date": None,
+                        "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
+                        "original_content": content,
+                        "original_content_text": extract_text_from_tiptap(content),
+                        "translated_content": "",
+                    }
+        except Exception as e:
+            logger.warning(f"[BatchGet] file_uploads 查询失败: {e}")
+
+        # 按原始 ID 顺序返回
+        return [results_map[i] for i in ids if i in results_map]
 
     async def query_unified_results(
         self,
