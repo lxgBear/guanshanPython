@@ -1,0 +1,47 @@
+name: Deploy Backend to BaoTa
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            cd /www/wwwroot/guanshan
+
+            echo "==> Pulling latest code..."
+            git pull origin main
+
+            echo "==> Building Docker image..."
+            docker build -t guanshan-app .
+
+            echo "==> Stopping old container..."
+            docker stop guanshan-app 2>/dev/null || true
+            docker rm guanshan-app 2>/dev/null || true
+
+            echo "==> Starting new container..."
+            docker run -d \
+              --name guanshan-app \
+              --env-file .env \
+              -p 8000:8000 \
+              --restart unless-stopped \
+              guanshan-app
+
+            echo "==> Waiting for service to start..."
+            sleep 5
+
+            echo "==> Health check..."
+            curl -f http://localhost:8000/health || echo "Warning: Health check failed"
+
+            echo "==> Deployment completed!"
