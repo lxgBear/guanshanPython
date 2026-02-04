@@ -23,7 +23,7 @@ jobs:
             cd /www/wwwroot/guanshan
 
             echo "==> Pulling latest code..."
-            git pull origin result
+            git fetch origin && git reset --hard origin/result
 
             echo "==> Building Docker image..."
             docker build -t guanshan-app .
