@@ -75,33 +75,59 @@ class AchievementDraft:
         """初始化后处理"""
         self.raw_data_count = len(self.source_entry_ids)
 
+    def update_raw_data_count(self) -> None:
+        """更新原始数据数量
+
+        当 source_entry_ids 被修改后调用此方法同步 raw_data_count
+        """
+        self.raw_data_count = len(self.source_entry_ids)
+
     def can_edit(self, user_id: str) -> bool:
         """检查用户是否可以编辑"""
+        if not user_id or not self.author_id:
+            return False
         if self.author_id != user_id:
             return False
         return self.status in [AchievementStatus.DRAFT, AchievementStatus.RETURNED]
 
     def can_submit(self, user_id: str) -> bool:
         """检查用户是否可以提交审核"""
+        if not user_id or not self.author_id:
+            return False
         if self.author_id != user_id:
             return False
         return self.status in [AchievementStatus.DRAFT, AchievementStatus.RETURNED]
 
     def can_review(self, user_id: str) -> bool:
         """检查用户是否可以审核"""
+        if not user_id or not self.current_reviewer_id:
+            return False
         if self.status != AchievementStatus.PENDING_REVIEW:
             return False
         return self.current_reviewer_id == user_id
 
     def submit_for_review(self, reviewer_id: str, reviewer_name: str) -> None:
-        """提交审核"""
+        """提交审核
+
+        Args:
+            reviewer_id: 审核员ID
+            reviewer_name: 审核员姓名
+
+        Raises:
+            ValueError: 当前状态不允许提交，或缺少审核员信息
+        """
+        if self.status not in [AchievementStatus.DRAFT, AchievementStatus.RETURNED]:
+            raise ValueError(f"Cannot submit: current status is {self.status.value}")
+
         if self.status == AchievementStatus.RETURNED:
             # 退回后重新提交，回到退回的审核员
             self.current_reviewer_id = self.returned_by_reviewer_id
             self.current_reviewer_name = self.returned_by_reviewer_name
             self.current_review_level = self.returned_at_level
         else:
-            # 首次提交
+            # 首次提交，需要验证审核员信息
+            if not reviewer_id or not reviewer_name:
+                raise ValueError("Cannot submit: missing reviewer information")
             self.current_reviewer_id = reviewer_id
             self.current_reviewer_name = reviewer_name
             self.current_review_level = 1
@@ -116,20 +142,45 @@ class AchievementDraft:
         self.returned_at_level = 0
 
     def approve(self) -> None:
-        """通过审核"""
+        """通过审核
+
+        Raises:
+            ValueError: 当前状态不允许通过审核
+        """
+        if self.status != AchievementStatus.PENDING_REVIEW:
+            raise ValueError(f"Cannot approve: current status is {self.status.value}")
         self.status = AchievementStatus.APPROVED
         self.completed_at = datetime.utcnow()
         self.updated_at = datetime.utcnow()
 
     def forward(self, next_reviewer_id: str, next_reviewer_name: str) -> None:
-        """转交下一级"""
+        """转交下一级
+
+        Args:
+            next_reviewer_id: 下一级审核员ID
+            next_reviewer_name: 下一级审核员姓名
+
+        Raises:
+            ValueError: 当前状态不允许转交，或缺少下一级审核员信息
+        """
+        if self.status != AchievementStatus.PENDING_REVIEW:
+            raise ValueError(f"Cannot forward: current status is {self.status.value}")
+        if not next_reviewer_id or not next_reviewer_name:
+            raise ValueError("Cannot forward: missing next reviewer information")
         self.current_reviewer_id = next_reviewer_id
         self.current_reviewer_name = next_reviewer_name
         self.current_review_level += 1
         self.updated_at = datetime.utcnow()
 
     def return_to_author(self) -> None:
-        """退回提交人"""
+        """退回提交人
+
+        Raises:
+            ValueError: 当前状态不允许退回
+        """
+        if self.status != AchievementStatus.PENDING_REVIEW:
+            raise ValueError(f"Cannot return to author: current status is {self.status.value}")
+
         self.returned_by_reviewer_id = self.current_reviewer_id
         self.returned_by_reviewer_name = self.current_reviewer_name
         self.returned_at_level = self.current_review_level
@@ -140,14 +191,35 @@ class AchievementDraft:
         self.updated_at = datetime.utcnow()
 
     def return_to_previous(self, prev_reviewer_id: str, prev_reviewer_name: str, prev_level: int) -> None:
-        """退回上一级审核员"""
+        """退回上一级审核员
+
+        Args:
+            prev_reviewer_id: 上一级审核员ID
+            prev_reviewer_name: 上一级审核员姓名
+            prev_level: 上一级审核层级
+
+        Raises:
+            ValueError: 当前状态不允许退回，或缺少上一级审核员信息
+        """
+        if self.status != AchievementStatus.PENDING_REVIEW:
+            raise ValueError(f"Cannot return to previous: current status is {self.status.value}")
+        if not prev_reviewer_id or not prev_reviewer_name:
+            raise ValueError("Cannot return to previous: missing previous reviewer information")
+        if prev_level < 1:
+            raise ValueError("Cannot return to previous: invalid previous level")
         self.current_reviewer_id = prev_reviewer_id
         self.current_reviewer_name = prev_reviewer_name
         self.current_review_level = prev_level
         self.updated_at = datetime.utcnow()
 
     def void(self) -> None:
-        """作废"""
+        """作废
+
+        Raises:
+            ValueError: 当前状态不允许作废
+        """
+        if self.status in [AchievementStatus.APPROVED, AchievementStatus.VOIDED]:
+            raise ValueError(f"Cannot void: current status is {self.status.value}")
         self.status = AchievementStatus.VOIDED
         self.completed_at = datetime.utcnow()
         self.updated_at = datetime.utcnow()
@@ -210,7 +282,16 @@ def achievement_draft_to_mongo_doc(draft: AchievementDraft) -> Dict[str, Any]:
 
 
 def mongo_doc_to_achievement_draft(doc: Dict[str, Any]) -> AchievementDraft:
-    """将 MongoDB 文档转换为 AchievementDraft"""
+    """将 MongoDB 文档转换为 AchievementDraft
+
+    对于无效的 status 值，默认使用 DRAFT 状态
+    """
+    # 安全解析状态值
+    try:
+        status = AchievementStatus(doc.get("status", "draft"))
+    except ValueError:
+        status = AchievementStatus.DRAFT
+
     return AchievementDraft(
         id=str(doc.get("_id", "")),
         title=doc.get("title", ""),
@@ -225,7 +306,7 @@ def mongo_doc_to_achievement_draft(doc: Dict[str, Any]) -> AchievementDraft:
         raw_data_count=doc.get("raw_data_count", 0),
         author_id=doc.get("author_id", ""),
         author_name=doc.get("author_name", ""),
-        status=AchievementStatus(doc.get("status", "draft")),
+        status=status,
         current_reviewer_id=doc.get("current_reviewer_id", ""),
         current_reviewer_name=doc.get("current_reviewer_name", ""),
         current_review_level=doc.get("current_review_level", 0),
