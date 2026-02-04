@@ -28,6 +28,7 @@ from src.api.v1.endpoints import search_results_manual  # v2.2.0 手动添加数
 from src.api.v1.endpoints import unified_results  # v4.24.0 统一聚合结果
 from src.api.v1.endpoints import info_entries  # v4.25.0 信息条目管理
 from src.api.v1.endpoints import review_entries  # v4.29.0 审核条目管理
+from src.api.v1.endpoints import achievement_drafts  # 成果草稿管理
 from src.api.v1.endpoints import published_entries  # 发布条目管理
 from src.api.v1.endpoints import review_flow  # v2.8.0 审批流程
 from src.api.v1.endpoints import map_detail  # Map + Detail 详情页爬取
@@ -206,6 +207,13 @@ api_router.include_router(
 api_router.include_router(
     review_entries.router,
     tags=["📋 审核条目"],
+    dependencies=[Depends(require_permissions("info:create", "archive:review"))]
+)
+
+# 成果草稿管理 - 需要 info:create 或 archive:review 权限
+api_router.include_router(
+    achievement_drafts.router,
+    tags=["📝 成果草稿"],
     dependencies=[Depends(require_permissions("info:create", "archive:review"))]
 )
 
