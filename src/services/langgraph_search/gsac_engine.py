@@ -3,6 +3,7 @@
 将 gs-ai-crawl 库包装为符合 SearchEngineAdapter 接口的引擎。
 
 v4.19.0 - 集成 gs-ai-crawl
+v4.19.1 - 默认启用深度抓取，增加抓取数量
 """
 
 import logging
@@ -18,9 +19,27 @@ logger = logging.getLogger(__name__)
 def _setup_gsac_env():
     """设置 gs-ai-crawl 需要的环境变量
 
-    复用现有配置，避免重复配置。
-    支持 openai, anthropic, custom_claude (第三方代理) 三种 LLM provider。
+    优先使用 .env 中已配置的 GS_CRAWL_* 变量，如果没有则回退到主应用配置。
+    支持 openai, anthropic, ollama, custom_claude (第三方代理) 四种 LLM provider。
     """
+    # 检查 .env 中是否已经配置了 GSAC 特定的 LLM 设置
+    gsac_provider = os.environ.get("GS_CRAWL_LLM_PROVIDER")
+
+    if gsac_provider:
+        # 如果 .env 中已配置 GSAC LLM provider，直接使用，不覆盖
+        logger.info(f"[GSAC_ENV] 使用 .env 中已配置的 provider: {gsac_provider}")
+
+        # 只补充 Firecrawl API Key（如果未配置）
+        if not os.environ.get("GS_CRAWL_FIRECRAWL_API_KEY") and settings.FIRECRAWL_API_KEY:
+            os.environ["GS_CRAWL_FIRECRAWL_API_KEY"] = settings.FIRECRAWL_API_KEY
+            logger.info(f"[GSAC_ENV] 补充设置 Firecrawl API Key")
+
+        logger.info("[GSAC_ENV] 环境变量设置完成 (使用 .env 配置)")
+        return
+
+    # 没有 GSAC 特定配置时，从主应用配置推导
+    logger.info("[GSAC_ENV] 未找到 GS_CRAWL_LLM_PROVIDER，从主应用配置推导")
+
     # Firecrawl API Key
     if settings.FIRECRAWL_API_KEY:
         os.environ["GS_CRAWL_FIRECRAWL_API_KEY"] = settings.FIRECRAWL_API_KEY
@@ -77,8 +96,8 @@ class GSAICrawlEngine:
             config: 引擎配置字典，支持以下选项：
                 - max_keywords: 最大关键词数量 (默认 5)
                 - max_results_per_keyword: 每个关键词最大结果数 (默认 10)
-                - enable_deep_scrape: 是否启用深度抓取 (默认 False)
-                - max_scrape_urls: 深度抓取最大URL数 (默认 3)
+                - enable_deep_scrape: 是否启用深度抓取 (默认 True, v4.19.1)
+                - max_scrape_urls: 深度抓取最大URL数 (默认 10, v4.19.1)
                 - similarity_threshold: 去重相似度阈值 (默认 0.8)
                 - enable_summary: 是否生成摘要 (默认 True)
         """
@@ -160,11 +179,11 @@ class GSAICrawlEngine:
                 ),
                 "enable_deep_scrape": options.get(
                     "enable_deep_scrape",
-                    self.config.get("enable_deep_scrape", False)
+                    self.config.get("enable_deep_scrape", True)  # v4.19.1: 默认启用深度抓取
                 ),
                 "max_scrape_urls": options.get(
                     "max_scrape_urls",
-                    self.config.get("max_scrape_urls", 3)
+                    self.config.get("max_scrape_urls", 10)  # v4.19.1: 增加默认抓取数量
                 ),
                 "similarity_threshold": options.get(
                     "similarity_threshold",

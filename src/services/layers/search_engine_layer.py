@@ -393,12 +393,21 @@ class SearchEngineLayer(ISearchLayer):
                 # 从 metadata 中提取额外信息
                 metadata = raw.get("metadata", {})
 
-                # v4.9.2: 获取 markdown 内容
-                markdown_content = raw.get("markdown") or raw.get("content")
+                # v4.9.2: 获取 markdown 内容 (支持多种字段名)
+                # 优先级: markdown > markdown_content > content > description > snippet
+                markdown_content = (
+                    raw.get("markdown")
+                    or raw.get("markdown_content")
+                    or raw.get("content")
+                    or raw.get("description")
+                    or raw.get("snippet")
+                    or ""
+                )
 
-                # v4.9.2: 过滤 - markdown 为空则跳过，不保存到数据库
-                if not markdown_content or not markdown_content.strip():
-                    logger.debug(f"[SearchEngineLayer] Skipping result without markdown: {raw.get('url')}")
+                # v4.9.3: 放宽过滤条件 - 只有完全没有任何内容才跳过
+                # 允许保存只有标题和 URL 的结果（后续可通过深度抓取补充内容）
+                if not markdown_content.strip() and not raw.get("title") and not raw.get("url"):
+                    logger.debug(f"[SearchEngineLayer] Skipping result without any content: {raw.get('url')}")
                     skipped_count += 1
                     continue
 

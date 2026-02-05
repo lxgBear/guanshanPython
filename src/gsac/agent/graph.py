@@ -51,6 +51,7 @@ from .nodes import (
     classify_sources,
     execute_single_search,
     expand_search,
+    fan_out_scrape,
     fan_out_search,
     generate_keywords,
     generate_validation_rules,
@@ -131,12 +132,21 @@ def create_osint_search_graph() -> StateGraph:
 
     # merge_deduplicate → 条件路由
     # route_by_source_count 返回 "expand_search" 或 "deep_scrape"
+    # 注意：深度抓取需要使用 fan_out_scrape 来并行分发
+    def route_with_fan_out(state):
+        """路由决策 + 深度抓取并行分发"""
+        route = route_by_source_count(state)
+        if route == "deep_scrape":
+            # 返回并行 Send 任务
+            return fan_out_scrape(state)
+        return route
+
     builder.add_conditional_edges(
         "merge_deduplicate",
-        route_by_source_count,
+        route_with_fan_out,
         {
             "expand_search": "expand_search",
-            "deep_scrape": "scrape_single_url",
+            "scrape_single_url": "scrape_single_url",  # fan_out_scrape 返回 Send 到这个节点
         },
     )
 

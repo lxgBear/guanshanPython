@@ -4,8 +4,6 @@ LLM 提供者
 支持多种LLM提供者: OpenAI, Anthropic, Ollama, 自定义Claude API
 """
 
-from functools import lru_cache
-
 from langchain_core.language_models import BaseChatModel
 
 from ..config.settings import get_settings
@@ -128,7 +126,6 @@ def get_custom_claude_llm(
     )
 
 
-@lru_cache
 def get_llm(
     provider: str | None = None,
     model: str | None = None,

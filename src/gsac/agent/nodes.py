@@ -343,6 +343,10 @@ async def generate_keywords(state: OSINTSearchState) -> dict[str, Any]:
                 }
             )
 
+            # 检查 LLM 是否返回有效结果
+            if result is None:
+                raise ValueError("LLM 返回 None，触发重试")
+
             # 转换为 KeywordGroup 模型
             keyword_groups = []
             for group in result.keyword_groups:
@@ -376,43 +380,14 @@ async def generate_keywords(state: OSINTSearchState) -> dict[str, Any]:
             else:
                 log_node_error(logger, "generate_keywords", e)
 
-    # 降级处理
-    log_node_fallback(
-        logger,
-        "generate_keywords",
-        f"LLM失败: {last_error}",
-        "使用基础关键词生成",
+    # 重试耗尽，抛出异常
+    raise NodeError(
+        error_type=NodeErrorType.LLM_INVALID_RESPONSE,
+        message=f"关键词生成失败，已重试{max_retries}次: {last_error}",
+        severity=ErrorSeverity.ERROR,
+        node_name="generate_keywords",
+        recoverable=False,
     )
-
-    fallback_groups = _fallback_generate_keywords(intent)
-
-    log_node_end(
-        logger,
-        "generate_keywords",
-        ["keyword_groups"],
-        start_time,
-        {"fallback": True},
-    )
-
-    return {
-        "keyword_groups": fallback_groups,
-        "error_messages": [f"关键词生成LLM失败，使用降级生成: {last_error}"],
-        "messages": ["[generate_keywords] 降级生成关键词"],
-    }
-
-
-def _fallback_generate_keywords(intent: ParsedIntent) -> list[KeywordGroup]:
-    """LLM失败时的降级关键词生成"""
-    base_keyword = intent.investigation_target
-    return [
-        KeywordGroup(
-            keywords=[base_keyword],
-            layer=5,
-            language="mixed",
-            search_type="web",
-            site_constraint=None,
-        )
-    ]
 
 
 # ============================================================================
@@ -519,56 +494,13 @@ async def generate_validation_rules(state: OSINTSearchState) -> dict[str, Any]:
             else:
                 log_node_error(logger, "generate_validation_rules", e)
 
-    # 降级处理: 使用基础规则生成
-    log_node_fallback(
-        logger,
-        "generate_validation_rules",
-        f"LLM失败: {last_error}",
-        "使用基础规则生成",
-    )
-
-    fallback_rules = _fallback_generate_validation_rules(query, intent)
-
-    log_node_end(
-        logger,
-        "generate_validation_rules",
-        ["validation_rules"],
-        start_time,
-        {"fallback": True},
-    )
-
-    return {
-        "validation_rules": fallback_rules,
-        "error_messages": [f"验证规则生成LLM失败，使用降级生成: {last_error}"],
-        "messages": ["[generate_validation_rules] 降级生成验证规则"],
-    }
-
-
-def _fallback_generate_validation_rules(query: str, intent: ParsedIntent) -> ValidationRules:
-    """LLM失败时的降级验证规则生成
-    
-    基于查询文本进行简单的关键词提取
-    """
-    # 从调查对象中提取关键词作为必要条件
-    target = intent.investigation_target
-    
-    # 简单的中英文分词
-    import re
-    
-    # 提取中文词（2-4个字）
-    chinese_words = re.findall(r'[\u4e00-\u9fff]{2,4}', target)
-    
-    # 提取英文词
-    english_words = re.findall(r'[a-zA-Z]{3,}', target)
-    
-    # 合并作为主体条件
-    subject_keywords = list(set(chinese_words + english_words))
-    
-    return ValidationRules(
-        required_location=[],  # 无法自动提取地点
-        required_subject=subject_keywords[:5],  # 限制数量
-        required_event=[],  # 无法自动提取事件类型
-        exclude_patterns=[],
+    # 重试耗尽，抛出异常
+    raise NodeError(
+        error_type=NodeErrorType.LLM_INVALID_RESPONSE,
+        message=f"验证规则生成失败，已重试{max_retries}次: {last_error}",
+        severity=ErrorSeverity.ERROR,
+        node_name="generate_validation_rules",
+        recoverable=False,
     )
 
 

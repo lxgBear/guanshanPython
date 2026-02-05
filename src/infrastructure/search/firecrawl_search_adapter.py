@@ -295,19 +295,33 @@ Firecrawl 搜索API适配器
         """解析搜索结果 - 支持Firecrawl API v2格式"""
         results = []
 
-        # Firecrawl API v2 响应格式: data 是一个字典,包含 'web' 键
+        # Firecrawl API v2 响应格式: data 是一个字典,包含 'web' 或 'news' 等键
         # 例如: {"success": true, "data": {"web": [...]}, "creditsUsed": 1}
+        # 或者: {"success": true, "data": {"news": [...]}, "creditsUsed": 1}
         data_content = data.get('data', {})
 
-        # 处理v2格式: data.web 是结果列表
-        if isinstance(data_content, dict) and 'web' in data_content:
-            items = data_content.get('web', [])
+        items = []
+        if isinstance(data_content, dict):
+            # 处理v2格式: 支持 data.web, data.news 等多种来源类型
+            for source_key in ['web', 'news', 'academic', 'social']:
+                if source_key in data_content:
+                    source_items = data_content.get(source_key, [])
+                    if isinstance(source_items, list):
+                        items.extend(source_items)
+                        logger.info(f"📂 从 '{source_key}' 获取 {len(source_items)} 条结果")
+
+            # 如果没有找到已知的键，尝试合并所有列表值
+            if not items:
+                for key, value in data_content.items():
+                    if isinstance(value, list) and value:
+                        items.extend(value)
+                        logger.info(f"📂 从未知来源 '{key}' 获取 {len(value)} 条结果")
         # 兼容v0格式: data 直接是结果列表
         elif isinstance(data_content, list):
             items = data_content
-        else:
-            logger.warning(f"未知的响应格式: data类型为 {type(data_content)}")
-            items = []
+
+        if not items and data_content:
+            logger.warning(f"未知的响应格式: data类型为 {type(data_content)}, keys={list(data_content.keys()) if isinstance(data_content, dict) else 'N/A'}")
 
         for item in items:
             # 1. 提取核心字段
@@ -323,8 +337,7 @@ Firecrawl 搜索API适配器
             else:
                 markdown_content = markdown_full
 
-            # 提取HTML内容
-            html_content = item.get('html', '')
+            # v4.9.2: 移除 html_content 字段，不再存储 HTML 内容
 
             # 3. 提取metadata字段
             item_metadata = item.get('metadata', {})
@@ -355,7 +368,7 @@ Firecrawl 搜索API适配器
             # 7. 解析发布日期
             published_date = self._parse_date(item.get('publishedDate'))
 
-            # 8. 创建搜索结果实体(已移除raw_data和content字段,保留html_content)
+            # 8. 创建搜索结果实体(v4.9.2: 移除html_content字段)
             result = SearchResult(
                 task_id=task_id if task_id else "",
                 title=title,
@@ -367,7 +380,6 @@ Firecrawl 搜索API适配器
                 language=item_metadata.get('language'),
                 # 优化后的字段
                 markdown_content=markdown_content,  # 截断版本(最大5000字符)
-                html_content=html_content,  # HTML格式内容(用于富文本显示和分析)
                 article_tag=article_tag,
                 article_published_time=article_published_time,
                 source_url=source_url,

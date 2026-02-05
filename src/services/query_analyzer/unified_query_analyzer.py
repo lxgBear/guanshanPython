@@ -45,7 +45,7 @@ class UnifiedAnalyzerConfig:
     # Claude API 配置 - 从环境变量读取，与项目其他 LLM 配置保持一致
     base_url: str = field(default_factory=lambda: os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"))
     api_key: str = field(default_factory=lambda: os.getenv("CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN", ""))
-    model: str = "claude-sonnet-4-20250514"
+    model: str = field(default_factory=lambda: os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"))
     max_tokens: int = 4096
     timeout: int = 120  # 增加超时时间以适应第三方 API 代理
 
