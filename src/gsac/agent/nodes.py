@@ -106,7 +106,7 @@ class RelevanceOutput(BaseModel):
 
     url: str
     title: str
-    relevance: Literal["keep", "downgrade", "discard"]
+    relevance: Literal["high_relevance", "low_relevance"]
     reason: str
     matched_elements: list[str] = []
     confidence: float = 0.5
@@ -127,7 +127,7 @@ class ClassifiedSourceOutput(BaseModel):
     credibility_score: float
     time_confidence: Literal["HIGH", "MEDIUM", "LOW", "REJECTED"] = "MEDIUM"
     content_summary: str = ""
-    relevance_status: Literal["keep", "downgrade"] = "keep"
+    relevance_status: Literal["high_relevance", "low_relevance"] = "high_relevance"
     source_domain: str = ""
     published_date: str | None = None
 
@@ -954,18 +954,22 @@ def fan_out_scrape(state: OSINTSearchState) -> list[Send]:
 
 
 # ============================================================================
-# 节点6: scrape_single_url - 深度抓取(并行)
+# 节点6: scrape_single_url - 深度抓取(并行) (V4 增强日志版)
 # ============================================================================
 
 
 async def scrape_single_url(state: dict[str, Any]) -> dict[str, Any]:
     """
-    节点6: 抓取单个URL内容
+    节点6: 抓取单个URL内容 (V4 增强日志版)
 
     输入: url, title
     输出: scraped_contents (支持并行聚合)
 
     支持并行执行，结果通过 operator.add 自动合并
+
+    V4 改动:
+    - 增强日志便于服务器排查
+    - 记录抓取详情（内容长度、耗时等）
     """
     logger = get_logger("scrape_single_url")
     url = state.get("url", "")
@@ -973,7 +977,18 @@ async def scrape_single_url(state: dict[str, Any]) -> dict[str, Any]:
 
     start_time = log_node_start(logger, "scrape_single_url", ["url"], {"url": url[:100]})
 
+    # 详细日志：开始抓取
+    logger.info(
+        "scrape_start",
+        url=url,
+        title=title[:50] if title else "",
+    )
+
     if not url:
+        logger.warning(
+            "scrape_skip_empty_url",
+            reason="URL为空",
+        )
         log_node_end(logger, "scrape_single_url", [], start_time, {"skipped": True})
         return {"scraped_contents": []}
 
@@ -982,23 +997,70 @@ async def scrape_single_url(state: dict[str, Any]) -> dict[str, Any]:
 
     for attempt in range(max_retries):
         try:
+            # 详细日志：抓取尝试
+            logger.info(
+                "scrape_attempt",
+                url=url[:80],
+                attempt=attempt + 1,
+                max_retries=max_retries,
+            )
+
             content = await scrape_url(url)
 
             if content and (content.markdown or content.html):
+                markdown_len = len(content.markdown) if content.markdown else 0
+                html_len = len(content.html) if content.html else 0
+
+                # 详细日志：抓取成功
+                logger.info(
+                    "scrape_success",
+                    url=url[:80],
+                    markdown_length=markdown_len,
+                    html_length=html_len,
+                    has_markdown=bool(content.markdown),
+                    has_html=bool(content.html),
+                )
+
                 log_node_end(
                     logger,
                     "scrape_single_url",
                     ["scraped_contents"],
                     start_time,
-                    {"url": url[:50], "has_content": True},
+                    {"url": url[:50], "has_content": True, "markdown_len": markdown_len},
                 )
                 return {"scraped_contents": [content]}
             else:
-                logger.warning("empty_content", url=url[:100])
-                return {"scraped_contents": []}
+                # 详细日志：抓取返回空内容
+                logger.warning(
+                    "scrape_empty_content",
+                    url=url[:80],
+                    has_content_object=content is not None,
+                    markdown=bool(content.markdown) if content else False,
+                    html=bool(content.html) if content else False,
+                )
+
+                # V4: 返回空内容记录而非空列表
+                empty_content = ScrapedContent(
+                    url=url,
+                    title=title,
+                    markdown=None,
+                    html=None,
+                    scrape_success=False,
+                    error_message="Firecrawl返回空内容",
+                )
+                return {"scraped_contents": [empty_content]}
 
         except Exception as e:
             last_error = e
+            # 详细日志：抓取异常
+            logger.error(
+                "scrape_error",
+                url=url[:80],
+                attempt=attempt + 1,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+
             if attempt < max_retries - 1:
                 log_node_retry(logger, "scrape_single_url", attempt + 1, max_retries, e)
                 await asyncio.sleep(2**attempt)
@@ -1007,6 +1069,14 @@ async def scrape_single_url(state: dict[str, Any]) -> dict[str, Any]:
 
     # 抓取失败，记录但不阻塞
     log_node_fallback(logger, "scrape_single_url", str(last_error), "跳过该URL")
+
+    # 详细日志：最终失败
+    logger.warning(
+        "scrape_final_failure",
+        url=url[:80],
+        error=str(last_error),
+        retries_exhausted=True,
+    )
 
     # 返回失败记录
     failed_content = ScrapedContent(
@@ -1025,26 +1095,27 @@ async def scrape_single_url(state: dict[str, Any]) -> dict[str, Any]:
 
 
 # ============================================================================
-# 节点7: validate_relevance - 相关性验证 (V3 硬规则实现)
+# 节点7: validate_relevance - 相关性验证 (V4 保留所有结果)
 # ============================================================================
 
 
 async def validate_relevance(state: OSINTSearchState) -> dict[str, Any]:
     """
-    节点7: 验证相关性 (V3 硬规则实现)
+    节点7: 验证相关性 (V4 保留所有结果版本)
 
     输入: scraped_contents, parsed_intent
-    输出: relevance_results, validated_results, discarded_count, confidence_score
+    输出: relevance_results, validated_results, confidence_score
 
-    V3 验证策略 (混合模式):
-    1. 硬规则预过滤 - 快速排除明显无关结果
-    2. 置信度评分 - 基于标记匹配计算分数
-    3. 阈值判定 - 根据置信度决定 keep/downgrade/discard
+    V4 验证策略 (保留所有结果):
+    1. 硬规则评分 - 计算置信度分数
+    2. 状态标记 - 根据置信度标记 high_relevance/low_relevance
+    3. 全部保留 - 不再丢弃任何结果，由下游决定使用策略
 
-    相比旧版改进:
-    - 不再完全依赖LLM，硬规则保证基础质量
-    - 降级时不再保留所有结果，仍使用硬规则过滤
-    - 添加 confidence_score 到输出
+    相比 V3 改进:
+    - 保留所有结果，不再丢弃
+    - 使用 high_relevance/low_relevance 标记状态
+    - 移除 discarded_count，改用 low_relevance_count
+    - 增强日志便于服务器排查
     """
     logger = get_logger("validate_relevance")
     start_time = log_node_start(logger, "validate_relevance", ["scraped_contents", "parsed_intent"])
@@ -1053,18 +1124,27 @@ async def validate_relevance(state: OSINTSearchState) -> dict[str, Any]:
     intent = state.get("parsed_intent")
     deduplicated = state.get("deduplicated_results", [])
 
+    # 详细日志：输入状态
+    logger.info(
+        "validate_relevance_input",
+        scraped_count=len(scraped),
+        deduplicated_count=len(deduplicated),
+        has_intent=intent is not None,
+        intent_target=intent.investigation_target if intent else None,
+    )
+
     if not scraped and not deduplicated:
         log_node_end(
             logger,
             "validate_relevance",
-            ["relevance_results", "validated_results", "discarded_count"],
+            ["relevance_results", "validated_results"],
             start_time,
             {"input_count": 0},
         )
         return {
             "relevance_results": [],
             "validated_results": [],
-            "discarded_count": 0,
+            "discarded_count": 0,  # 保持向后兼容
             "confidence_score": 0.0,
             "messages": ["[validate_relevance] 无内容需要验证"],
         }
@@ -1078,22 +1158,31 @@ async def validate_relevance(state: OSINTSearchState) -> dict[str, Any]:
     # 获取LLM生成的动态验证规则 (V4新增)
     validation_rules = state.get("validation_rules")
 
+    # 详细日志：验证配置
+    logger.info(
+        "validate_relevance_config",
+        source_constraint=source_constraint,
+        has_validation_rules=validation_rules is not None,
+        validation_rules_location=validation_rules.required_location if validation_rules else [],
+        validation_rules_subject=validation_rules.required_subject if validation_rules else [],
+    )
+
     # 构建待验证内容映射
     content_map = _build_content_map(scraped, deduplicated)
 
     relevance_results: list[RelevanceResult] = []
-    validated_results: list[SearchResult] = []
-    downgraded_results: list[SearchResult] = []
-    discarded_count = 0
+    validated_results: list[SearchResult] = []  # 所有结果都保留
+    high_relevance_count = 0
+    low_relevance_count = 0
     total_score = 0.0
 
-    for r in deduplicated:
+    for idx, r in enumerate(deduplicated):
         url = r.url
         title = r.title
         content = content_map.get(url, r.description or "")[:2000]  # 截断长内容
 
         # V4 硬规则验证 (支持 LLM 生成的动态验证规则)
-        score, decision, reason = calculate_relevance_score(
+        score, old_decision, reason = calculate_relevance_score(
             title=title,
             content=content,
             url=url,
@@ -1101,6 +1190,15 @@ async def validate_relevance(state: OSINTSearchState) -> dict[str, Any]:
             source_constraint=source_constraint,
             validation_rules=validation_rules,
         )
+
+        # V4 改动: 将旧的 keep/downgrade/discard 映射到新状态
+        # score >= 0.5 为 high_relevance，否则为 low_relevance
+        if score >= 0.5:
+            decision = "high_relevance"
+            high_relevance_count += 1
+        else:
+            decision = "low_relevance"
+            low_relevance_count += 1
 
         # 回写分数到 SearchResult
         r.score = score
@@ -1110,66 +1208,61 @@ async def validate_relevance(state: OSINTSearchState) -> dict[str, Any]:
                 url=url,
                 title=title,
                 relevance=decision,
-                reason=f"[V3硬规则] {reason}",
+                reason=f"[V4验证] {reason}",
                 confidence=score,
-                matched_elements=[],  # 硬规则不提取匹配要素
+                matched_elements=[],
             )
         )
 
-        if decision == "keep":
-            validated_results.append(r)
-            total_score += score
-            logger.info(
-                "result_validated",
-                url=url[:80],
-                decision="keep",
-                score=round(score, 2),
-            )
-        elif decision == "downgrade":
-            downgraded_results.append(r)
-            total_score += score * 0.5  # 降级结果贡献一半分数
-            logger.info(
-                "result_downgraded",
-                url=url[:80],
-                decision="downgrade",
-                score=round(score, 2),
-            )
-        else:
-            discarded_count += 1
-            logger.info(
-                "result_discarded",
-                url=url[:80],
-                decision="discard",
-                reason=reason[:100],
-            )
+        # V4 改动: 所有结果都保留，不再丢弃
+        validated_results.append(r)
+        total_score += score
 
-    # 合并结果 (保留结果 + 降级结果)
-    all_validated = validated_results + downgraded_results
+        # 详细日志：每条结果的验证详情
+        logger.info(
+            "validate_relevance_item",
+            index=idx + 1,
+            url=url[:80],
+            title=title[:50] if title else "",
+            decision=decision,
+            score=round(score, 3),
+            reason=reason[:100],
+            content_length=len(content),
+        )
 
     # 计算整体置信度
     confidence_score = total_score / len(deduplicated) if deduplicated else 0.0
 
+    # 详细日志：验证汇总
+    logger.info(
+        "validate_relevance_summary",
+        total_count=len(deduplicated),
+        high_relevance_count=high_relevance_count,
+        low_relevance_count=low_relevance_count,
+        avg_confidence=round(confidence_score, 3),
+        validated_results_count=len(validated_results),
+    )
+
     log_node_end(
         logger,
         "validate_relevance",
-        ["relevance_results", "validated_results", "discarded_count", "confidence_score"],
+        ["relevance_results", "validated_results", "confidence_score"],
         start_time,
         {
-            "keep": len(validated_results),
-            "downgrade": len(downgraded_results),
-            "discard": discarded_count,
+            "high_relevance": high_relevance_count,
+            "low_relevance": low_relevance_count,
             "confidence": round(confidence_score, 2),
         },
     )
 
     return {
         "relevance_results": relevance_results,
-        "validated_results": all_validated,
-        "discarded_count": discarded_count,
+        "validated_results": validated_results,  # V4: 包含所有结果
+        "discarded_count": 0,  # V4: 不再丢弃，保持向后兼容
         "confidence_score": confidence_score,
         "messages": [
-            f"[validate_relevance] V3验证: {len(validated_results)} 保留, "
-            f"{len(downgraded_results)} 降级, {discarded_count} 丢弃"
+            f"[validate_relevance] V4验证: {high_relevance_count} 高相关, "
+            f"{low_relevance_count} 低相关 (全部保留)"
         ],
     }
 
@@ -1228,13 +1321,13 @@ def _build_contents_string(scraped: list[ScrapedContent], deduplicated: list[Sea
 
 
 # ============================================================================
-# 节点8: classify_sources - 来源分类
+# 节点8: classify_sources - 来源分类 (V4 增强日志版)
 # ============================================================================
 
 
 async def classify_sources(state: OSINTSearchState) -> dict[str, Any]:
     """
-    节点8: 来源分类和可信度评估
+    节点8: 来源分类和可信度评估 (V4 增强日志版)
 
     输入: validated_results, scraped_contents
     输出: classified_sources, confidence_score
@@ -1245,6 +1338,10 @@ async def classify_sources(state: OSINTSearchState) -> dict[str, Any]:
     - intl_mainstream: 国际主流媒体
     - think_tank: 智库/学术
     - other: 其他
+
+    V4 改动:
+    - 适配新的 high_relevance/low_relevance 状态
+    - 增强日志便于服务器排查
     """
     logger = get_logger("classify_sources")
     start_time = log_node_start(
@@ -1255,6 +1352,16 @@ async def classify_sources(state: OSINTSearchState) -> dict[str, Any]:
     scraped = state.get("scraped_contents", [])
     intent = state.get("parsed_intent")
     relevance_results = state.get("relevance_results", [])
+
+    # 详细日志：输入状态
+    logger.info(
+        "classify_sources_input",
+        validated_count=len(validated),
+        scraped_count=len(scraped),
+        relevance_results_count=len(relevance_results),
+        has_intent=intent is not None,
+        intent_target=intent.investigation_target if intent else None,
+    )
 
     if not validated:
         log_node_end(
@@ -1273,6 +1380,14 @@ async def classify_sources(state: OSINTSearchState) -> dict[str, Any]:
     # 构建内容字符串
     contents_str = _build_classify_contents_string(validated, scraped, relevance_results)
 
+    # 详细日志：LLM 输入
+    logger.info(
+        "classify_sources_llm_input",
+        contents_length=len(contents_str),
+        time_range=intent.time_range if intent else "无限制",
+        source_constraint=intent.source_type_constraint if intent else "all",
+    )
+
     try:
         llm = get_llm()
         chain = CLASSIFY_SOURCE_PROMPT | llm.with_structured_output(ClassifiedSourceListOutput)
@@ -1289,11 +1404,26 @@ async def classify_sources(state: OSINTSearchState) -> dict[str, Any]:
         if result is None or not hasattr(result, "sources") or result.sources is None:
             raise ValueError("LLM 返回无效结果，触发降级分类")
 
-        # 转换为 ClassifiedSource 模型
+        # 详细日志：LLM 返回结果数量
+        logger.info(
+            "classify_sources_llm_result",
+            sources_count=len(result.sources),
+        )
+
+        # 转换为 ClassifiedSource 模型，并映射 relevance_status
         classified = []
         total_credibility = 0.0
 
-        for s in result.sources:
+        # 构建 URL -> relevance 映射 (用于 V4 状态转换)
+        relevance_map = {r.url: r.relevance for r in relevance_results}
+
+        for idx, s in enumerate(result.sources):
+            # V4: 从 relevance_results 获取新的状态
+            new_relevance_status = relevance_map.get(s.url, "high_relevance")
+            # 兼容旧状态值
+            if new_relevance_status in ("keep", "downgrade"):
+                new_relevance_status = "high_relevance" if new_relevance_status == "keep" else "low_relevance"
+
             cs = ClassifiedSource(
                 url=s.url,
                 title=s.title,
@@ -1301,15 +1431,41 @@ async def classify_sources(state: OSINTSearchState) -> dict[str, Any]:
                 credibility_score=s.credibility_score,
                 time_confidence=s.time_confidence,
                 content_summary=s.content_summary,
-                relevance_status=s.relevance_status,
+                relevance_status=new_relevance_status,  # V4: 使用新状态
                 source_domain=s.source_domain or _extract_domain(s.url),
                 published_date=s.published_date,
             )
             classified.append(cs)
             total_credibility += s.credibility_score
 
+            # 详细日志：每条分类结果
+            logger.info(
+                "classify_sources_item",
+                index=idx + 1,
+                url=s.url[:80],
+                category=s.category,
+                credibility=round(s.credibility_score, 2),
+                relevance_status=new_relevance_status,
+                time_confidence=s.time_confidence,
+            )
+
         # 计算整体置信度
         confidence_score = total_credibility / len(classified) if classified else 0.0
+
+        # 详细日志：分类汇总
+        category_counts = {}
+        relevance_counts = {"high_relevance": 0, "low_relevance": 0}
+        for c in classified:
+            category_counts[c.category] = category_counts.get(c.category, 0) + 1
+            relevance_counts[c.relevance_status] = relevance_counts.get(c.relevance_status, 0) + 1
+
+        logger.info(
+            "classify_sources_summary",
+            total_count=len(classified),
+            category_distribution=category_counts,
+            relevance_distribution=relevance_counts,
+            avg_credibility=round(confidence_score, 3),
+        )
 
         log_node_end(
             logger,
@@ -1328,6 +1484,11 @@ async def classify_sources(state: OSINTSearchState) -> dict[str, Any]:
         }
 
     except Exception as e:
+        logger.error(
+            "classify_sources_llm_error",
+            error=str(e),
+            error_type=type(e).__name__,
+        )
         log_node_error(logger, "classify_sources", e)
         log_node_fallback(logger, "classify_sources", str(e), "使用基于域名的简单分类")
 
@@ -1335,6 +1496,13 @@ async def classify_sources(state: OSINTSearchState) -> dict[str, Any]:
         classified = _fallback_classify_sources(validated, relevance_results)
         confidence_score = (
             sum(c.credibility_score for c in classified) / len(classified) if classified else 0.0
+        )
+
+        # 详细日志：降级分类汇总
+        logger.info(
+            "classify_sources_fallback_summary",
+            total_count=len(classified),
+            avg_credibility=round(confidence_score, 3),
         )
 
         log_node_end(
@@ -1394,7 +1562,9 @@ def _fallback_classify_sources(
     validated: list[SearchResult],
     relevance_results: list[RelevanceResult],
 ) -> list[ClassifiedSource]:
-    """基于域名的简单分类"""
+    """基于域名的简单分类 (V4 适配新状态)"""
+    logger = get_logger("classify_sources_fallback")
+
     official_patterns = [".gov", ".edu", ".org", ".un.org", ".int"]
     mainstream_patterns = [
         "bbc.com",
@@ -1408,11 +1578,11 @@ def _fallback_classify_sources(
     ]
     think_tank_patterns = [".edu", "brookings", "rand", "csis", "cfr.org"]
 
-    # 相关性映射
+    # V4: 相关性映射 (已经是新状态)
     relevance_map = {r.url: r.relevance for r in relevance_results}
 
     classified = []
-    for r in validated:
+    for idx, r in enumerate(validated):
         domain = _extract_domain(r.url).lower()
 
         # 判断分类
@@ -1429,9 +1599,13 @@ def _fallback_classify_sources(
             category = "other"
             score = 0.5
 
-        relevance_status = relevance_map.get(r.url, "keep")
-        if relevance_status == "discard":
-            relevance_status = "downgrade"
+        # V4: 获取新状态，兼容旧值
+        relevance_status = relevance_map.get(r.url, "high_relevance")
+        # 兼容旧状态值
+        if relevance_status == "keep":
+            relevance_status = "high_relevance"
+        elif relevance_status in ("downgrade", "discard"):
+            relevance_status = "low_relevance"
 
         classified.append(
             ClassifiedSource(
@@ -1445,6 +1619,17 @@ def _fallback_classify_sources(
                 source_domain=domain,
                 published_date=r.published_date,
             )
+        )
+
+        # 详细日志：每条降级分类结果
+        logger.info(
+            "fallback_classify_item",
+            index=idx + 1,
+            url=r.url[:80],
+            domain=domain,
+            category=category,
+            credibility=score,
+            relevance_status=relevance_status,
         )
 
     return classified

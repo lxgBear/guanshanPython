@@ -95,19 +95,21 @@ class KeywordGroup(BaseModel):
 class RelevanceResult(BaseModel):
     """相关性验证结果
 
-    用于 validate_relevance 节点输出，记录4步验证法的判断结果
+    用于 validate_relevance 节点输出，记录验证判断结果
 
-    4步判断流程:
+    V4 改动: 保留所有结果，不再丢弃，使用 high_relevance/low_relevance 标记状态
+
+    验证流程:
     1. 回顾原始意图
     2. 核心要素匹配检查 (地点/事件/时间/来源)
-    3. 偏离判定 (丢弃/降级)
-    4. 输出结果
+    3. 计算置信度分数
+    4. 标记相关性状态 (高度吻合/明显无关)
     """
 
     url: str = Field(description="内容URL")
     title: str = Field(description="内容标题")
-    relevance: Literal["keep", "downgrade", "discard"] = Field(
-        description="相关性判定: keep(保留), downgrade(降级), discard(丢弃)"
+    relevance: Literal["high_relevance", "low_relevance"] = Field(
+        description="相关性判定: high_relevance(与事件高度吻合), low_relevance(明显无关内容)"
     )
     reason: str = Field(description="判定理由，说明为何做出此判断")
     matched_elements: list[str] = Field(
@@ -118,7 +120,7 @@ class RelevanceResult(BaseModel):
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="判定置信度",
+        description="判定置信度 (0.0-1.0)，>=0.5 为 high_relevance，<0.5 为 low_relevance",
     )
 
 
@@ -185,9 +187,9 @@ class ClassifiedSource(BaseModel):
         default="",
         description="内容摘要 (100字以内)",
     )
-    relevance_status: Literal["keep", "downgrade"] = Field(
-        default="keep",
-        description="相关性状态 (从验证节点继承)",
+    relevance_status: Literal["high_relevance", "low_relevance"] = Field(
+        default="high_relevance",
+        description="相关性状态: high_relevance(与事件高度吻合), low_relevance(明显无关内容)",
     )
     source_domain: str = Field(
         default="",
