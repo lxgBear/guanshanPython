@@ -77,16 +77,28 @@ class Settings(BaseSettings):
         description="默认最大关键词数量",
     )
     default_max_results: int = Field(
-        default=10,
+        default=20,
         ge=1,
-        le=50,
+        le=100,
         description="每个关键词的默认最大结果数",
     )
     default_timeout: int = Field(
+        default=120,
+        ge=10,
+        le=600,
+        description="默认超时时间(秒)",
+    )
+    search_timeout: int = Field(
+        default=180,
+        ge=30,
+        le=600,
+        description="单次搜索超时时间(秒)",
+    )
+    llm_timeout: int = Field(
         default=60,
         ge=10,
         le=300,
-        description="默认超时时间(秒)",
+        description="LLM调用超时时间(秒)",
     )
 
     # ===== 并发配置 =====
