@@ -7,8 +7,6 @@ __pycache__/
 venv/
 .venv/
 env/
-.env.local
-.env.*.local
 
 # IDE
 .idea/
@@ -70,9 +68,13 @@ temp/
 CLAUDE.md
 **/CLAUDE.md
 
-# Environment examples (actual .env should be mounted)
+# Environment files (actual .env should be passed via --env-file, not built into image)
+.env
 .env.example
 .env.*.example
+.env.local
+.env.*.local
+.env.production
 
 # macOS
 .DS_Store
