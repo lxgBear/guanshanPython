@@ -70,19 +70,21 @@ jobs:
               --restart unless-stopped \
               guanshan-app
 
-            echo "==> Waiting for service to start..."
-            sleep 10
+            echo "==> Waiting for service to start (30s for MongoDB connection timeout)..."
+            sleep 30
 
             echo "==> Health check..."
-            for i in 1 2 3 4 5; do
+            for i in 1 2 3 4 5 6; do
               if curl -f -s http://localhost:8000/health > /dev/null 2>&1; then
                 echo "==> Health check passed!"
                 # 部署成功，移除备份镜像
                 docker rmi guanshan-app:backup 2>/dev/null || true
                 break
               else
-                if [ $i -eq 5 ]; then
-                  echo "==> Health check failed! Attempting rollback..."
+                if [ $i -eq 6 ]; then
+                  echo "==> Health check failed after 6 attempts! Attempting rollback..."
+                  echo "==> Collecting diagnostic logs..."
+                  docker logs guanshan-app --tail 50 || true
                   docker stop guanshan-app 2>/dev/null || true
                   docker rm guanshan-app 2>/dev/null || true
                   if docker images guanshan-app:backup -q | grep -q .; then
@@ -97,8 +99,8 @@ jobs:
                   fi
                   exit 1
                 fi
-                echo "Waiting for service... (attempt $i/5)"
-                sleep 3
+                echo "Waiting for service... (attempt $i/6)"
+                sleep 5
               fi
             done
 
