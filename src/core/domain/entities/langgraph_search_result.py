@@ -104,6 +104,9 @@ class LangGraphSearchResult(SearchResult):
     # v4.7.0: 结果处理状态
     langgraph_status: str = "pending"  # 处理状态: pending/transferred/discarded
 
+    # v4.29.0: 相关性状态 (来自 GSAC 验证节点)
+    relevance_status: str = "high_relevance"  # 相关性状态: high_relevance/low_relevance
+
     def __post_init__(self):
         """初始化后处理"""
         # 确保父类的 content_hash 已生成
@@ -132,6 +135,8 @@ class LangGraphSearchResult(SearchResult):
             "transferred_at": self.transferred_at,
             # v4.7.0: 处理状态
             "langgraph_status": self.langgraph_status,
+            # v4.29.0: 相关性状态
+            "relevance_status": self.relevance_status,
         })
         return base_summary
 

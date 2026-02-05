@@ -133,6 +133,8 @@ class MongoLangGraphResultRepository:
             "transferred_at": result.transferred_at,
             # v4.7.0: 结果处理状态
             "langgraph_status": result.langgraph_status,
+            # v4.29.0: 相关性状态
+            "relevance_status": result.relevance_status,
         }
         return base_dict
 
@@ -206,6 +208,8 @@ class MongoLangGraphResultRepository:
             transferred_at=data.get("transferred_at"),
             # v4.7.0: 结果处理状态
             langgraph_status=data.get("langgraph_status", "pending"),
+            # v4.29.0: 相关性状态
+            relevance_status=data.get("relevance_status", "high_relevance"),
         )
 
     # ==================== 基础 CRUD 方法 ====================

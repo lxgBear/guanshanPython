@@ -201,6 +201,8 @@ class LangGraphResultItem(BaseModel):
     transferred_at: Optional[datetime] = Field(None, description="转移时间")
     # v4.7.0: 结果处理状态
     langgraph_status: str = Field("pending", description="处理状态: pending(未处理)/transferred(已入库)/discarded(已废弃)")
+    # v4.29.0: 相关性状态
+    relevance_status: str = Field("high_relevance", description="相关性状态: high_relevance(高相关)/low_relevance(低相关)")
 
     @field_validator('published_date', mode='before')
     @classmethod
@@ -632,6 +634,8 @@ async def get_langgraph_results(
                 transferred_at=r.transferred_at,
                 # v4.7.0: 结果处理状态
                 langgraph_status=r.langgraph_status,
+                # v4.29.0: 相关性状态
+                relevance_status=r.relevance_status,
             )
             data.append(item)
 
