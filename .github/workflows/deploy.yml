@@ -18,19 +18,49 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          command_timeout: 10m
+          command_timeout: 15m
           script: |
+            set -e  # 遇到错误立即退出
             cd /www/wwwroot/guanshan
 
             echo "==> Pulling latest code..."
             git fetch origin && git reset --hard origin/result
 
-            echo "==> Building Docker image..."
-            docker build -t guanshan-app .
-
-            echo "==> Stopping old container..."
+            echo "==> Cleaning up old containers and images..."
+            # 停止并移除旧容器
             docker stop guanshan-app 2>/dev/null || true
             docker rm guanshan-app 2>/dev/null || true
+
+            # 备份当前镜像用于回滚
+            if docker images guanshan-app -q | grep -q .; then
+              echo "==> Backing up current image for rollback..."
+              docker tag guanshan-app guanshan-app:backup 2>/dev/null || true
+            fi
+
+            # 移除旧的应用镜像（保留backup）
+            docker images guanshan-app --format "{{.Tag}}" | grep -v backup | xargs -r -I {} docker rmi guanshan-app:{} 2>/dev/null || true
+
+            # 清理悬空镜像
+            docker image prune -f 2>/dev/null || true
+
+            # 清理停止的容器
+            docker container prune -f 2>/dev/null || true
+
+            echo "==> Building Docker image (no cache)..."
+            docker build --no-cache --pull -t guanshan-app . || {
+              echo "==> Build failed! Attempting rollback..."
+              if docker images guanshan-app:backup -q | grep -q .; then
+                docker tag guanshan-app:backup guanshan-app
+                docker run -d \
+                  --name guanshan-app \
+                  --env-file .env \
+                  -p 8000:8000 \
+                  --restart unless-stopped \
+                  guanshan-app
+                echo "==> Rollback completed with backup image"
+              fi
+              exit 1
+            }
 
             echo "==> Starting new container..."
             docker run -d \
@@ -41,9 +71,35 @@ jobs:
               guanshan-app
 
             echo "==> Waiting for service to start..."
-            sleep 5
+            sleep 10
 
             echo "==> Health check..."
-            curl -f http://localhost:8000/health || echo "Warning: Health check failed"
+            for i in 1 2 3 4 5; do
+              if curl -f -s http://localhost:8000/health > /dev/null 2>&1; then
+                echo "==> Health check passed!"
+                # 部署成功，移除备份镜像
+                docker rmi guanshan-app:backup 2>/dev/null || true
+                break
+              else
+                if [ $i -eq 5 ]; then
+                  echo "==> Health check failed! Attempting rollback..."
+                  docker stop guanshan-app 2>/dev/null || true
+                  docker rm guanshan-app 2>/dev/null || true
+                  if docker images guanshan-app:backup -q | grep -q .; then
+                    docker tag guanshan-app:backup guanshan-app
+                    docker run -d \
+                      --name guanshan-app \
+                      --env-file .env \
+                      -p 8000:8000 \
+                      --restart unless-stopped \
+                      guanshan-app
+                    echo "==> Rollback completed with backup image"
+                  fi
+                  exit 1
+                fi
+                echo "Waiting for service... (attempt $i/5)"
+                sleep 3
+              fi
+            done
 
-            echo "==> Deployment completed!"
+            echo "==> Deployment completed successfully!"
