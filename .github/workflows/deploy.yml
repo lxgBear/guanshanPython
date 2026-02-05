@@ -54,6 +54,7 @@ jobs:
                 docker run -d \
                   --name guanshan-app \
                   --env-file .env \
+                  --add-host=host.docker.internal:host-gateway \
                   -p 8000:8000 \
                   --restart unless-stopped \
                   guanshan-app
@@ -66,6 +67,7 @@ jobs:
             docker run -d \
               --name guanshan-app \
               --env-file .env \
+              --add-host=host.docker.internal:host-gateway \
               -p 8000:8000 \
               --restart unless-stopped \
               guanshan-app
@@ -92,6 +94,7 @@ jobs:
                     docker run -d \
                       --name guanshan-app \
                       --env-file .env \
+                      --add-host=host.docker.internal:host-gateway \
                       -p 8000:8000 \
                       --restart unless-stopped \
                       guanshan-app
