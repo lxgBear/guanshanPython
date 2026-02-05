@@ -18,6 +18,7 @@ OSINT Search LangGraph 节点实现
 """
 
 import asyncio
+from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -30,6 +31,7 @@ from ..llm.prompts import (
     INTENT_PARSE_PROMPT,
     KEYWORD_GEN_PROMPT_V2,
     RELEVANCE_VALIDATE_PROMPT,
+    VALIDATION_RULES_PROMPT,
 )
 from ..llm.provider import get_llm
 from .validation_rules import (
@@ -45,6 +47,7 @@ from ..models.schemas import (
     ScrapedContent,
     SearchResult,
     SearchTask,
+    ValidationRules,
 )
 from ..models.state import OSINTSearchState
 from ..processors.deduplicator import deduplicate_results
@@ -141,6 +144,15 @@ class ExpandedKeywordsOutput(BaseModel):
     keywords: list[str]
 
 
+class ValidationRulesOutput(BaseModel):
+    """验证规则输出结构"""
+
+    required_location: list[str] = []
+    required_subject: list[str] = []
+    required_event: list[str] = []
+    exclude_patterns: list[str] = []
+
+
 # ============================================================================
 # 节点1: parse_intent - 意图解析(6要素)
 # ============================================================================
@@ -194,7 +206,8 @@ async def parse_intent(state: OSINTSearchState) -> dict[str, Any]:
         try:
             llm = get_llm()
             chain = INTENT_PARSE_PROMPT | llm.with_structured_output(IntentOutput)
-            result: IntentOutput = await chain.ainvoke({"query": query})
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            result: IntentOutput = await chain.ainvoke({"query": query, "current_date": current_date})
 
             # 构建 ParsedIntent
             intent = ParsedIntent(
@@ -318,8 +331,10 @@ async def generate_keywords(state: OSINTSearchState) -> dict[str, Any]:
             # 使用V2版本的关键词生成Prompt，避免site: OR链和确保实体名称出现
             chain = KEYWORD_GEN_PROMPT_V2 | llm.with_structured_output(KeywordsOutput)
 
+            current_date = datetime.now().strftime("%Y-%m-%d")
             result: KeywordsOutput = await chain.ainvoke(
                 {
+                    "current_date": current_date,
                     "investigation_target": intent.investigation_target,
                     "time_range": intent.time_range or "无限制",
                     "source_type_constraint": intent.source_type_constraint,
@@ -398,6 +413,163 @@ def _fallback_generate_keywords(intent: ParsedIntent) -> list[KeywordGroup]:
             site_constraint=None,
         )
     ]
+
+
+# ============================================================================
+# 节点2.5: generate_validation_rules - 动态验证规则生成
+# ============================================================================
+
+
+async def generate_validation_rules(state: OSINTSearchState) -> dict[str, Any]:
+    """
+    节点2.5: 生成动态验证规则
+
+    输入: user_query, parsed_intent
+    输出: validation_rules
+
+    功能:
+    - 从用户查询中提取必要条件（地点、主体、事件）
+    - 生成排除模式（用于过滤无关结果）
+    - 这些规则将用于后续的相关性验证
+    """
+    logger = get_logger("generate_validation_rules")
+    start_time = log_node_start(logger, "generate_validation_rules", ["user_query", "parsed_intent"])
+
+    query = state.get("user_query", "")
+    intent = state.get("parsed_intent")
+
+    if not intent:
+        log_node_error(
+            logger,
+            "generate_validation_rules",
+            NodeError(
+                error_type=NodeErrorType.MISSING_REQUIRED_FIELD,
+                message="parsed_intent为空",
+                severity=ErrorSeverity.ERROR,
+                node_name="generate_validation_rules",
+                recoverable=True,
+            ),
+        )
+        # 返回空规则，不阻塞流程
+        return {
+            "validation_rules": ValidationRules(),
+            "error_messages": ["验证规则生成失败: parsed_intent为空"],
+            "messages": ["[generate_validation_rules] 跳过: 无意图信息"],
+        }
+
+    max_retries = 3
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries):
+        try:
+            llm = get_llm()
+            chain = VALIDATION_RULES_PROMPT | llm.with_structured_output(ValidationRulesOutput)
+
+            result: ValidationRulesOutput = await chain.ainvoke(
+                {
+                    "query": query,
+                    "investigation_target": intent.investigation_target,
+                    "time_range": intent.time_range or "无限制",
+                    "source_type_constraint": intent.source_type_constraint,
+                    "investigation_type": intent.investigation_type,
+                }
+            )
+
+            # 检查 LLM 是否返回有效结果
+            if result is None:
+                raise ValueError("LLM 返回 None，触发重试")
+
+            # 构建 ValidationRules
+            rules = ValidationRules(
+                required_location=result.required_location,
+                required_subject=result.required_subject,
+                required_event=result.required_event,
+                exclude_patterns=result.exclude_patterns,
+            )
+
+            log_node_end(
+                logger,
+                "generate_validation_rules",
+                ["validation_rules"],
+                start_time,
+                {
+                    "location_count": len(rules.required_location),
+                    "subject_count": len(rules.required_subject),
+                    "event_count": len(rules.required_event),
+                    "exclude_count": len(rules.exclude_patterns),
+                },
+            )
+
+            return {
+                "validation_rules": rules,
+                "messages": [
+                    f"[generate_validation_rules] 生成规则: "
+                    f"地点{len(rules.required_location)}个, "
+                    f"主体{len(rules.required_subject)}个, "
+                    f"事件{len(rules.required_event)}个, "
+                    f"排除{len(rules.exclude_patterns)}个"
+                ],
+            }
+
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                log_node_retry(logger, "generate_validation_rules", attempt + 1, max_retries, e)
+                await asyncio.sleep(2**attempt)
+            else:
+                log_node_error(logger, "generate_validation_rules", e)
+
+    # 降级处理: 使用基础规则生成
+    log_node_fallback(
+        logger,
+        "generate_validation_rules",
+        f"LLM失败: {last_error}",
+        "使用基础规则生成",
+    )
+
+    fallback_rules = _fallback_generate_validation_rules(query, intent)
+
+    log_node_end(
+        logger,
+        "generate_validation_rules",
+        ["validation_rules"],
+        start_time,
+        {"fallback": True},
+    )
+
+    return {
+        "validation_rules": fallback_rules,
+        "error_messages": [f"验证规则生成LLM失败，使用降级生成: {last_error}"],
+        "messages": ["[generate_validation_rules] 降级生成验证规则"],
+    }
+
+
+def _fallback_generate_validation_rules(query: str, intent: ParsedIntent) -> ValidationRules:
+    """LLM失败时的降级验证规则生成
+    
+    基于查询文本进行简单的关键词提取
+    """
+    # 从调查对象中提取关键词作为必要条件
+    target = intent.investigation_target
+    
+    # 简单的中英文分词
+    import re
+    
+    # 提取中文词（2-4个字）
+    chinese_words = re.findall(r'[\u4e00-\u9fff]{2,4}', target)
+    
+    # 提取英文词
+    english_words = re.findall(r'[a-zA-Z]{3,}', target)
+    
+    # 合并作为主体条件
+    subject_keywords = list(set(chinese_words + english_words))
+    
+    return ValidationRules(
+        required_location=[],  # 无法自动提取地点
+        required_subject=subject_keywords[:5],  # 限制数量
+        required_event=[],  # 无法自动提取事件类型
+        exclude_patterns=[],
+    )
 
 
 # ============================================================================
@@ -971,6 +1143,9 @@ async def validate_relevance(state: OSINTSearchState) -> dict[str, Any]:
     # 提取来源约束 (用于媒体过滤)
     source_constraint = intent.source_type_constraint if intent else None
 
+    # 获取LLM生成的动态验证规则 (V4新增)
+    validation_rules = state.get("validation_rules")
+
     # 构建待验证内容映射
     content_map = _build_content_map(scraped, deduplicated)
 
@@ -985,13 +1160,14 @@ async def validate_relevance(state: OSINTSearchState) -> dict[str, Any]:
         title = r.title
         content = content_map.get(url, r.description or "")[:2000]  # 截断长内容
 
-        # V3 硬规则验证 (新增 source_constraint 参数)
+        # V4 硬规则验证 (支持 LLM 生成的动态验证规则)
         score, decision, reason = calculate_relevance_score(
             title=title,
             content=content,
             url=url,
             config=config,
             source_constraint=source_constraint,
+            validation_rules=validation_rules,
         )
 
         # 回写分数到 SearchResult
@@ -1350,6 +1526,7 @@ __all__ = [
     # OSINT核心节点
     "parse_intent",
     "generate_keywords",
+    "generate_validation_rules",
     "execute_single_search",
     "merge_deduplicate",
     "expand_search",

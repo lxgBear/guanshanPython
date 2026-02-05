@@ -122,6 +122,38 @@ class RelevanceResult(BaseModel):
     )
 
 
+class ValidationRules(BaseModel):
+    """LLM 生成的动态验证规则
+
+    用于 generate_validation_rules 节点输出，定义搜索结果的必要条件
+
+    验证逻辑:
+    - required_location: 地点必要条件，结果必须包含至少一个
+    - required_subject: 主体必要条件，结果必须包含至少一个
+    - required_event: 事件必要条件，结果必须包含至少一个
+    - exclude_patterns: 排除模式，包含这些词的结果将被丢弃
+
+    只有同时满足三类必要条件且不包含排除词的结果才能通过验证
+    """
+
+    required_location: list[str] = Field(
+        default_factory=list,
+        description="地点必要条件关键词列表，如 ['阿富汗', 'Afghanistan', '喀布尔', 'Kabul']",
+    )
+    required_subject: list[str] = Field(
+        default_factory=list,
+        description="主体必要条件关键词列表，如 ['中国', 'Chinese', 'China', '中国公民']",
+    )
+    required_event: list[str] = Field(
+        default_factory=list,
+        description="事件必要条件关键词列表，如 ['死', 'killed', 'attack', '爆炸', '袭击']",
+    )
+    exclude_patterns: list[str] = Field(
+        default_factory=list,
+        description="排除模式列表，如 ['伊朗', 'Iran', '签证', 'visa']",
+    )
+
+
 class ClassifiedSource(BaseModel):
     """分类后的来源
 
@@ -226,25 +258,18 @@ class SearchTask(BaseModel):
 
 
 class SearchResult(BaseModel):
-    """搜索结果
-
-    v4.9.0: 添加 source_name 和 layer_name 字段用于媒体来源映射
-    """
+    """搜索结果"""
 
     url: str = Field(description="结果URL")
     title: str = Field(description="结果标题")
     description: str | None = Field(default=None, description="结果描述")
     content: str | None = Field(default=None, description="结果内容")
-    markdown: str | None = Field(default=None, description="Markdown格式内容")
-    html: str | None = Field(default=None, description="HTML格式内容")
-    source: str = Field(default="web", description="来源类型 (web/news/images)")
-    source_name: str = Field(default="", description="媒体来源英文名称 (如 BBC, CNN)")
+    source: str = Field(default="web", description="来源类型")
     keyword: str = Field(default="", description="来源关键词")
+    score: float = Field(default=0.0, description="相关性评分")
     source_domain: str = Field(default="", description="来源域名")
-    layer_name: str = Field(default="", description="媒体来源中文名称 (如 英国广播公司新闻)")
     published_date: str | None = Field(default=None, description="发布日期")
     layer: int = Field(default=5, ge=0, le=5, description="关键词层级")
-    score: float | None = Field(default=None, description="相关性评分 (0.0-1.0)")
 
 
 # ============================================================================

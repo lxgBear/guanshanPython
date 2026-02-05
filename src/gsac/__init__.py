@@ -262,11 +262,18 @@ async def _run_crawl_async(query: str, config: CrawlConfig) -> Any:
     return await run_crawl(query, config)
 
 
-def _convert_osint_state_to_output(query: str, state: dict[str, Any]) -> CrawlOutput:
+def _convert_osint_state_to_output(
+    query: str, state: dict[str, Any], include_scraped_content: bool = False
+) -> CrawlOutput:
     """
     将OSINT搜索状态转换为CrawlOutput格式
 
     用于保持与旧API的兼容性
+
+    Args:
+        query: 搜索查询
+        state: OSINT状态字典
+        include_scraped_content: 是否包含抓取的原始HTML和Markdown内容
     """
     import time
 
@@ -279,8 +286,8 @@ def _convert_osint_state_to_output(query: str, state: dict[str, Any]) -> CrawlOu
         elif isinstance(group, dict):
             keywords_used.extend(group.get("keywords", []))
 
-    # 提取搜索结果
-    results = state.get("deduplicated_results", [])
+    # 提取搜索结果 (优先使用验证后的结果，如果没有则使用去重后的结果)
+    results = state.get("validated_results", []) or state.get("deduplicated_results", [])
 
     # 提取错误信息
     errors = state.get("error_messages", [])
@@ -303,10 +310,35 @@ def _convert_osint_state_to_output(query: str, state: dict[str, Any]) -> CrawlOu
         if summaries:
             summary = "\n\n".join(summaries)
 
+    # 提取抓取的原始内容（如果启用）
+    scraped_contents = []
+    if include_scraped_content:
+        raw_scraped = state.get("scraped_contents", [])
+        for content in raw_scraped:
+            if hasattr(content, "model_copy"):
+                # Pydantic模型，直接添加
+                scraped_contents.append(content)
+            elif isinstance(content, dict):
+                # 字典格式，转换为ScrapedContent
+                from gsac.models.schemas import ScrapedContent
+
+                scraped_contents.append(
+                    ScrapedContent(
+                        url=content.get("url", ""),
+                        title=content.get("title", ""),
+                        markdown=content.get("markdown"),
+                        html=content.get("html"),
+                        metadata=content.get("metadata", {}),
+                        scrape_success=content.get("scrape_success", True),
+                        error_message=content.get("error_message"),
+                    )
+                )
+
     return CrawlOutput(
         query=query,
         keywords_used=keywords_used if keywords_used else [query],
         results=results,
+        scraped_contents=scraped_contents,
         total_found=len(results),
         execution_time=execution_time,
         summary=summary,

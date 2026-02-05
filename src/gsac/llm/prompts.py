@@ -17,17 +17,23 @@ from langchain_core.prompts import ChatPromptTemplate
 # ===== 意图解析 Prompt (6要素) =====
 INTENT_PARSE_SYSTEM = """你是一个专业的OSINT(开源情报)意图分析专家。你的任务是从用户的自然语言查询中提取6个核心要素。
 
+**重要**: 用户会提供当前日期。你必须使用此日期来正确解析相对时间表达式（如"最近一周"、"上个月"等），将其转换为具体的日期范围。
+
 请分析用户查询并提取以下信息:
 
 1. investigation_target (调查对象): 用户查询的核心目标
    - 识别主要的人物、组织、事件、地点、产品等
    - 提取最具体的描述
 
-2. time_range (时间范围): 时间约束，格式示例
-   - "2025-11" (具体年月)
-   - "last week", "last month", "last year"
-   - "2024-01 to 2024-12" (时间段)
-   - null 表示无时间限制
+2. time_range (时间范围): 时间约束
+   **重要**: 必须将相对时间表达式转换为具体日期范围！
+   - 如果用户说"最近一周"且当前日期是2026-01-21，则应返回 "2026-01-14 to 2026-01-21"
+   - 如果用户说"上个月"且当前日期是2026-01-21，则应返回 "2025-12"
+   - 格式示例:
+     - "2025-11" (具体年月)
+     - "2025-11-01 to 2025-11-30" (日期范围)
+     - null 表示无时间限制
+   - **禁止返回**: "last week", "last month" 等相对时间表达式
 
 3. source_type_constraint (信息源约束): 用户对信息来源的要求
    - "西方主流媒体" - 如BBC, CNN, Reuters等
@@ -57,7 +63,7 @@ INTENT_PARSE_SYSTEM = """你是一个专业的OSINT(开源情报)意图分析专
 INTENT_PARSE_PROMPT = ChatPromptTemplate.from_messages(
     [
         ("system", INTENT_PARSE_SYSTEM),
-        ("human", "用户查询: {query}"),
+        ("human", "当前日期: {current_date}\n用户查询: {query}"),
     ]
 )
 
@@ -125,6 +131,8 @@ KEYWORD_GEN_PROMPT = ChatPromptTemplate.from_messages(
 # ===== V2版本: 高效关键词生成 Prompt =====
 KEYWORD_GEN_SYSTEM_V2 = """你是OSINT关键词策略专家。基于解析的意图生成高效搜索关键词。
 
+**重要**: 用户会提供当前日期。生成关键词时必须使用正确的时间范围（从time_range字段获取），并将其转换为具体的年月日格式用于搜索。
+
 ## 核心规则 (必须严格遵守)
 
 1. **实体名称必须出现在每个关键词中**
@@ -138,9 +146,18 @@ KEYWORD_GEN_SYSTEM_V2 = """你是OSINT关键词策略专家。基于解析的意
 3. **每个site约束单独一个关键词组**
    - 如需多个媒体，生成多个KeywordGroup，每个只有一个site_constraint
 
-4. **时间要素显式包含**
-   - 将时间范围转化为关键词的一部分
-   - 例如: "2025-11" → 关键词中包含 "November 2025" 或 "2025年11月"
+4. **时间要素显式包含 (必须使用正确的时间)**
+   - 将time_range字段中的时间范围转化为关键词的一部分
+   - 必须使用准确的年月，不要使用过时的日期
+   - 例如: "2026-01-14 to 2026-01-21" → 关键词中包含 "January 2026" 或 "2026年1月"
+
+5. **多维度查询必须全面覆盖 (重要!)**
+   - 分析调查对象，识别是否包含多个调查维度
+   - 每个调查维度至少生成1-2个专门的关键词组
+   - 示例分析:
+     * "阿富汗中国公民被杀害" → 单维度(事件) → 3-5组关键词聚焦该事件
+     * "Garuda Aerospace公司情况+军方供应+中国供应链" → 三维度 → 每个维度2-3组
+   - 多维度查询指标: 调查对象中包含"包括"、"以及"、"同时"、逗号分隔等
 
 ## 高效查询模板 (按有效率排序)
 
@@ -152,7 +169,11 @@ KEYWORD_GEN_SYSTEM_V2 = """你是OSINT关键词策略专家。基于解析的意
 
 ## 输出格式
 
-生成3-5个KeywordGroup，每组包含:
+根据查询复杂度生成KeywordGroup:
+- **单维度查询**: 生成3-5个KeywordGroup
+- **多维度查询**: 每个维度2-3组，总计可达9组
+
+每组包含:
 - keywords: 2-3个具体关键词 (必须包含实体名称)
 - layer: 0-5 (0=官方, 5=最宽泛)
 - language: zh/en/mixed
@@ -166,12 +187,39 @@ KEYWORD_GEN_SYSTEM_V2 = """你是OSINT关键词策略专家。基于解析的意
 - time_range: "2025-11"
 - source_type_constraint: "西方主流媒体"
 
-输出 (JSON数组格式):
+输出 (JSON数组格式) - 单维度查询示例:
 - 第1组: keywords=["Hongqi Bridge collapse Sichuan November 2025", "红旗大桥 Sichuan bridge collapse 2025"], layer=1, language="mixed", search_type="news", site_constraint=null
 - 第2组: keywords=["红旗大桥 垮塌 英文报道 2025年11月"], layer=5, language="zh", search_type="web", site_constraint=null
 - 第3组: keywords=["Hongqi Bridge collapse China November 2025"], layer=2, language="en", search_type="news", site_constraint="bbc.com"
 - 第4组: keywords=["Hongqi Bridge collapse China November 2025"], layer=2, language="en", search_type="news", site_constraint="reuters.com"
 - 第5组: keywords=["Hongqi Bridge collapse China November 2025"], layer=2, language="en", search_type="news", site_constraint="cnn.com"
+
+## 多维度查询示例
+
+输入:
+- investigation_target: "Garuda Aerospace Pvt Ltd (印度无人机公司) - 基本情况、向印度军方供应无人机情况、无人机零配件中涉及中国的供应链情况"
+- time_range: null
+- source_type_constraint: null
+
+分析: 三个调查维度
+1. 公司基本情况
+2. 印度军方供应
+3. 中国供应链
+
+输出 (JSON数组格式) - 多维度查询示例:
+【维度1: 公司基本情况】
+- 第1组: keywords=["Garuda Aerospace Pvt Ltd India drone company", "Garuda Aerospace drone manufacturer profile"], layer=1, language="en", search_type="web", site_constraint=null
+- 第2组: keywords=["Garuda Aerospace 印度无人机公司 简介"], layer=2, language="zh", search_type="web", site_constraint=null
+
+【维度2: 印度军方供应】
+- 第3组: keywords=["Garuda Aerospace Indian Army drone supply", "Garuda Aerospace defence contract India"], layer=1, language="en", search_type="news", site_constraint=null
+- 第4组: keywords=["Garuda Aerospace 印度军方 无人机 供应"], layer=2, language="zh", search_type="web", site_constraint=null
+- 第5组: keywords=["Garuda Aerospace Indian military UAV supplier"], layer=2, language="en", search_type="news", site_constraint=null
+
+【维度3: 中国供应链】
+- 第6组: keywords=["Garuda Aerospace China supply chain", "Garuda Aerospace Chinese components"], layer=1, language="en", search_type="news", site_constraint=null
+- 第7组: keywords=["Garuda Aerospace 中国 零配件 供应链"], layer=2, language="zh", search_type="web", site_constraint=null
+- 第8组: keywords=["Garuda Aerospace drone parts China supplier"], layer=2, language="en", search_type="web", site_constraint=null
 
 ## 西方主流媒体域名参考
 
@@ -188,7 +236,10 @@ KEYWORD_GEN_PROMPT_V2 = ChatPromptTemplate.from_messages(
         ("system", KEYWORD_GEN_SYSTEM_V2),
         (
             "human",
-            """## 意图信息
+            """## 当前日期
+{current_date}
+
+## 意图信息
 
 - 调查对象: {investigation_target}
 - 时间范围: {time_range}
@@ -196,7 +247,108 @@ KEYWORD_GEN_PROMPT_V2 = ChatPromptTemplate.from_messages(
 - 调查类型: {investigation_type}
 - 工具限制: {tool_constraint}
 
-请生成高效搜索关键词组。严格遵守核心规则，确保每个关键词都包含实体名称。""",
+请生成高效搜索关键词组。严格遵守核心规则，确保每个关键词都包含实体名称。注意：生成的关键词中的时间必须与上述时间范围一致！""",
+        ),
+    ]
+)
+
+
+# ===== 动态验证规则生成 Prompt =====
+VALIDATION_RULES_SYSTEM = """你是一个专业的OSINT搜索结果验证规则专家。你的任务是从用户查询中提取验证搜索结果所需的必要条件。
+
+## 任务说明
+
+分析用户的查询意图，生成用于验证搜索结果相关性的规则。这些规则将用于判断搜索结果是否与用户查询直接相关。
+
+## 查询类型识别 (重要!)
+
+首先识别查询类型，不同类型需要不同的必要条件：
+
+### 类型1: 地理位置相关事件
+- 示例: "阿富汗中国公民被杀害"、"北京抗议活动"、"东京地震"
+- 需要: required_location ✓, required_subject ✓, required_event ✓
+
+### 类型2: 人物/组织相关新闻
+- 示例: "特朗普就职典礼"、"马斯克最新动态"、"苹果公司发布会"
+- 需要: required_subject ✓, required_event ✓
+- 不需要: required_location (返回空列表 [])
+
+### 类型3: 产品/技术发布
+- 示例: "OpenAI GPT-5 发布"、"iPhone 17 上市"、"React 19 新特性"
+- 需要: required_subject ✓
+- 不需要: required_location [], required_event [] (产品发布本身就是主题)
+
+### 类型4: 供应链/贸易/商业调查
+- 示例: "印度公司Garuda Aerospace与中国供应链"、"华为美国供应商"、"特斯拉中国工厂供应链"
+- 需要: required_subject ✓, required_location ✓ (涉及的国家/地区)
+- 特点: 当查询涉及多个国家/地区的商业关系时，必须生成相关地点关键词
+
+### 类型5: 概念/趋势研究
+- 示例: "人工智能发展趋势"、"气候变化影响"
+- 需要: required_subject ✓
+- 不需要: required_location [], required_event []
+
+## 必要条件类型
+
+1. **required_location** (地点必要条件)
+   - 仅当查询明确涉及特定地理位置时才生成
+   - 如果是全球性/无地域限制的查询，返回空列表 []
+   - 包含多种表达方式（中文、英文、简称、全称）
+   - 例如：查询"阿富汗事件" → ["阿富汗", "Afghanistan", "喀布尔", "Kabul", "Afghan"]
+
+2. **required_subject** (主体必要条件)
+   - 从查询中提取主体/对象相关的关键词
+   - 包含多种表达方式
+   - 例如：查询"OpenAI GPT-5" → ["OpenAI", "GPT-5", "GPT5", "ChatGPT", "GPT"]
+
+3. **required_event** (事件必要条件)
+   - 仅当查询涉及特定事件类型时才生成
+   - 对于产品发布类查询，如果主体已包含产品名，事件可以为空列表
+   - 例如：查询"被杀害" → ["死", "killed", "murder", "遇害", "死亡", "attack", "袭击"]
+
+4. **exclude_patterns** (排除模式)
+   - 识别可能导致误匹配的无关主题
+   - 不要过度排除，仅排除明显无关的内容
+   - 例如：查询关于阿富汗的事件 → 可排除 ["伊朗内政", "委内瑞拉选举"]
+
+## 验证逻辑
+
+搜索结果必须满足以下条件才能被保留：
+- 如果 required_location 非空: 必须包含至少一个地点关键词
+- 如果 required_subject 非空: 必须包含至少一个主体关键词
+- 如果 required_event 非空: 必须包含至少一个事件关键词
+- 不包含 exclude_patterns 中的词（在标题或描述中明显出现时）
+
+**关键**: 空列表 [] 表示该条件不适用，不需要检查
+
+## 输出格式
+
+返回一个JSON对象，包含以上四个字段，每个字段是字符串列表。
+
+## 重要提示
+
+- 为适用的必要条件生成 5-10 个关键词变体
+- 考虑中英文双语表达
+- 考虑不同的同义词和表达方式
+- **如果某类条件不适用于当前查询类型，必须返回空列表 []**
+- 排除模式应该是真正无关的内容，不要过度排除
+"""
+
+VALIDATION_RULES_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", VALIDATION_RULES_SYSTEM),
+        (
+            "human",
+            """## 用户查询
+{query}
+
+## 解析后的意图
+- 调查对象: {investigation_target}
+- 时间范围: {time_range}
+- 信息源约束: {source_type_constraint}
+- 调查类型: {investigation_type}
+
+请生成用于验证搜索结果相关性的规则。确保每类必要条件都有足够的关键词变体以提高匹配率。""",
         ),
     ]
 )
@@ -495,6 +647,7 @@ __all__ = [
     "INTENT_PARSE_PROMPT",
     "KEYWORD_GEN_PROMPT",
     "KEYWORD_GEN_PROMPT_V2",  # V2高效关键词生成
+    "VALIDATION_RULES_PROMPT",  # 动态验证规则生成
     "RELEVANCE_VALIDATE_PROMPT",
     "CLASSIFY_SOURCE_PROMPT",
     "EXPAND_KEYWORDS_PROMPT",

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from gsac.models.schemas import ParsedIntent
+    from gsac.models.schemas import ParsedIntent, ValidationRules
 
 
 @dataclass
@@ -449,6 +449,7 @@ def calculate_relevance_score(
     url: str,
     config: ValidationConfig,
     source_constraint: str | None = None,
+    validation_rules: "ValidationRules | None" = None,
 ) -> tuple[float, Literal["keep", "downgrade", "discard"], str]:
     """
     计算相关性分数
@@ -461,6 +462,7 @@ def calculate_relevance_score(
         url: 内容URL
         config: 验证配置
         source_constraint: 来源约束（如 "西方主流媒体"），用于过滤非目标来源
+        validation_rules: LLM生成的动态验证规则，包含必要条件和排除模式
 
     Returns:
         tuple[score, decision, reason]:
@@ -469,7 +471,7 @@ def calculate_relevance_score(
             - reason: 判定理由
     """
     # ========================================
-    # Step 0: 来源约束验证 (新增)
+    # Step 0: 来源约束验证
     # ========================================
     if source_constraint:
         is_valid, source_reason = validate_source_constraint(url, source_constraint)
@@ -479,6 +481,61 @@ def calculate_relevance_score(
     # 合并文本用于匹配
     text = f"{title} {content}".lower()
     url_lower = url.lower()
+
+    # ========================================
+    # Step 0.5: LLM生成的必要条件验证 (AND 逻辑)
+    # ========================================
+    passed_required_conditions = False  # 标记是否通过了必要条件验证
+    matched_required: list[str] = []  # 记录匹配的必要条件
+    
+    if validation_rules:
+        missing_conditions = []
+        
+        # 检查地点必要条件
+        if validation_rules.required_location:
+            location_matched = any(
+                loc.lower() in text for loc in validation_rules.required_location
+            )
+            if not location_matched:
+                missing_conditions.append("地点")
+            else:
+                matched_required.append("地点")
+        
+        # 检查主体必要条件
+        if validation_rules.required_subject:
+            subject_matched = any(
+                subj.lower() in text for subj in validation_rules.required_subject
+            )
+            if not subject_matched:
+                missing_conditions.append("主体")
+            else:
+                matched_required.append("主体")
+        
+        # 检查事件必要条件
+        if validation_rules.required_event:
+            event_matched = any(
+                evt.lower() in text for evt in validation_rules.required_event
+            )
+            if not event_matched:
+                missing_conditions.append("事件")
+            else:
+                matched_required.append("事件")
+        
+        # 如果任何必要条件未满足，直接丢弃
+        if missing_conditions:
+            return 0.0, "discard", f"必要条件不满足: {', '.join(missing_conditions)}"
+        
+        # 检查排除模式
+        if validation_rules.exclude_patterns:
+            # 只检查标题和描述中的排除词（避免正文中的偶然提及）
+            title_lower = title.lower()
+            for pattern in validation_rules.exclude_patterns:
+                pattern_lower = pattern.lower()
+                if pattern_lower in title_lower:
+                    return 0.0, "discard", f"命中排除模式: {pattern}"
+        
+        # 通过了所有必要条件检查
+        passed_required_conditions = True
 
     # ========================================
     # Step 1: 硬排除检查 - 内容排除规则
@@ -515,6 +572,12 @@ def calculate_relevance_score(
     # ========================================
     score = 0.0
     matched: list[str] = []
+    
+    # 如果通过了必要条件验证，给予基础分数 0.6
+    # 这是因为满足所有必要条件（地点+主体+事件）的结果本身就有较高相关性
+    if passed_required_conditions and matched_required:
+        score = 0.6
+        matched.append(f"[必要条件]{'+'.join(matched_required)}")
 
     # 高置信度标记 (+0.4 each)
     for marker in config.high_confidence_markers:

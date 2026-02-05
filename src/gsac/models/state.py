@@ -26,6 +26,7 @@ from .schemas import (
     SearchConfig,
     SearchResult,
     SearchTask,
+    ValidationRules,
 )
 
 
@@ -110,6 +111,7 @@ class OSINTSearchState(TypedDict):
     scraped_contents: Annotated[list[ScrapedContent], operator.add]
 
     # ===== 相关性验证 =====
+    validation_rules: ValidationRules | None  # LLM生成的动态验证规则
     relevance_results: list[RelevanceResult]  # 验证结果列表
     validated_results: list[SearchResult]  # 通过验证的结果
     discarded_count: int  # 丢弃数量统计
@@ -172,6 +174,7 @@ __all__ = [
     "SearchResult",
     "ScrapedContent",
     "RelevanceResult",
+    "ValidationRules",
     "ClassifiedSource",
     "SearchConfig",
     "SearchTask",

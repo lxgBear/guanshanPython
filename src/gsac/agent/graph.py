@@ -12,6 +12,9 @@ OSINT Search LangGraph StateGraph 定义
       ▼
     generate_keywords (LLM生成分层关键词Layer 0-5)
       │
+      ▼
+    generate_validation_rules (LLM生成动态验证规则 - V4新增)
+      │
       ▼ (fan_out_search - 并行)
     execute_single_search [N个并行任务]
       │
@@ -27,7 +30,7 @@ OSINT Search LangGraph StateGraph 定义
     │                 │                │
     └──► generate_keywords              │
                       ▼                │
-                    validate_relevance (LLM 4步验证)
+                    validate_relevance (V4验证: 必要条件AND + 置信度OR)
                       │
                       ▼
                     classify_sources (LLM来源分类)
@@ -50,6 +53,7 @@ from .nodes import (
     expand_search,
     fan_out_search,
     generate_keywords,
+    generate_validation_rules,
     merge_deduplicate,
     parse_intent,
     route_by_source_count,
@@ -63,11 +67,11 @@ def create_osint_search_graph() -> StateGraph:
     创建OSINT搜索工作流图
 
     工作流程:
-    START → parse_intent → generate_keywords → [fan_out_search]
-        → execute_single_search (并行) → merge_deduplicate
+    START → parse_intent → generate_keywords → generate_validation_rules
+        → [fan_out_search] → execute_single_search (并行) → merge_deduplicate
         → [route_by_source_count]
-        → (expand_search → generate_keywords) 或 ([fan_out_scrape] → scrape_single_url)
-        → validate_relevance → classify_sources → END
+        → (expand_search → generate_keywords) 或 (scrape_single_url)
+        → validate_relevance (使用动态验证规则) → classify_sources → END
 
     Returns:
         StateGraph实例
@@ -81,6 +85,9 @@ def create_osint_search_graph() -> StateGraph:
 
     # 关键词生成
     builder.add_node("generate_keywords", generate_keywords)
+
+    # 动态验证规则生成 (V4新增)
+    builder.add_node("generate_validation_rules", generate_validation_rules)
 
     # 搜索执行(单个关键词组)
     builder.add_node("execute_single_search", execute_single_search)
@@ -108,10 +115,13 @@ def create_osint_search_graph() -> StateGraph:
     # parse_intent → generate_keywords
     builder.add_edge("parse_intent", "generate_keywords")
 
-    # generate_keywords → fan_out_search (并行搜索)
+    # generate_keywords → generate_validation_rules (V4新增)
+    builder.add_edge("generate_keywords", "generate_validation_rules")
+
+    # generate_validation_rules → fan_out_search (并行搜索)
     # fan_out_search 返回 Send 对象列表，分发到 execute_single_search
     builder.add_conditional_edges(
-        "generate_keywords",
+        "generate_validation_rules",
         fan_out_search,
         ["execute_single_search"],
     )
@@ -215,6 +225,7 @@ def create_osint_initial_state(
         # 深度抓取
         scraped_contents=[],
         # 相关性验证
+        validation_rules=None,  # V4新增: LLM生成的动态验证规则
         relevance_results=[],
         validated_results=[],
         discarded_count=0,

@@ -2,8 +2,6 @@
 Firecrawl 搜索工具
 
 封装搜索相关的高级功能
-
-v4.9.0: 添加媒体来源映射支持
 """
 
 from typing import Any
@@ -11,14 +9,6 @@ from urllib.parse import urlparse
 
 from ..models.schemas import SearchResult, SearchTask
 from .client import FirecrawlClient, get_firecrawl_client
-
-# 媒体来源映射
-from src.core.config.media_sources import (
-    extract_domain_from_url as _extract_domain_from_media,
-    get_media_source,
-    get_source_name_en,
-    get_source_name_zh,
-)
 
 
 def _extract_domain(url: str) -> str:
@@ -104,19 +94,12 @@ async def execute_search_task(
         client = get_firecrawl_client()
 
     try:
-        # 添加 scrape_options 以获取 markdown 和 html 内容
-        scrape_options = {
-            "formats": ["markdown", "html"],
-            "only_main_content": True,
-        }
-
         response = client.search(
             query=task.keyword,
             limit=task.limit,
             sources=[task.source] if task.source else None,
             tbs=task.tbs,
             location=task.location,
-            scrape_options=scrape_options,
         )
 
         results: list[SearchResult] = []
@@ -125,42 +108,21 @@ async def execute_search_task(
         # 处理 Firecrawl v2 SearchData 对象
         if hasattr(data, "web") or hasattr(data, "news") or hasattr(data, "images"):
             # SearchData 对象有 .web, .news, .images 属性
-            # 当使用 scrape_options 时，返回的是 Document 对象，url/title 在 metadata 中
             for source_type in ["web", "news", "images"]:
                 source_results = getattr(data, source_type, None) or []
                 for item in source_results:
-                    # 处理 Document 对象：url/title 在 metadata 中
-                    metadata = getattr(item, "metadata", None)
-                    if metadata:
-                        url = getattr(metadata, "url", "") or getattr(metadata, "source_url", "") or ""
-                        title = getattr(metadata, "title", "") or ""
-                        description = getattr(metadata, "description", "") or ""
-                        published_date = _extract_published_date(item) or getattr(metadata, "published_time", None)
-                    else:
-                        # 回退到直接属性（SearchResultWeb 类型，不使用 scrape_options 时）
-                        url = getattr(item, "url", "") or ""
-                        title = getattr(item, "title", "") or ""
-                        description = getattr(item, "description", "") or getattr(item, "snippet", "") or ""
-                        published_date = _extract_published_date(item)
-
-                    # v4.9.0: 媒体来源映射
-                    source_name = get_source_name_en(url)
-                    layer_name = get_source_name_zh(url)
-
+                    url = getattr(item, "url", "") or ""
                     results.append(
                         SearchResult(
                             url=url,
-                            title=title,
-                            description=description,
+                            title=getattr(item, "title", "") or "",
+                            description=getattr(item, "description", "") or getattr(item, "snippet", "") or "",
                             content=getattr(item, "markdown", "") or getattr(item, "content", "") or "",
-                            markdown=getattr(item, "markdown", None),
-                            html=getattr(item, "html", None),
                             source=source_type,
-                            source_name=source_name,
                             keyword=task.keyword,
+                            score=0.0,
                             source_domain=_extract_domain(url),
-                            layer_name=layer_name,
-                            published_date=published_date,
+                            published_date=_extract_published_date(item),
                             layer=task.layer,
                         )
                     )
@@ -170,23 +132,16 @@ async def execute_search_task(
                 source_results = data.get(source_type, [])
                 for item in source_results:
                     url = item.get("url", "")
-                    # v4.9.0: 媒体来源映射
-                    source_name = get_source_name_en(url)
-                    layer_name = get_source_name_zh(url)
-
                     results.append(
                         SearchResult(
                             url=url,
                             title=item.get("title", ""),
                             description=item.get("description", item.get("snippet", "")),
                             content=item.get("markdown", item.get("content", "")),
-                            markdown=item.get("markdown"),
-                            html=item.get("html"),
                             source=source_type,
-                            source_name=source_name,
                             keyword=task.keyword,
+                            score=0.0,
                             source_domain=_extract_domain(url),
-                            layer_name=layer_name,
                             published_date=_extract_published_date(item),
                             layer=task.layer,
                         )
@@ -195,23 +150,16 @@ async def execute_search_task(
             # 处理扁平列表返回
             for item in data:
                 url = item.get("url", "")
-                # v4.9.0: 媒体来源映射
-                source_name = get_source_name_en(url)
-                layer_name = get_source_name_zh(url)
-
                 results.append(
                     SearchResult(
                         url=url,
                         title=item.get("title", ""),
                         description=item.get("description", ""),
                         content=item.get("markdown", item.get("content", "")),
-                        markdown=item.get("markdown"),
-                        html=item.get("html"),
                         source=task.source,
-                        source_name=source_name,
                         keyword=task.keyword,
+                        score=0.0,
                         source_domain=_extract_domain(url),
-                        layer_name=layer_name,
                         published_date=_extract_published_date(item),
                         layer=task.layer,
                     )
@@ -247,19 +195,12 @@ def search_sync(
     client = get_firecrawl_client()
     tbs = f"qdr:{time_range}" if time_range else None
 
-    # 添加 scrape_options 以获取 markdown 和 html 内容
-    scrape_options = {
-        "formats": ["markdown", "html"],
-        "only_main_content": True,
-    }
-
     response = client.search(
         query=query,
         limit=limit,
         sources=sources,
         tbs=tbs,
         location=location,
-        scrape_options=scrape_options,
     )
 
     results: list[SearchResult] = []
@@ -268,42 +209,21 @@ def search_sync(
     # 处理 Firecrawl v2 SearchData 对象
     if hasattr(data, "web") or hasattr(data, "news") or hasattr(data, "images"):
         # SearchData 对象有 .web, .news, .images 属性
-        # 当使用 scrape_options 时，返回的是 Document 对象，url/title 在 metadata 中
         for source_type in ["web", "news", "images"]:
             source_results = getattr(data, source_type, None) or []
             for item in source_results:
-                # 处理 Document 对象：url/title 在 metadata 中
-                metadata = getattr(item, "metadata", None)
-                if metadata:
-                    url = getattr(metadata, "url", "") or getattr(metadata, "source_url", "") or ""
-                    title = getattr(metadata, "title", "") or ""
-                    description = getattr(metadata, "description", "") or ""
-                    published_date = _extract_published_date(item) or getattr(metadata, "published_time", None)
-                else:
-                    # 回退到直接属性（SearchResultWeb 类型，不使用 scrape_options 时）
-                    url = getattr(item, "url", "") or ""
-                    title = getattr(item, "title", "") or ""
-                    description = getattr(item, "description", "") or getattr(item, "snippet", "") or ""
-                    published_date = _extract_published_date(item)
-
-                # v4.9.0: 媒体来源映射
-                source_name = get_source_name_en(url)
-                layer_name = get_source_name_zh(url)
-
+                url = getattr(item, "url", "") or ""
                 results.append(
                     SearchResult(
                         url=url,
-                        title=title,
-                        description=description,
+                        title=getattr(item, "title", "") or "",
+                        description=getattr(item, "description", "") or getattr(item, "snippet", "") or "",
                         content=getattr(item, "markdown", "") or getattr(item, "content", "") or "",
-                        markdown=getattr(item, "markdown", None),
-                        html=getattr(item, "html", None),
                         source=source_type,
-                        source_name=source_name,
                         keyword=query,
+                        score=0.0,
                         source_domain=_extract_domain(url),
-                        layer_name=layer_name,
-                        published_date=published_date,
+                        published_date=_extract_published_date(item),
                     )
                 )
     elif isinstance(data, dict):
@@ -311,46 +231,32 @@ def search_sync(
             source_results = data.get(source_type, [])
             for item in source_results:
                 url = item.get("url", "")
-                # v4.9.0: 媒体来源映射
-                source_name = get_source_name_en(url)
-                layer_name = get_source_name_zh(url)
-
                 results.append(
                     SearchResult(
                         url=url,
                         title=item.get("title", ""),
                         description=item.get("description", item.get("snippet", "")),
                         content=item.get("markdown", item.get("content", "")),
-                        markdown=item.get("markdown"),
-                        html=item.get("html"),
                         source=source_type,
-                        source_name=source_name,
                         keyword=query,
+                        score=0.0,
                         source_domain=_extract_domain(url),
-                        layer_name=layer_name,
                         published_date=_extract_published_date(item),
                     )
                 )
     elif isinstance(data, list):
         for item in data:
             url = item.get("url", "")
-            # v4.9.0: 媒体来源映射
-            source_name = get_source_name_en(url)
-            layer_name = get_source_name_zh(url)
-
             results.append(
                 SearchResult(
                     url=url,
                     title=item.get("title", ""),
                     description=item.get("description", ""),
                     content=item.get("markdown", item.get("content", "")),
-                    markdown=item.get("markdown"),
-                    html=item.get("html"),
                     source="web",
-                    source_name=source_name,
                     keyword=query,
+                    score=0.0,
                     source_domain=_extract_domain(url),
-                    layer_name=layer_name,
                     published_date=_extract_published_date(item),
                 )
             )

@@ -30,7 +30,8 @@ async def scrape_url(
         client = get_firecrawl_client()
 
     if formats is None:
-        formats = ["markdown"]
+        # 默认请求markdown和html格式，以便支持--include-scraped-content参数
+        formats = ["markdown", "html"]
 
     try:
         response = client.scrape(url=url, formats=formats, timeout=timeout)
@@ -106,7 +107,8 @@ def scrape_url_sync(
     client = get_firecrawl_client()
 
     if formats is None:
-        formats = ["markdown"]
+        # 默认请求markdown和html格式，以便支持--include-scraped-content参数
+        formats = ["markdown", "html"]
 
     try:
         response = client.scrape(url=url, formats=formats, timeout=timeout)
