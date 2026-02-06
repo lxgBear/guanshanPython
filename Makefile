@@ -104,9 +104,41 @@ docker-ps:
 
 # 健康检查
 health-check:
-	@python scripts/health_check.py
+	@curl -sf http://localhost:8000/health | python3 -m json.tool || echo "健康检查失败"
 
 # 初始化项目
 init: docker-up install migrate
 	@echo "项目初始化完成！"
 	@echo "访问 http://localhost:8000/api/docs 查看API文档"
+
+# ============================================================
+# 部署命令
+# ============================================================
+
+# 完整部署（清理 + 强制重建）
+deploy:
+	@./scripts/deploy.sh
+
+# 快速部署（使用缓存）
+deploy-quick:
+	@./scripts/deploy.sh quick
+
+# 仅重启容器
+deploy-restart:
+	@./scripts/deploy.sh restart
+
+# 回滚到上一个版本
+deploy-rollback:
+	@./scripts/deploy.sh rollback
+
+# 显示部署状态
+deploy-status:
+	@./scripts/deploy.sh status
+
+# 查看部署日志
+deploy-logs:
+	@./scripts/deploy.sh logs 100
+
+# 清理旧资源
+deploy-clean:
+	@./scripts/deploy.sh clean

@@ -1,311 +1,461 @@
 #!/bin/bash
 
-# 部署脚本 - 关山智能系统
-# 用于本地开发和测试环境的部署
+# ============================================================
+# 关山智能系统 - 部署脚本
+# 支持本地开发、测试环境和生产环境部署
+# ============================================================
 
 set -e  # 遇到错误立即退出
-
-echo "========================================="
-echo "关山智能系统 - 部署脚本"
-echo "========================================="
 
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 检查环境
-check_requirements() {
-    echo -e "${YELLOW}检查系统要求...${NC}"
-    
-    # 检查Docker
-    if ! command -v docker &> /dev/null; then
-        echo -e "${RED}错误: Docker未安装${NC}"
-        exit 1
-    fi
-    
-    # 检查Docker Compose
-    if ! command -v docker-compose &> /dev/null; then
-        echo -e "${RED}错误: Docker Compose未安装${NC}"
-        exit 1
-    fi
-    
-    # 检查Python
-    if ! command -v python3 &> /dev/null; then
-        echo -e "${RED}错误: Python 3未安装${NC}"
-        exit 1
-    fi
-    
-    echo -e "${GREEN}✓ 系统要求检查通过${NC}"
+# 配置变量
+DOCKER_IMAGE="guanshan-app"
+CONTAINER_NAME="guanshan-app"
+HEALTH_URL="http://localhost:8000/health"
+MAX_RETRIES=10
+RETRY_INTERVAL=6
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+# ============================================================
+# 工具函数
+# ============================================================
+
+log_info() {
+    echo -e "${BLUE}$(date '+%H:%M:%S')${NC} ${GREEN}[INFO]${NC} $1"
 }
 
-# 设置环境变量
-setup_environment() {
-    echo -e "${YELLOW}设置环境变量...${NC}"
-    
-    # 检查.env文件
-    if [ ! -f .env ]; then
-        echo -e "${RED}错误: .env文件不存在${NC}"
-        echo "请从.env.example创建.env文件并配置API密钥"
-        exit 1
-    fi
-    
-    # 加载环境变量
-    export $(cat .env | grep -v '^#' | xargs)
-    
-    # 验证Firecrawl API密钥
-    if [ -z "$FIRECRAWL_API_KEY" ] || [ "$FIRECRAWL_API_KEY" == "your-firecrawl-api-key-here" ]; then
-        echo -e "${RED}错误: 请在.env文件中配置有效的FIRECRAWL_API_KEY${NC}"
-        exit 1
-    fi
-    
-    echo -e "${GREEN}✓ 环境变量设置完成${NC}"
+log_warn() {
+    echo -e "${BLUE}$(date '+%H:%M:%S')${NC} ${YELLOW}[WARN]${NC} $1"
 }
 
-# 安装Python依赖
-install_dependencies() {
-    echo -e "${YELLOW}安装Python依赖...${NC}"
-    
-    # 创建虚拟环境（如果不存在）
-    if [ ! -d "venv" ]; then
-        python3 -m venv venv
-        echo -e "${GREEN}✓ 虚拟环境创建完成${NC}"
-    fi
-    
-    # 激活虚拟环境并安装依赖
-    source venv/bin/activate
-    pip install --upgrade pip
-    pip install -r requirements.txt
-    
-    # 安装开发依赖（用于测试）
-    if [ -f requirements-dev.txt ]; then
-        pip install -r requirements-dev.txt
-    fi
-    
-    echo -e "${GREEN}✓ Python依赖安装完成${NC}"
+log_error() {
+    echo -e "${BLUE}$(date '+%H:%M:%S')${NC} ${RED}[ERROR]${NC} $1"
 }
 
-# 清理旧容器和镜像
-cleanup_docker() {
-    echo -e "${YELLOW}清理旧容器和镜像...${NC}"
-
-    # 停止并移除旧容器（包括孤立容器）
-    docker-compose down --remove-orphans
-
-    # 移除项目相关的停止容器
-    echo "移除停止的容器..."
-    docker container prune -f --filter "label=com.docker.compose.project" 2>/dev/null || true
-
-    # 移除悬空镜像（<none> 标签的镜像）
-    echo "移除悬空镜像..."
-    docker image prune -f 2>/dev/null || true
-
-    # 移除旧的项目镜像（可选，确保使用最新代码）
-    echo "移除旧的应用镜像..."
-    docker images | grep "guanshan" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
-
-    echo -e "${GREEN}✓ 清理完成${NC}"
+log_step() {
+    echo -e "\n${CYAN}==> $1${NC}"
 }
 
-# 启动Docker服务
-start_services() {
-    echo -e "${YELLOW}启动Docker服务...${NC}"
-
-    # 先执行清理
-    cleanup_docker
-
-    # 强制重建镜像（不使用缓存）
-    echo "强制重建镜像（不使用缓存）..."
-    docker-compose build --no-cache --pull
-
-    # 启动服务
-    echo "启动服务..."
-    docker-compose up -d --force-recreate
-
-    # 等待服务启动
-    echo "等待服务启动..."
-    sleep 10
-
-    # 检查服务状态
-    docker-compose ps
-
-    # 显示容器日志（最后20行）
-    echo -e "${YELLOW}最近日志:${NC}"
-    docker-compose logs --tail=20 app
-
-    echo -e "${GREEN}✓ Docker服务启动完成${NC}"
-}
-
-# 运行测试
-run_tests() {
-    echo -e "${YELLOW}运行测试...${NC}"
-    
-    # 激活虚拟环境
-    source venv/bin/activate
-    
-    # 运行pytest
-    if pytest --version &> /dev/null; then
-        pytest tests/unit -v
-        echo -e "${GREEN}✓ 单元测试通过${NC}"
-    else
-        echo -e "${YELLOW}警告: pytest未安装，跳过测试${NC}"
+# 检查命令是否存在
+check_command() {
+    if ! command -v $1 &> /dev/null; then
+        log_error "$1 未安装"
+        return 1
     fi
+    return 0
 }
 
 # 健康检查
 health_check() {
-    echo -e "${YELLOW}执行健康检查...${NC}"
-    
-    # 检查API健康状态
-    HEALTH_URL="http://localhost:8000/health"
-    
-    # 尝试多次连接
-    for i in {1..5}; do
-        if curl -f -s $HEALTH_URL > /dev/null 2>&1; then
-            echo -e "${GREEN}✓ API服务健康检查通过${NC}"
-            curl -s $HEALTH_URL | python3 -m json.tool
-            break
-        else
-            if [ $i -eq 5 ]; then
-                echo -e "${RED}✗ API服务健康检查失败${NC}"
-                exit 1
-            fi
-            echo "等待API服务启动... (尝试 $i/5)"
-            sleep 3
+    curl -sf --max-time 10 $HEALTH_URL > /dev/null 2>&1
+}
+
+# 等待服务健康
+wait_for_healthy() {
+    local retries=$1
+    local interval=$2
+
+    for i in $(seq 1 $retries); do
+        if health_check; then
+            log_info "健康检查通过 (尝试 $i/$retries)"
+            return 0
         fi
+        log_info "等待服务启动... ($i/$retries)"
+        sleep $interval
     done
-    
-    # 检查其他服务
-    echo -e "${YELLOW}检查其他服务状态...${NC}"
-    
-    # MongoDB
-    if docker exec guanshan-mongodb mongosh --eval "db.runCommand({ ping: 1 })" > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ MongoDB运行正常${NC}"
-    else
-        echo -e "${RED}✗ MongoDB连接失败${NC}"
+    return 1
+}
+
+# ============================================================
+# 核心功能
+# ============================================================
+
+# 检查系统要求
+check_requirements() {
+    log_step "检查系统要求"
+
+    local missing=0
+
+    check_command docker || missing=1
+    check_command curl || missing=1
+
+    if [ $missing -eq 1 ]; then
+        log_error "请先安装缺失的依赖"
+        exit 1
     fi
-    
-    # Redis
-    if docker exec guanshan-redis redis-cli ping > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ Redis运行正常${NC}"
-    else
-        echo -e "${RED}✗ Redis连接失败${NC}"
+
+    # 检查 Docker 是否运行
+    if ! docker info &> /dev/null; then
+        log_error "Docker 服务未运行"
+        exit 1
     fi
-    
-    # RabbitMQ
-    if curl -s http://localhost:15672 > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ RabbitMQ管理界面可访问${NC}"
+
+    log_info "系统要求检查通过 ✓"
+}
+
+# 检查环境变量
+check_environment() {
+    log_step "检查环境变量"
+
+    if [ ! -f .env ]; then
+        log_error ".env 文件不存在"
+        echo "请从 .env.example 创建 .env 文件"
+        exit 1
+    fi
+
+    # 加载环境变量
+    set -a
+    source .env
+    set +a
+
+    # 检查关键配置
+    local missing=0
+
+    if [ -z "$MONGODB_URL" ]; then
+        log_warn "MONGODB_URL 未配置"
+    fi
+
+    if [ -z "$FIRECRAWL_API_KEY" ] || [ "$FIRECRAWL_API_KEY" == "your-firecrawl-api-key-here" ]; then
+        log_warn "FIRECRAWL_API_KEY 未配置或使用默认值"
+    fi
+
+    log_info "环境变量检查完成 ✓"
+}
+
+# 备份当前镜像
+backup_image() {
+    log_step "备份当前镜像"
+
+    if docker ps -q -f name=$CONTAINER_NAME | grep -q .; then
+        log_info "创建备份: ${DOCKER_IMAGE}:backup_$TIMESTAMP"
+        docker commit $CONTAINER_NAME ${DOCKER_IMAGE}:backup_$TIMESTAMP 2>/dev/null || true
+        docker tag $DOCKER_IMAGE ${DOCKER_IMAGE}:backup 2>/dev/null || true
+        log_info "备份完成 ✓"
     else
-        echo -e "${YELLOW}警告: RabbitMQ管理界面无法访问${NC}"
+        log_info "没有运行中的容器，跳过备份"
     fi
 }
 
-# 显示访问信息
-show_info() {
-    echo ""
-    echo "========================================="
-    echo -e "${GREEN}部署完成！${NC}"
-    echo "========================================="
-    echo ""
-    echo "服务访问地址:"
-    echo "  - API文档: http://localhost:8000/api/docs"
-    echo "  - 健康检查: http://localhost:8000/health"
-    echo "  - RabbitMQ管理界面: http://localhost:15672 (guest/guest)"
-    echo ""
-    echo "运行命令:"
-    echo "  - 查看日志: docker-compose logs -f app"
-    echo "  - 停止服务: docker-compose down"
-    echo "  - 重启服务: docker-compose restart"
-    echo ""
-}
-
-# 快速启动（使用缓存，不清理）
-quick_start() {
-    echo -e "${YELLOW}快速启动（使用缓存）...${NC}"
+# 清理旧资源
+cleanup_docker() {
+    log_step "清理旧资源"
 
     # 停止旧容器
-    docker-compose down
+    if docker ps -q -f name=$CONTAINER_NAME | grep -q .; then
+        log_info "停止旧容器..."
+        docker stop $CONTAINER_NAME 2>/dev/null || true
+    fi
 
-    # 使用缓存构建并启动
-    docker-compose up -d --build
+    # 移除旧容器
+    if docker ps -aq -f name=$CONTAINER_NAME | grep -q .; then
+        log_info "移除旧容器..."
+        docker rm $CONTAINER_NAME 2>/dev/null || true
+    fi
 
-    # 等待服务启动
-    echo "等待服务启动..."
-    sleep 10
+    # 清理悬空镜像
+    log_info "清理悬空镜像..."
+    docker image prune -f 2>/dev/null || true
 
-    # 检查服务状态
-    docker-compose ps
+    # 清理旧备份（保留最近3个）
+    log_info "清理旧备份..."
+    docker images ${DOCKER_IMAGE} --format "{{.Tag}}" | grep "^backup_" | sort -r | tail -n +4 | xargs -r -I {} docker rmi ${DOCKER_IMAGE}:{} 2>/dev/null || true
 
-    echo -e "${GREEN}✓ 快速启动完成${NC}"
+    log_info "清理完成 ✓"
 }
 
-# 仅重启应用容器
-restart_app() {
-    echo -e "${YELLOW}重启应用容器...${NC}"
-    docker-compose restart app
-    sleep 5
-    docker-compose logs --tail=30 app
-    echo -e "${GREEN}✓ 应用重启完成${NC}"
+# 构建镜像
+build_image() {
+    local no_cache=$1
+
+    log_step "构建 Docker 镜像"
+
+    local build_args=""
+    if [ "$no_cache" = "true" ]; then
+        build_args="--no-cache --pull"
+        log_info "强制重建模式（不使用缓存）"
+    fi
+
+    log_info "开始构建..."
+    if ! docker build $build_args -t $DOCKER_IMAGE .; then
+        log_error "镜像构建失败！"
+        return 1
+    fi
+
+    log_info "镜像构建完成 ✓"
+    docker images $DOCKER_IMAGE --format "table {{.Tag}}\t{{.Size}}\t{{.CreatedAt}}"
 }
 
-# 查看实时日志
+# 启动容器
+start_container() {
+    log_step "启动容器"
+
+    log_info "启动新容器..."
+    docker run -d \
+        --name $CONTAINER_NAME \
+        --env-file .env \
+        --add-host=host.docker.internal:host-gateway \
+        -p 8000:8000 \
+        --restart unless-stopped \
+        --memory=2g \
+        --cpus=2 \
+        --health-cmd="curl -f http://localhost:8000/health || exit 1" \
+        --health-interval=60s \
+        --health-timeout=10s \
+        --health-retries=3 \
+        --health-start-period=60s \
+        -l "deploy.timestamp=$TIMESTAMP" \
+        $DOCKER_IMAGE
+
+    log_info "容器已启动 ✓"
+}
+
+# 回滚到备份
+rollback() {
+    log_step "执行回滚"
+
+    # 收集诊断日志
+    log_info "收集诊断日志..."
+    docker logs $CONTAINER_NAME --tail 50 2>/dev/null || true
+
+    # 停止失败的容器
+    docker stop $CONTAINER_NAME 2>/dev/null || true
+    docker rm $CONTAINER_NAME 2>/dev/null || true
+
+    # 使用备份镜像回滚
+    if docker images ${DOCKER_IMAGE}:backup -q | grep -q .; then
+        log_info "使用备份镜像回滚..."
+        docker tag ${DOCKER_IMAGE}:backup $DOCKER_IMAGE
+
+        docker run -d \
+            --name $CONTAINER_NAME \
+            --env-file .env \
+            --add-host=host.docker.internal:host-gateway \
+            -p 8000:8000 \
+            --restart unless-stopped \
+            --memory=2g \
+            --cpus=2 \
+            $DOCKER_IMAGE
+
+        if wait_for_healthy 5 5; then
+            log_info "回滚成功！ ✓"
+            return 0
+        else
+            log_error "回滚后服务仍然不健康！"
+            return 1
+        fi
+    else
+        log_error "没有备份镜像可用于回滚！"
+        return 1
+    fi
+}
+
+# 验证部署
+verify_deployment() {
+    log_step "验证部署"
+
+    # 等待 gunicorn 启动
+    log_info "等待 gunicorn 启动（多 worker 模式需要更长时间）..."
+    sleep 45
+
+    # 健康检查
+    log_info "执行健康检查..."
+    if ! wait_for_healthy $MAX_RETRIES $RETRY_INTERVAL; then
+        log_error "健康检查失败！"
+        return 1
+    fi
+
+    # 验证API响应
+    log_info "验证 API 响应..."
+    local response=$(curl -s $HEALTH_URL)
+    echo "$response" | python3 -m json.tool 2>/dev/null || echo "$response"
+
+    log_info "部署验证通过 ✓"
+}
+
+# 显示服务状态
+show_status() {
+    log_step "服务状态"
+
+    echo ""
+    echo -e "${CYAN}容器状态:${NC}"
+    docker ps -f name=$CONTAINER_NAME --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+    echo ""
+    echo -e "${CYAN}镜像信息:${NC}"
+    docker images $DOCKER_IMAGE --format "table {{.Tag}}\t{{.Size}}\t{{.CreatedAt}}"
+
+    echo ""
+    echo -e "${CYAN}资源使用:${NC}"
+    docker stats $CONTAINER_NAME --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" 2>/dev/null || true
+
+    echo ""
+    echo -e "${CYAN}访问地址:${NC}"
+    echo "  - API文档: http://localhost:8000/api/docs"
+    echo "  - 健康检查: http://localhost:8000/health"
+    echo ""
+}
+
+# 查看日志
 view_logs() {
-    echo -e "${YELLOW}查看实时日志 (Ctrl+C 退出)...${NC}"
-    docker-compose logs -f app
+    local lines=${1:-100}
+    docker logs $CONTAINER_NAME --tail $lines -f
 }
 
-# 显示使用帮助
+# ============================================================
+# 部署模式
+# ============================================================
+
+# 完整部署（清理 + 强制重建）
+full_deploy() {
+    log_step "开始完整部署"
+    echo "========================================="
+    echo -e "${GREEN}关山智能系统 - 完整部署${NC}"
+    echo "========================================="
+
+    check_requirements
+    check_environment
+    backup_image
+    cleanup_docker
+
+    if ! build_image "true"; then
+        log_error "构建失败，尝试回滚..."
+        rollback
+        exit 1
+    fi
+
+    start_container
+
+    if ! verify_deployment; then
+        log_error "部署验证失败，尝试回滚..."
+        rollback
+        exit 1
+    fi
+
+    show_status
+
+    echo ""
+    log_info "========================================="
+    log_info "部署成功！ ✅"
+    log_info "========================================="
+}
+
+# 快速部署（使用缓存）
+quick_deploy() {
+    log_step "开始快速部署"
+    echo "========================================="
+    echo -e "${GREEN}关山智能系统 - 快速部署${NC}"
+    echo "========================================="
+
+    check_requirements
+    check_environment
+    backup_image
+    cleanup_docker
+
+    if ! build_image "false"; then
+        log_error "构建失败，尝试回滚..."
+        rollback
+        exit 1
+    fi
+
+    start_container
+
+    if ! verify_deployment; then
+        log_error "部署验证失败，尝试回滚..."
+        rollback
+        exit 1
+    fi
+
+    show_status
+
+    log_info "快速部署成功！ ✅"
+}
+
+# 仅重启容器
+restart_only() {
+    log_step "重启容器"
+
+    docker restart $CONTAINER_NAME
+
+    log_info "等待服务启动..."
+    sleep 30
+
+    if ! wait_for_healthy $MAX_RETRIES $RETRY_INTERVAL; then
+        log_error "重启后健康检查失败！"
+        exit 1
+    fi
+
+    show_status
+    log_info "重启完成！ ✅"
+}
+
+# 显示帮助
 show_help() {
+    echo "关山智能系统 - 部署脚本"
+    echo ""
     echo "用法: $0 [命令]"
     echo ""
     echo "命令:"
-    echo "  (无参数)    完整部署（清理 + 强制重建 + 测试）"
-    echo "  quick       快速部署（使用缓存）"
-    echo "  restart     仅重启应用容器"
-    echo "  logs        查看实时日志"
-    echo "  clean       仅清理旧容器和镜像"
+    echo "  (无参数)    完整部署（清理 + 强制重建 + 验证）"
+    echo "  quick       快速部署（使用缓存构建）"
+    echo "  restart     仅重启容器"
+    echo "  rollback    回滚到上一个版本"
+    echo "  status      显示服务状态"
+    echo "  logs [n]    查看日志（默认最后100行）"
+    echo "  clean       仅清理旧资源"
     echo "  health      仅执行健康检查"
     echo "  help        显示此帮助"
     echo ""
+    echo "示例:"
+    echo "  $0              # 完整部署"
+    echo "  $0 quick        # 快速部署"
+    echo "  $0 logs 50      # 查看最后50行日志"
+    echo ""
 }
 
-# 主函数
-main() {
-    check_requirements
-    setup_environment
-    install_dependencies
-    start_services
-    run_tests
-    health_check
-    show_info
-}
+# ============================================================
+# 主入口
+# ============================================================
 
-# 根据参数执行不同操作
 case "${1:-}" in
     quick)
-        check_requirements
-        setup_environment
-        quick_start
-        health_check
-        show_info
+        quick_deploy
         ;;
     restart)
-        restart_app
+        restart_only
+        ;;
+    rollback)
+        rollback
+        ;;
+    status)
+        show_status
         ;;
     logs)
-        view_logs
+        view_logs ${2:-100}
         ;;
     clean)
+        check_requirements
         cleanup_docker
         ;;
     health)
-        health_check
+        if health_check; then
+            log_info "健康检查通过 ✓"
+            curl -s $HEALTH_URL | python3 -m json.tool
+        else
+            log_error "健康检查失败 ✗"
+            exit 1
+        fi
         ;;
     help|--help|-h)
         show_help
         ;;
     *)
-        main
+        full_deploy
         ;;
 esac

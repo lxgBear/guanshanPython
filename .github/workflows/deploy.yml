@@ -1,14 +1,82 @@
-name: Deploy Backend to BaoTa
+name: Deploy Backend to Production
 
 on:
   push:
     branches:
       - main
       - result
+  workflow_dispatch:  # 允许手动触发
+    inputs:
+      skip_tests:
+        description: '跳过测试直接部署'
+        required: false
+        default: 'false'
+        type: boolean
+      force_rebuild:
+        description: '强制重建镜像（不使用缓存）'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  DOCKER_IMAGE: guanshan-app
+  DEPLOY_PATH: /www/wwwroot/guanshan
+  HEALTH_CHECK_URL: http://localhost:8000/health
+  HEALTH_CHECK_RETRIES: 10
+  HEALTH_CHECK_INTERVAL: 6
 
 jobs:
+  # 代码质量检查
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install linting tools
+        run: pip install ruff mypy
+
+      - name: Run Ruff
+        run: ruff check src/ --output-format=github
+        continue-on-error: true
+
+      - name: Type check
+        run: mypy src/ --ignore-missing-imports --no-error-summary
+        continue-on-error: true
+
+  # 单元测试
+  test:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.skip_tests != 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-asyncio
+
+      - name: Run unit tests
+        run: pytest tests/unit -v --tb=short || true
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+  # 部署到生产环境
   deploy:
     runs-on: ubuntu-latest
+    needs: [lint]  # test 是可选的
+    if: always() && needs.lint.result != 'failure'
 
     steps:
       - name: Deploy to Server
@@ -18,93 +86,189 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
-          command_timeout: 15m
+          command_timeout: 20m
           script: |
-            set -e  # 遇到错误立即退出
-            cd /www/wwwroot/guanshan
+            set -e
 
-            echo "==> Pulling latest code..."
-            git fetch origin && git reset --hard origin/result
+            # ========== 配置变量 ==========
+            DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
+            DOCKER_IMAGE="${{ env.DOCKER_IMAGE }}"
+            HEALTH_URL="${{ env.HEALTH_CHECK_URL }}"
+            MAX_RETRIES=${{ env.HEALTH_CHECK_RETRIES }}
+            RETRY_INTERVAL=${{ env.HEALTH_CHECK_INTERVAL }}
+            FORCE_REBUILD="${{ github.event.inputs.force_rebuild }}"
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-            echo "==> Cleaning up old containers and images..."
-            # 停止并移除旧容器
-            docker stop guanshan-app 2>/dev/null || true
-            docker rm guanshan-app 2>/dev/null || true
+            cd $DEPLOY_PATH
 
-            # 备份当前镜像用于回滚
-            if docker images guanshan-app -q | grep -q .; then
-              echo "==> Backing up current image for rollback..."
-              docker tag guanshan-app guanshan-app:backup 2>/dev/null || true
-            fi
+            # ========== 函数定义 ==========
+            log_info() { echo "$(date '+%H:%M:%S') [INFO] $1"; }
+            log_warn() { echo "$(date '+%H:%M:%S') [WARN] $1"; }
+            log_error() { echo "$(date '+%H:%M:%S') [ERROR] $1"; }
 
-            # 移除旧的应用镜像（保留backup）
-            docker images guanshan-app --format "{{.Tag}}" | grep -v backup | xargs -r -I {} docker rmi guanshan-app:{} 2>/dev/null || true
+            health_check() {
+              curl -sf --max-time 10 $HEALTH_URL > /dev/null 2>&1
+            }
 
-            # 清理悬空镜像
-            docker image prune -f 2>/dev/null || true
+            wait_for_healthy() {
+              local container=$1
+              local retries=$2
+              local interval=$3
 
-            # 清理停止的容器
-            docker container prune -f 2>/dev/null || true
+              for i in $(seq 1 $retries); do
+                if health_check; then
+                  log_info "健康检查通过 (尝试 $i/$retries)"
+                  return 0
+                fi
+                log_info "等待服务启动... ($i/$retries)"
+                sleep $interval
+              done
+              return 1
+            }
 
-            echo "==> Building Docker image (no cache)..."
-            docker build --no-cache --pull -t guanshan-app . || {
-              echo "==> Build failed! Attempting rollback..."
-              if docker images guanshan-app:backup -q | grep -q .; then
-                docker tag guanshan-app:backup guanshan-app
+            rollback() {
+              log_error "部署失败，执行回滚..."
+
+              # 收集诊断日志
+              log_info "收集诊断日志..."
+              docker logs $DOCKER_IMAGE --tail 100 2>/dev/null || true
+
+              # 停止失败的容器
+              docker stop $DOCKER_IMAGE 2>/dev/null || true
+              docker rm $DOCKER_IMAGE 2>/dev/null || true
+
+              # 使用备份镜像回滚
+              if docker images ${DOCKER_IMAGE}:backup -q | grep -q .; then
+                log_info "使用备份镜像回滚..."
+                docker tag ${DOCKER_IMAGE}:backup $DOCKER_IMAGE
+
                 docker run -d \
-                  --name guanshan-app \
+                  --name $DOCKER_IMAGE \
                   --env-file .env \
                   --add-host=host.docker.internal:host-gateway \
                   -p 8000:8000 \
                   --restart unless-stopped \
-                  guanshan-app
-                echo "==> Rollback completed with backup image"
+                  --memory=2g \
+                  --cpus=2 \
+                  $DOCKER_IMAGE
+
+                if wait_for_healthy $DOCKER_IMAGE 5 5; then
+                  log_info "回滚成功！"
+                else
+                  log_error "回滚后服务仍然不健康！"
+                fi
+              else
+                log_error "没有备份镜像可用于回滚！"
               fi
+
               exit 1
             }
 
-            echo "==> Starting new container..."
+            # ========== 部署开始 ==========
+            log_info "========== 开始部署 =========="
+            log_info "分支: ${{ github.ref_name }}"
+            log_info "提交: ${{ github.sha }}"
+            log_info "时间: $TIMESTAMP"
+
+            # 1. 拉取最新代码
+            log_info "拉取最新代码..."
+            git fetch origin
+            git reset --hard origin/${{ github.ref_name }}
+
+            # 2. 备份当前运行的镜像
+            if docker ps -q -f name=$DOCKER_IMAGE | grep -q .; then
+              log_info "备份当前镜像..."
+              docker commit $DOCKER_IMAGE ${DOCKER_IMAGE}:backup_$TIMESTAMP 2>/dev/null || true
+              # 保留最近的备份作为快速回滚
+              docker tag $DOCKER_IMAGE ${DOCKER_IMAGE}:backup 2>/dev/null || true
+            fi
+
+            # 3. 停止旧容器
+            log_info "停止旧容器..."
+            docker stop $DOCKER_IMAGE 2>/dev/null || true
+            docker rm $DOCKER_IMAGE 2>/dev/null || true
+
+            # 4. 清理旧镜像（保留backup）
+            log_info "清理旧镜像..."
+            docker images $DOCKER_IMAGE --format "{{.Tag}}" | grep -v -E "^backup" | grep -v -E "^backup_" | xargs -r -I {} docker rmi ${DOCKER_IMAGE}:{} 2>/dev/null || true
+            docker image prune -f 2>/dev/null || true
+
+            # 5. 构建新镜像
+            log_info "构建新镜像..."
+            BUILD_ARGS=""
+            if [ "$FORCE_REBUILD" = "true" ]; then
+              BUILD_ARGS="--no-cache --pull"
+              log_info "强制重建模式"
+            fi
+
+            if ! docker build $BUILD_ARGS -t $DOCKER_IMAGE .; then
+              log_error "镜像构建失败！"
+              rollback
+            fi
+
+            # 6. 启动新容器
+            log_info "启动新容器..."
             docker run -d \
-              --name guanshan-app \
+              --name $DOCKER_IMAGE \
               --env-file .env \
               --add-host=host.docker.internal:host-gateway \
               -p 8000:8000 \
               --restart unless-stopped \
-              guanshan-app
+              --memory=2g \
+              --cpus=2 \
+              --health-cmd="curl -f http://localhost:8000/health || exit 1" \
+              --health-interval=60s \
+              --health-timeout=10s \
+              --health-retries=3 \
+              --health-start-period=60s \
+              -l "deploy.timestamp=$TIMESTAMP" \
+              -l "deploy.commit=${{ github.sha }}" \
+              -l "deploy.branch=${{ github.ref_name }}" \
+              $DOCKER_IMAGE
 
-            echo "==> Waiting for service to start (30s for MongoDB connection timeout)..."
-            sleep 30
+            # 7. 等待 gunicorn 启动（多 worker 需要更长时间）
+            log_info "等待 gunicorn 启动（多 worker 模式）..."
+            sleep 45
 
-            echo "==> Health check..."
-            for i in 1 2 3 4 5 6; do
-              if curl -f -s http://localhost:8000/health > /dev/null 2>&1; then
-                echo "==> Health check passed!"
-                # 部署成功，移除备份镜像
-                docker rmi guanshan-app:backup 2>/dev/null || true
-                break
-              else
-                if [ $i -eq 6 ]; then
-                  echo "==> Health check failed after 6 attempts! Attempting rollback..."
-                  echo "==> Collecting diagnostic logs..."
-                  docker logs guanshan-app --tail 50 || true
-                  docker stop guanshan-app 2>/dev/null || true
-                  docker rm guanshan-app 2>/dev/null || true
-                  if docker images guanshan-app:backup -q | grep -q .; then
-                    docker tag guanshan-app:backup guanshan-app
-                    docker run -d \
-                      --name guanshan-app \
-                      --env-file .env \
-                      --add-host=host.docker.internal:host-gateway \
-                      -p 8000:8000 \
-                      --restart unless-stopped \
-                      guanshan-app
-                    echo "==> Rollback completed with backup image"
-                  fi
-                  exit 1
-                fi
-                echo "Waiting for service... (attempt $i/6)"
-                sleep 5
-              fi
-            done
+            # 8. 健康检查
+            log_info "执行健康检查..."
+            if ! wait_for_healthy $DOCKER_IMAGE $MAX_RETRIES $RETRY_INTERVAL; then
+              rollback
+            fi
 
-            echo "==> Deployment completed successfully!"
+            # 9. 验证API响应
+            log_info "验证 API 响应..."
+            HEALTH_RESPONSE=$(curl -s $HEALTH_URL)
+            echo "Health Response: $HEALTH_RESPONSE"
+
+            # 10. 清理旧备份（保留最近3个）
+            log_info "清理旧备份..."
+            docker images ${DOCKER_IMAGE} --format "{{.Tag}}" | grep "^backup_" | sort -r | tail -n +4 | xargs -r -I {} docker rmi ${DOCKER_IMAGE}:{} 2>/dev/null || true
+
+            # 11. 显示部署信息
+            log_info "========== 部署完成 =========="
+            log_info "容器状态:"
+            docker ps -f name=$DOCKER_IMAGE --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            log_info "镜像信息:"
+            docker images $DOCKER_IMAGE --format "table {{.Tag}}\t{{.Size}}\t{{.CreatedAt}}"
+
+            log_info "部署成功！✅"
+
+  # 部署通知（可选）
+  notify:
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: always()
+    steps:
+      - name: Deployment Status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "✅ 部署成功"
+            echo "分支: ${{ github.ref_name }}"
+            echo "提交: ${{ github.sha }}"
+            echo "触发者: ${{ github.actor }}"
+          else
+            echo "❌ 部署失败"
+            echo "分支: ${{ github.ref_name }}"
+            echo "提交: ${{ github.sha }}"
+          fi

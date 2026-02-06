@@ -24,6 +24,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH=/home/appuser/.local/bin:$PATH
 
+# 安装curl用于健康检查（更轻量，避免Python进程堆积）
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # 创建非root用户
 RUN useradd -m -u 1000 appuser
 
@@ -45,9 +49,15 @@ USER appuser
 # 暴露端口
 EXPOSE 8000
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+# 健康检查 - 使用curl更轻量，避免Python进程堆积
+# interval=60s: 降低检查频率
+# timeout=5s: 缩短超时时间
+# start-period=30s: 给gunicorn更多启动时间
+HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
-# 启动应用
-CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 启动应用 - 使用多worker模式避免长时间运行的任务阻塞其他请求
+# 使用 gunicorn + uvicorn workers 组合，更适合生产环境
+# workers=4: 支持4个并发请求处理
+# timeout=300: 5分钟超时，适应长时间运行的LangGraph搜索任务
+CMD ["gunicorn", "src.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--timeout", "300", "--graceful-timeout", "30", "--keep-alive", "5"]
