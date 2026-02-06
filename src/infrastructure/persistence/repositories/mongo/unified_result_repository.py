@@ -611,8 +611,9 @@ class UnifiedResultRepository:
             async for doc in cursor:
                 doc_id = str(doc.get("_id") or doc.get("id", ""))
                 if doc_id in remaining and doc_id not in results_map:
-                    translated_title = doc.get("translated_title", "")
-                    translator_dict = doc.get("translator", {}) or {}
+                    # v4.34.1: 修复 translator_dict 字段名拼写错误，并从中提取翻译标题
+                    translator_dict = doc.get("translator_dict", {}) or {}
+                    translated_title = translator_dict.get("title_zh", "")
                     translated_content = translator_dict.get("content_zh", "")
                     content = doc.get("markdown_content", "") or doc.get("content", "")
                     snippet = doc.get("snippet", "") or (content[:500] + "..." if len(content) > 500 else content)

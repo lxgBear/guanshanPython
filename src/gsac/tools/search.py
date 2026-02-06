@@ -100,6 +100,11 @@ async def execute_search_task(
             sources=[task.source] if task.source else None,
             tbs=task.tbs,
             location=task.location,
+            # v0.1.1: 添加 scrape_options 以获取完整的 markdown 内容而非仅摘要
+            scrape_options={
+                "formats": ["markdown"],
+                "onlyMainContent": True,
+            },
         )
 
         results: list[SearchResult] = []
@@ -201,6 +206,11 @@ def search_sync(
         sources=sources,
         tbs=tbs,
         location=location,
+        # v0.1.1: 添加 scrape_options 以获取完整的 markdown 内容而非仅摘要
+        scrape_options={
+            "formats": ["markdown"],
+            "onlyMainContent": True,
+        },
     )
 
     results: list[SearchResult] = []
