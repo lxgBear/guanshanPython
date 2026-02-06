@@ -137,15 +137,15 @@ def draft_to_response(draft) -> DraftResponse:
 )
 async def create_draft(
     request: CreateDraftRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """创建草稿"""
     try:
         draft = await achievement_draft_service.create(
             source_entry_ids=request.source_entry_ids,
             title=request.title,
-            author_id=str(current_user["id"]),
-            author_name=current_user.get("display_name") or current_user.get("username", ""),
+            author_id=str(current_user.id),
+            author_name=current_user.display_name or current_user.username or "",
             description=request.description,
             summary=request.summary,
             combined_content=request.combined_content,
@@ -172,13 +172,13 @@ async def list_drafts(
     keyword: Optional[str] = Query(None, description="关键词搜索"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """列出草稿"""
     try:
         # 返回用户自己的草稿
         result = await achievement_draft_service.list_by_author(
-            author_id=str(current_user["id"]),
+            author_id=str(current_user.id),
             status=status,
             page=page,
             page_size=page_size,
@@ -204,12 +204,12 @@ async def list_drafts(
 async def list_pending_review(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """列出待审核草稿"""
     try:
         result = await achievement_draft_service.list_by_reviewer(
-            reviewer_id=str(current_user["id"]),
+            reviewer_id=str(current_user.id),
             page=page,
             page_size=page_size,
         )
@@ -234,7 +234,7 @@ async def list_pending_review(
 async def get_review_stats(
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="结束日期 (YYYY-MM-DD)"),
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """获取审核统计"""
     try:
@@ -257,7 +257,7 @@ async def get_review_stats(
 )
 async def get_draft(
     draft_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """获取草稿详情"""
     draft = await achievement_draft_service.get_by_id(draft_id)
@@ -275,14 +275,14 @@ async def get_draft(
 async def update_draft(
     draft_id: str,
     request: UpdateDraftRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """更新草稿"""
     try:
         updates = request.model_dump(exclude_none=True)
         draft = await achievement_draft_service.update(
             draft_id=draft_id,
-            user_id=str(current_user["id"]),
+            user_id=str(current_user.id),
             **updates,
         )
         return draft_to_response(draft)
@@ -300,11 +300,11 @@ async def update_draft(
 )
 async def delete_draft(
     draft_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """删除草稿"""
     try:
-        success = await achievement_draft_service.delete(draft_id, str(current_user["id"]))
+        success = await achievement_draft_service.delete(draft_id, str(current_user.id))
         return {"success": success, "message": "删除成功"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -322,13 +322,13 @@ async def delete_draft(
 async def submit_for_review(
     draft_id: str,
     request: SubmitReviewRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """提交审核"""
     try:
         draft = await achievement_draft_service.submit_for_review(
             draft_id=draft_id,
-            user_id=str(current_user["id"]),
+            user_id=str(current_user.id),
             reviewer_id=request.reviewer_id,
             reviewer_name=request.reviewer_name,
         )
@@ -349,14 +349,14 @@ async def submit_for_review(
 async def review_draft(
     draft_id: str,
     request: ReviewActionRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """执行审核操作"""
     try:
         draft = await achievement_draft_service.review(
             draft_id=draft_id,
-            reviewer_id=str(current_user["id"]),
-            reviewer_name=current_user.get("display_name") or current_user.get("username", ""),
+            reviewer_id=str(current_user.id),
+            reviewer_name=current_user.display_name or current_user.username or "",
             action=request.action,
             comment=request.comment,
             to_user_id=request.to_user_id,
@@ -378,7 +378,7 @@ async def review_draft(
 )
 async def get_review_logs(
     draft_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """获取审核日志"""
     logs = await achievement_draft_service.get_review_logs(draft_id)
