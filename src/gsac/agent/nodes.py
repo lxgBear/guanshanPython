@@ -1203,6 +1203,12 @@ async def validate_relevance(state: OSINTSearchState) -> dict[str, Any]:
         # 回写分数到 SearchResult
         r.score = score
 
+        # v0.1.2: 将深度抓取的 markdown 回写到 SearchResult.content
+        # 修复 markdown_content 保存为搜索摘要而非完整内容的问题
+        scraped_content = content_map.get(url)
+        if scraped_content and len(scraped_content) > len(r.content or ""):
+            r.content = scraped_content
+
         relevance_results.append(
             RelevanceResult(
                 url=url,
